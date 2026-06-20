@@ -1,17 +1,98 @@
+use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
-// ── Message / Role ──────────────────────────────────────────────────────────
+// ── Error ───────────────────────────────────────────────────────────────────
 
-/// A single chat message.
+#[derive(Debug)]
+pub enum DeepSeekError {
+    /// reqwest error (connection, timeout, DNS, TLS).
+    Http(reqwest::Error),
+    /// API returned a non-2xx status.
+    Api { status: u16, body: String },
+    /// Failed to deserialize the response.
+    Parse(String),
+    /// Streaming is not supported yet.
+    StreamingNotSupported,
+}
+
+impl std::fmt::Display for DeepSeekError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Http(e) => write!(f, "HTTP error: {e}"),
+            Self::Api { status, body } => write!(f, "API error ({status}): {body}"),
+            Self::Parse(e) => write!(f, "parse error: {e}"),
+            Self::StreamingNotSupported => write!(f, "streaming is not yet supported"),
+        }
+    }
+}
+
+impl std::error::Error for DeepSeekError {}
+
+// ── Request ─────────────────────────────────────────────────────────────────
+
+/// Exact match of the DeepSeek `/chat/completions` request body.
+#[derive(Clone, Debug, Serialize)]
+pub struct DeepSeekRequest {
+    pub messages: Vec<Message>,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Thinking>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
+    #[serde(default)]
+    pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ToolDef>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
+    #[serde(default)]
+    pub logprobs: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<u32>,
+}
+
+impl DeepSeekRequest {
+    pub fn new(model: impl Into<String>, messages: Vec<Message>) -> Self {
+        Self {
+            messages,
+            model: model.into(),
+            thinking: None,
+            reasoning_effort: None,
+            max_tokens: None,
+            response_format: None,
+            stop: None,
+            stream: false,
+            stream_options: None,
+            temperature: None,
+            top_p: None,
+            tools: None,
+            tool_choice: None,
+            logprobs: false,
+            top_logprobs: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: String,
-    /// Tool calls emitted by an assistant message (only when `role` is [`Role::Assistant`]).
+    /// Present when role is `assistant` and the model wants to call tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
-    /// The tool call this message responds to (only when `role` is [`Role::Tool`]).
+    /// Present when role is `tool` — the id of the tool call this message responds to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
 }
@@ -26,7 +107,6 @@ impl Message {
         }
     }
 
-    /// Convenience: create an assistant message containing tool calls.
     pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
         Self {
             role: Role::Assistant,
@@ -36,7 +116,6 @@ impl Message {
         }
     }
 
-    /// Convenience: create a tool-result message.
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: Role::Tool,
@@ -56,63 +135,100 @@ pub enum Role {
     Tool,
 }
 
-/// An LLM function/tool call.
-///
-/// Standard across OpenAI, Anthropic, and compatible APIs.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCall {
-    /// Provider-assigned identifier for this call.
     pub id: String,
-    /// Function (tool) name.
-    #[serde(alias = "function")]
+    #[serde(rename = "type")]
+    pub r#type: ToolCallType,
+    pub function: ToolCallFunction,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolCallType {
+    Function,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolCallFunction {
     pub name: String,
-    /// JSON-encoded arguments.
+    /// JSON-encoded arguments string.
     pub arguments: String,
 }
 
-// ── Request / Response / Error ──────────────────────────────────────────────
-
-/// Definition of a tool (function) available for the model to call.
-///
-/// Sent in [`LlmRequest::tools`] to declare what functions the model may invoke.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ToolDef {
-    /// Always `"function"` for current LLM APIs.
+#[derive(Clone, Debug, Serialize)]
+pub struct Thinking {
     #[serde(rename = "type")]
-    pub r#type: String,
-    /// The function descriptor.
+    pub r#type: ThinkingType,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingType {
+    Enabled,
+    Disabled,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ResponseFormat {
+    #[serde(rename = "type")]
+    pub r#type: ResponseFormatType,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseFormatType {
+    Text,
+    JsonObject,
+}
+
+/// Matches the DeepSeek `tools` array element.
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolDef {
+    #[serde(rename = "type")]
+    pub r#type: ToolDefType,
     pub function: FunctionDef,
 }
 
-/// Descriptor for a single function within a [`ToolDef`].
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FunctionDef {
-    /// Function name (a-z, A-Z, 0-9, underscores, hyphens; max 64 chars).
-    pub name: String,
-    /// Natural-language description.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// JSON Schema describing the function's input parameters.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parameters: Option<serde_json::Value>,
-    /// Whether the API should enforce strict schema adherence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strict: Option<bool>,
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolDefType {
+    Function,
 }
 
-/// Controls how the model selects tools from [`LlmRequest::tools`].
-///
-/// Supported by OpenAI, Anthropic, Gemini, DeepSeek, Ollama, Mistral.
+#[derive(Clone, Debug, Serialize)]
+pub struct FunctionDef {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
+}
+
+/// Matches the DeepSeek `tool_choice` field.
 #[derive(Clone, Debug)]
 pub enum ToolChoice {
-    /// Don't call any tools, even if available.
+    /// `"none"` — never call a tool.
     None,
-    /// Model decides whether to call a tool (default when `tools` is set).
+    /// `"auto"` — model decides.
     Auto,
-    /// Model must call at least one tool.
+    /// `"required"` — model must call a tool.
     Required,
-    /// Force a specific tool by name.
-    Specific { name: String },
+    /// `{"type": "function", "function": {"name": "..."}}` — force a specific function.
+    Specific {
+        r#type: ToolDefType,
+        function: ToolChoiceFunction,
+    },
 }
 
 impl Serialize for ToolChoice {
@@ -122,181 +238,124 @@ impl Serialize for ToolChoice {
             Self::None => serializer.serialize_str("none"),
             Self::Auto => serializer.serialize_str("auto"),
             Self::Required => serializer.serialize_str("required"),
-            Self::Specific { name } => {
+            Self::Specific { r#type, function } => {
                 let mut map = serializer.serialize_map(Some(2))?;
-                map.serialize_entry("type", "function")?;
-                map.serialize_entry("function", &ToolChoiceFunction { name: name.clone() })?;
+                map.serialize_entry("type", r#type)?;
+                map.serialize_entry("function", function)?;
                 map.end()
             }
         }
     }
 }
 
-impl<'de> Deserialize<'de> for ToolChoice {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match &value {
-            // String form: "none", "auto", "required"
-            serde_json::Value::String(s) => match s.as_str() {
-                "none" => Ok(Self::None),
-                "auto" => Ok(Self::Auto),
-                "required" => Ok(Self::Required),
-                other => Err(Error::custom(format!("unknown tool_choice: {other}"))),
-            },
-            // Object form: {"type": "function", "function": {"name": "..."}}
-            serde_json::Value::Object(_) => {
-                let specific: ToolChoiceObject =
-                    serde_json::from_value(value.clone()).map_err(Error::custom)?;
-                Ok(Self::Specific {
-                    name: specific.function.name,
-                })
-            }
-            _ => Err(Error::custom("tool_choice must be a string or object")),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct ToolChoiceObject {
-    #[serde(rename = "type")]
-    r#type: String,
-    function: ToolChoiceFunction,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ToolChoiceFunction {
     pub name: String,
 }
 
-// ── Request / Response / Error ──────────────────────────────────────────────
+// ── Response ────────────────────────────────────────────────────────────────
 
-/// Provider-agnostic request to an LLM.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LlmRequest {
-    /// Conversation messages.
-    pub messages: Vec<Message>,
-    /// Model override.
-    pub model: Option<String>,
-    /// Whether to use server-sent events instead of a single JSON response.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
-    /// Available tools (functions) the model may call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<ToolDef>>,
-    /// Controls which tool (if any) the model calls.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<ToolChoice>,
-    /// Sampling temperature (0.0–2.0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    /// Maximum tokens to generate.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-    /// Core sampling (nucleus sampling).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
-    /// Stop sequences.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stop: Option<Vec<String>>,
-}
-
-/// Reason the model stopped generating.
-///
-/// Standard across all major providers (OpenAI, Anthropic, Gemini, DeepSeek, etc.).
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FinishReason {
-    /// Natural stop or stop sequence matched.
-    Stop,
-    /// Reached the maximum token limit.
-    Length,
-    /// Model is returning tool calls.
-    ToolCalls,
-    /// Output blocked by content filter.
-    ContentFilter,
-}
-
-/// Provider-agnostic response from an LLM.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LlmResponse {
-    /// The generated text (may be empty when the model emits a tool call).
-    pub content: String,
-    /// Which model produced this response.
+/// Exact match of the DeepSeek `/chat/completions` response body.
+#[derive(Clone, Debug, Deserialize)]
+pub struct DeepSeekResponse {
+    pub id: String,
+    pub object: String,
+    pub created: u64,
     pub model: String,
-    /// Why the model stopped.
-    pub finish_reason: FinishReason,
-    /// Tool calls emitted by the model, if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
-    /// Token usage, if reported.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Vec<Choice>,
     pub usage: Option<Usage>,
+    #[serde(default)]
+    pub system_fingerprint: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct Choice {
+    pub index: u32,
+    pub message: ChoiceMessage,
+    #[serde(default)]
+    pub logprobs: Option<serde_json::Value>,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChoiceMessage {
+    pub role: String,
+    pub content: Option<String>,
+    /// Thinking/reasoning output from DeepSeek-R1 / V4 thinking mode.
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
+    /// Present when the model emits tool calls.
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Usage {
-    pub input_tokens: u32,
-    pub output_tokens: u32,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
 }
 
-/// Errors that can occur when communicating with an LLM provider.
-#[derive(Debug)]
-pub enum LlmError {
-    /// Connection, timeout, DNS, etc.
-    Http(String),
-    /// Provider returned a non-2xx status.
-    Api { status: u16, body: String },
-    /// Wrong or expired credentials.
-    Unauthorized,
-    /// Rate limit exceeded.
-    RateLimited,
-    /// Failed to deserialize the response.
-    Parse(String),
+// ── Client ──────────────────────────────────────────────────────────────────
+
+const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
+
+pub struct DeepSeekClient {
+    api_key: String,
+    base_url: String,
+    http: HttpClient,
 }
 
-impl fmt::Display for LlmError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Http(msg) => write!(f, "HTTP error: {msg}"),
-            Self::Api { status, body } => write!(f, "API error ({status}): {body}"),
-            Self::Unauthorized => write!(f, "unauthorized"),
-            Self::RateLimited => write!(f, "rate limited"),
-            Self::Parse(msg) => write!(f, "parse error: {msg}"),
+impl DeepSeekClient {
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self {
+            api_key: api_key.into(),
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            http: HttpClient::new(),
         }
     }
-}
 
-impl std::error::Error for LlmError {}
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
+    }
 
-// ── Trait ───────────────────────────────────────────────────────────────────
+    /// Send a chat completion request.
+    ///
+    /// Returns `Err(DeepSeekError::StreamingNotSupported)` if `request.stream` is `true`.
+    pub async fn send(
+        &self,
+        request: DeepSeekRequest,
+    ) -> Result<DeepSeekResponse, DeepSeekError> {
+        if request.stream {
+            return Err(DeepSeekError::StreamingNotSupported);
+        }
 
-/// Trait for LLM clients — one implementation per provider.
-///
-/// Each provider (OpenAI, Anthropic, Ollama, …) maps [`LlmRequest`] to its
-/// native wire format and parses the raw response back into [`LlmResponse`].
-///
-/// # Example
-///
-/// ```ignore
-/// struct OpenAiClient { api_key: String, client: reqwest::Client }
-///
-/// impl LlmClient for OpenAiClient {
-///     async fn send(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-///         // 1. convert LlmRequest → OpenAI chat-completion JSON
-///         // 2. POST to https://api.openai.com/v1/chat/completions
-///         // 3. parse the response into LlmResponse
-///         todo!()
-///     }
-/// }
-/// ```
-///
-/// The trait uses native `async fn` (stable in Rust 2024 edition). If you need
-/// `dyn LlmClient` for dynamic dispatch, add `async-trait` to `Cargo.toml` and
-/// annotate with `#[async_trait]`.
-pub trait LlmClient {
-    /// Send a request to the LLM and return the response.
-    async fn send(&self, request: LlmRequest) -> Result<LlmResponse, LlmError>;
+        let url = format!("{}/v1/chat/completions", self.base_url);
+
+        let response = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .json(&request)
+            .send()
+            .await
+            .map_err(DeepSeekError::Http)?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(DeepSeekError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        response
+            .json::<DeepSeekResponse>()
+            .await
+            .map_err(|e| DeepSeekError::Parse(e.to_string()))
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -304,6 +363,78 @@ pub trait LlmClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_request_serialization() {
+        let req = DeepSeekRequest::new(
+            "deepseek-chat",
+            vec![
+                Message::new(Role::System, "You are helpful"),
+                Message::new(Role::User, "Hi"),
+            ],
+        );
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""model":"deepseek-chat""#));
+        assert!(json.contains(r#""role":"system""#));
+        assert!(json.contains(r#""stream":false"#));
+        assert!(json.contains(r#""logprobs":false"#));
+    }
+
+    #[test]
+    fn test_request_with_thinking() {
+        let req = DeepSeekRequest {
+            thinking: Some(Thinking {
+                r#type: ThinkingType::Enabled,
+            }),
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..DeepSeekRequest::new("deepseek-v4-pro", vec![])
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""thinking":{"type":"enabled"}"#));
+        assert!(json.contains(r#""reasoning_effort":"high""#));
+    }
+
+    #[test]
+    fn test_response_deserialization() {
+        let raw = r#"{
+            "id": "abc-123",
+            "object": "chat.completion",
+            "created": 1781984231,
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                    "reasoning_content": "The user said hi...",
+                    "tool_calls": null
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 56,
+                "total_tokens": 66
+            },
+            "system_fingerprint": "fp_9954b31ca7"
+        }"#;
+        let resp: DeepSeekResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(resp.id, "abc-123");
+        assert_eq!(resp.choices[0].message.content.as_deref(), Some("Hello!"));
+        assert_eq!(
+            resp.choices[0]
+                .message
+                .reasoning_content
+                .as_deref(),
+            Some("The user said hi...")
+        );
+        assert_eq!(
+            resp.choices[0].finish_reason.as_deref(),
+            Some("stop")
+        );
+        assert_eq!(resp.usage.as_ref().unwrap().total_tokens, 66);
+    }
 
     #[test]
     fn test_message_new() {
@@ -314,107 +445,34 @@ mod tests {
 
     #[test]
     fn test_role_serialization() {
-        let json = serde_json::to_string(&Role::System).unwrap();
-        assert_eq!(json, "\"system\"");
-    }
-
-    #[test]
-    fn test_llm_error_display() {
-        let err = LlmError::Unauthorized;
-        assert_eq!(err.to_string(), "unauthorized");
-
-        let err = LlmError::Api {
-            status: 429,
-            body: "too many requests".into(),
-        };
-        assert!(err.to_string().contains("429"));
+        assert_eq!(serde_json::to_string(&Role::System).unwrap(), r#""system""#);
     }
 
     #[test]
     fn test_tool_choice_serialization() {
-        // String variants
+        use serde_json::json;
+
         assert_eq!(
-            serde_json::to_string(&ToolChoice::None).unwrap(),
-            r#""none""#
+            serde_json::to_value(&ToolChoice::None).unwrap(),
+            json!("none")
         );
         assert_eq!(
-            serde_json::to_string(&ToolChoice::Auto).unwrap(),
-            r#""auto""#
+            serde_json::to_value(&ToolChoice::Auto).unwrap(),
+            json!("auto")
         );
         assert_eq!(
-            serde_json::to_string(&ToolChoice::Required).unwrap(),
-            r#""required""#
+            serde_json::to_value(&ToolChoice::Required).unwrap(),
+            json!("required")
         );
-
-        // Specific tool
-        let specific = ToolChoice::Specific {
-            name: "get_weather".into(),
-        };
-        let json = serde_json::to_string(&specific).unwrap();
-        assert!(json.contains(r#""type":"function""#));
-        assert!(json.contains(r#""name":"get_weather""#));
-    }
-
-    #[test]
-    fn test_tool_choice_deserialization() {
-        // From string
-        let tc: ToolChoice = serde_json::from_str(r#""auto""#).unwrap();
-        assert!(matches!(tc, ToolChoice::Auto));
-
-        // From object
-        let tc: ToolChoice =
-            serde_json::from_str(r#"{"type":"function","function":{"name":"f"}}"#).unwrap();
-        assert!(matches!(tc, ToolChoice::Specific { .. }));
-    }
-
-    #[test]
-    fn test_llm_request_with_tools() {
-        let req = LlmRequest {
-            messages: vec![Message::new(Role::User, "hi")],
-            model: None,
-            stream: Some(false),
-            tools: Some(vec![ToolDef {
-                r#type: "function".into(),
-                function: FunctionDef {
-                    name: "get_weather".into(),
-                    description: Some("Get the weather".into()),
-                    parameters: None,
-                    strict: None,
+        assert_eq!(
+            serde_json::to_value(&ToolChoice::Specific {
+                r#type: ToolDefType::Function,
+                function: ToolChoiceFunction {
+                    name: "f".into()
                 },
-            }]),
-            tool_choice: Some(ToolChoice::Required),
-            temperature: None,
-            max_tokens: None,
-            top_p: None,
-            stop: None,
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains(r#""tool_choice":"required""#));
-        assert!(json.contains(r#""stream":false"#));
-        assert!(json.contains(r#""tools":"#));
-    }
-
-    #[test]
-    fn test_finish_reason_serialization() {
-        assert_eq!(
-            serde_json::to_string(&FinishReason::Stop).unwrap(),
-            r#""stop""#
+            })
+            .unwrap(),
+            json!({"type": "function", "function": {"name": "f"}})
         );
-        assert_eq!(
-            serde_json::to_string(&FinishReason::Length).unwrap(),
-            r#""length""#
-        );
-        assert_eq!(
-            serde_json::to_string(&FinishReason::ToolCalls).unwrap(),
-            r#""tool_calls""#
-        );
-        assert_eq!(
-            serde_json::to_string(&FinishReason::ContentFilter).unwrap(),
-            r#""content_filter""#
-        );
-
-        // Round-trip
-        let fr: FinishReason = serde_json::from_str(r#""stop""#).unwrap();
-        assert!(matches!(fr, FinishReason::Stop));
     }
 }
