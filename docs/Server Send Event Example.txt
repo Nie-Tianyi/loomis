@@ -1,0 +1,270 @@
+═══════════════════════════════════════════
+  发送请求体:
+{
+  "messages": [
+    {
+      "content": "用中文简单介绍一下 Rust 语言的特点，控制在 100 字以内。",
+      "role": "user"
+    }
+  ],
+  "model": "deepseek-chat",
+  "stream": true
+}
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  开始接收 DeepSeek 流式响应原始报文
+═══════════════════════════════════════════
+
+───────────────────────────────────────────
+[块] 大小: 305 bytes | 累计: 305 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 287 bytes | 累计: 592 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"R"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 289 bytes | 累计: 881 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"ust"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 868 bytes | 累计: 1749 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":" "},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"是"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"系统"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 289 bytes | 累计: 2038 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"级"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 873 bytes | 累计: 2911 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"语言"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"，"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"主打"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 288 bytes | 累计: 3199 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"**"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 1443 bytes | 累计: 4642 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"内存"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"安全"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"**"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"（"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"无"},"logprobs":null,"finish_reason":nu
+───────────────────────────────────────────
+[块] 大小: 7 bytes | 累计: 4649 bytes
+───────────────────────────────────────────
+ll}]}
+
+───────────────────────────────────────────
+[块] 大小: 873 bytes | 累计: 5522 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"垃圾"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"回收"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"）"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 289 bytes | 累计: 5811 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"与"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 1161 bytes | 累计: 6972 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"**"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"零"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"成本"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"抽象"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 869 bytes | 累计: 7841 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"**"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"。"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"通过"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 876 bytes | 累计: 8717 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"所有权"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"、"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"借用"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 870 bytes | 累计: 9587 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"检查"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"器"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"，"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 289 bytes | 累计: 9876 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"在"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 873 bytes | 累计: 10749 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"编译"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"期"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"杜绝"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 289 bytes | 累计: 11038 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"空"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 587 bytes | 累计: 11625 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"指针"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"和数据"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 1162 bytes | 累计: 12787 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"竞争"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"。"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"性能"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"媲"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 865 bytes | 累计: 13652 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"美"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":" C"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"++"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 870 bytes | 累计: 14522 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"，"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"并"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"内置"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 289 bytes | 累计: 14811 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"包"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 295 bytes | 累计: 15106 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"管理器"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 288 bytes | 累计: 15394 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":" C"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 871 bytes | 累计: 16265 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"argo"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"，"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"适合"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 292 bytes | 累计: 16557 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"开发"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 292 bytes | 累计: 16849 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"底层"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 289 bytes | 累计: 17138 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"、"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 289 bytes | 累计: 17427 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"高"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 581 bytes | 累计: 18008 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"并发"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"及"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 290 bytes | 累计: 18298 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":" Web"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 294 bytes | 累计: 18592 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"Assembly"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 579 bytes | 累计: 19171 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":" "},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"应用"},"logprobs":null,"finish_reason":null}]}
+
+───────────────────────────────────────────
+[块] 大小: 763 bytes | 累计: 19934 bytes
+───────────────────────────────────────────
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":"。"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"b29e15c7-24e2-4ddc-8108-8ceec34fbd66","object":"chat.completion.chunk","created":1782059875,"model":"deepseek-v4-flash","system_fingerprint":"fp_8b330d02d0_prod0820_fp8_kvcache_20260402","choices":[{"index":0,"delta":{"content":""},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":66,"total_tokens":86,"prompt_tokens_details":{"cached_tokens":0},"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":20}}
+
+data: [DONE]
+
+───────────────────────────────────────────
+[块] 大小: 0 bytes | 累计: 19934 bytes
+───────────────────────────────────────────
+
+
+═══════════════════════════════════════════
+  流式传输结束，共接收 19934 字节
+═══════════════════════════════════════════
