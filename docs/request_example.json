@@ -1,0 +1,30 @@
+{
+    "messages": [
+        {
+            "content": "You are a helpful assistant",
+            "role": "system"
+        },
+        {
+            "content": "Hi",
+            "role": "user"
+        }
+    ],
+    "model": "deepseek-v4-pro",
+    "thinking": {
+        "type": "enabled"
+    },
+    "reasoning_effort": "high",
+    "max_tokens": 4096,
+    "response_format": {
+        "type": "text"
+    },
+    "stop": null,
+    "stream": true,
+    "stream_options": null,
+    "temperature": 1,
+    "top_p": 1,
+    "tools": null,
+    "tool_choice": "none",
+    "logprobs": false,
+    "top_logprobs": null
+}

@@ -1,0 +1,25 @@
+{
+    "id": "a76347c4-1f98-4349-a147-e1d961c3bfae",
+    "object": "chat.completion",
+    "created": 1782030671,
+    "model": "deepseek-v4-flash",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "北京是中国的首都，是一座融合了悠久历史与现代文明的国际化大都市。",
+                "reasoning_content": null,
+                "tool_calls": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 13,
+        "completion_tokens": 16,
+        "total_tokens": 29
+    },
+    "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402"
+}

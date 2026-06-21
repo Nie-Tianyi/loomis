@@ -1,0 +1,405 @@
+[
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "北京",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "是",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "中国的",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "首都",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "，",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "是一座",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "融合",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "了",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "悠久",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "历史",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "文化和",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "现代",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "国际",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "气息",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "的",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "繁华",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "大",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "都市",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "。",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": null
+            }
+        ],
+        "usage": null
+    },
+    {
+        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "object": "chat.completion.chunk",
+        "created": 1782030672,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": null,
+                    "content": "",
+                    "reasoning_content": null,
+                    "tool_calls": null
+                },
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 13,
+            "completion_tokens": 19,
+            "total_tokens": 32
+        }
+    }
+]
