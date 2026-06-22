@@ -28,8 +28,9 @@ pub const KEEP_LAST_N_MESSAGES: usize = 10;
 /// the threshold, the caller is signalled via [`CompactSignal`]. The
 /// recommended two-phase approach:
 ///
-/// 1. Call [`split_for_compact`](Self::split_for_compact) to drain old
-///    messages (everything before the last N messages).
+/// 1. Call [`split_for_compact`](Self::split_for_compact) to drain old non-System messages (everything before the last N non-System
+///    messages). **System messages are never drained** — they stay in
+    ///    memory verbatim.
 /// 2. Summarize the drained messages (e.g., via LLM).
 /// 3. Call [`apply_compact`](Self::apply_compact) to insert the summary
 ///    as a new System message at position 0.
@@ -181,27 +182,53 @@ impl Memory {
 // ── Compaction ────────────────────────────────────────────────────────────────
 
 impl Memory {
-    /// Drains the "old" messages (everything before the last
-    /// [`KEEP_LAST_N_MESSAGES`]) and returns them for summarization.
+    /// Drains the "old" **non-System** messages (everything before the last
+    /// [`KEEP_LAST_N_MESSAGES`] non-System messages) and returns them for
+    /// summarization.
     ///
-    /// After this call, `self` contains only the most recent
-    /// [`KEEP_LAST_N_MESSAGES`] messages. The caller should:
+    /// **System messages are always preserved** — they are never drained
+    /// or included in the old-message batch. Only `User`, `Assistant`,
+    /// and `Tool` messages are candidates for compaction.
+    ///
+    /// After this call, `self` contains all System messages plus the
+    /// most recent [`KEEP_LAST_N_MESSAGES`] non-System messages, in
+    /// their original relative order. The caller should:
     ///
     /// 1. Send the returned messages to a (small) LLM for summarization.
     /// 2. Call [`apply_compact`](Self::apply_compact) with the result.
     ///
-    /// Returns an empty `Vec` if there are fewer messages than the
-    /// keep-window (i.e., nothing to compact).
+    /// Returns an empty `Vec` if there are fewer non-System messages than
+    /// the keep-window (i.e., nothing to compact).
     pub fn split_for_compact(&mut self) -> Vec<Message> {
-        let total = self.messages.len();
-        let keep = std::cmp::min(KEEP_LAST_N_MESSAGES, total);
-        let pivot = total.saturating_sub(keep);
+        let non_system_count = self
+            .messages
+            .iter()
+            .filter(|m| m.role != Role::System)
+            .count();
+        let keep = std::cmp::min(KEEP_LAST_N_MESSAGES, non_system_count);
+        let to_drain = non_system_count.saturating_sub(keep);
 
-        if pivot == 0 {
-            Vec::new()
-        } else {
-            self.messages.drain(..pivot).collect()
+        if to_drain == 0 {
+            return Vec::new();
         }
+
+        // Drain the first `to_drain` non-System messages, preserving
+        // System messages in place and keeping message order intact.
+        let mut drained = Vec::with_capacity(to_drain);
+        let mut remaining = Vec::with_capacity(self.messages.len() - to_drain);
+        let mut drained_count = 0;
+
+        for msg in self.messages.drain(..) {
+            if msg.role != Role::System && drained_count < to_drain {
+                drained.push(msg);
+                drained_count += 1;
+            } else {
+                remaining.push(msg);
+            }
+        }
+
+        self.messages = remaining;
+        drained
     }
 
     /// Inserts a compressed summary at the beginning of memory as a
@@ -659,5 +686,138 @@ mod tests {
         let old = mem.split_for_compact();
         assert_eq!(old.len(), 2); // first 2 drained
         assert_eq!(mem.message_count(), 10);
+    }
+
+    // ── Compaction: System message preservation ──────────────────────────
+
+    #[test]
+    fn test_split_preserves_system_messages_at_front() {
+        let mut mem = Memory::new();
+        // System message at the very beginning
+        mem.push(make_msg(Role::System, "You are a helpful assistant"));
+        // Then 12 user messages (more than KEEP_LAST_N_MESSAGES)
+        for i in 0..12 {
+            mem.push(user_msg(&format!("msg_{i}")));
+        }
+        assert_eq!(mem.message_count(), 13); // 1 system + 12 user
+
+        let old = mem.split_for_compact();
+        // 12 non-system - 10 kept = 2 drained
+        assert_eq!(old.len(), 2);
+        assert_eq!(old[0].content, "msg_0");
+        assert_eq!(old[1].content, "msg_1");
+        // System message preserved + 10 recent non-system = 11 total
+        assert_eq!(mem.message_count(), 11);
+        assert_eq!(mem.messages()[0].role, Role::System);
+        assert_eq!(mem.messages()[0].content, "You are a helpful assistant");
+        // Recent user messages follow
+        assert_eq!(mem.messages()[1].content, "msg_2");
+        assert_eq!(mem.messages()[10].content, "msg_11");
+    }
+
+    #[test]
+    fn test_split_preserves_system_messages_interleaved() {
+        let mut mem = Memory::new();
+        mem.push(make_msg(Role::System, "System prompt 1"));
+        mem.push(user_msg("msg_0"));
+        mem.push(assistant_msg("msg_1"));
+        mem.push(make_msg(Role::System, "System prompt 2"));
+        mem.push(user_msg("msg_2"));
+        mem.push(assistant_msg("msg_3"));
+        mem.push(user_msg("msg_4"));
+        mem.push(assistant_msg("msg_5"));
+        mem.push(user_msg("msg_6"));
+        mem.push(assistant_msg("msg_7"));
+        mem.push(user_msg("msg_8"));
+        mem.push(assistant_msg("msg_9"));
+        mem.push(user_msg("msg_10"));
+        mem.push(assistant_msg("msg_11"));
+        // 14 total: 2 system + 12 non-system
+
+        let old = mem.split_for_compact();
+        // 12 non-system - 10 kept = 2 drained (msg_0, msg_1)
+        assert_eq!(old.len(), 2);
+        assert!(!old.iter().any(|m| m.role == Role::System));
+        // 2 system + 10 non-system = 12 remaining
+        assert_eq!(mem.message_count(), 12);
+        // Both system messages are preserved
+        let system_msgs: Vec<_> = mem
+            .messages()
+            .iter()
+            .filter(|m| m.role == Role::System)
+            .collect();
+        assert_eq!(system_msgs.len(), 2);
+        assert_eq!(system_msgs[0].content, "System prompt 1");
+        assert_eq!(system_msgs[1].content, "System prompt 2");
+    }
+
+    #[test]
+    fn test_split_noop_when_only_system_messages() {
+        let mut mem = Memory::new();
+        mem.push(make_msg(Role::System, "System A"));
+        mem.push(make_msg(Role::System, "System B"));
+        mem.push(make_msg(Role::System, "System C"));
+
+        let old = mem.split_for_compact();
+        // 0 non-system → nothing to drain
+        assert!(old.is_empty());
+        assert_eq!(mem.message_count(), 3); // all system messages kept
+    }
+
+    #[test]
+    fn test_split_drains_only_non_system() {
+        let mut mem = Memory::new();
+        mem.push(make_msg(Role::System, "Important instructions"));
+        mem.push(user_msg("q1"));
+        mem.push(assistant_msg("a1"));
+        mem.push(user_msg("q2"));
+        mem.push(assistant_msg("a2"));
+        mem.push(user_msg("q3"));
+        mem.push(assistant_msg("a3"));
+        mem.push(user_msg("q4"));
+        mem.push(assistant_msg("a4"));
+        mem.push(user_msg("q5"));
+        mem.push(assistant_msg("a5"));
+        mem.push(user_msg("q6"));
+        // 12 total: 1 system + 11 non-system
+
+        let old = mem.split_for_compact();
+        // 11 non-system - 10 kept = 1 drained (q1)
+        assert_eq!(old.len(), 1);
+        assert_eq!(old[0].role, Role::User);
+        assert_eq!(old[0].content, "q1");
+        // System message + 10 non-system = 11 remaining
+        assert_eq!(mem.message_count(), 11);
+        assert_eq!(mem.messages()[0].role, Role::System);
+        assert_eq!(mem.messages()[1].content, "a1"); // first kept non-system
+    }
+
+    #[test]
+    fn test_compact_preserves_system_messages_full_cycle() {
+        let mut mem = Memory::new();
+        mem.push(make_msg(Role::System, "System instructions"));
+        for i in 0..15 {
+            mem.push(user_msg(&format!("msg_{i}")));
+        }
+        // 16 total: 1 system + 15 user
+
+        mem.compact(|old| {
+            // Only non-system messages are presented for summarization
+            assert!(!old.iter().any(|m| m.role == Role::System));
+            assert_eq!(old.len(), 5); // 15 - 10 = 5
+            format!("{} messages summarized", old.len())
+        });
+
+        // 1 system + 1 summary + 10 recent non-system = 12
+        assert_eq!(mem.message_count(), 12);
+        // First is the summary System message (from apply_compact)
+        assert_eq!(mem.messages()[0].role, Role::System);
+        assert_eq!(mem.messages()[0].content, "5 messages summarized");
+        // Second is the original System message (preserved)
+        assert_eq!(mem.messages()[1].role, Role::System);
+        assert_eq!(mem.messages()[1].content, "System instructions");
+        // Then the 10 recent non-system messages
+        assert_eq!(mem.messages()[2].content, "msg_5");
+        assert_eq!(mem.messages()[11].content, "msg_14");
     }
 }
