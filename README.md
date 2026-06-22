@@ -17,7 +17,7 @@
 - 定义结构体 `Memory { messages: Vec<Message> }`
   > 注意：多异步任务共享上下文时，需包装为 `Arc<Mutex<Memory>>` 或 `Arc<RwLock<Memory>>`
 - 实现基础方法：`push()`、`get_context()`
-- 核心挑战：滑动窗口截断机制，强制保留 System Prompt + 最近 N 条消息
+- 达到1M上下文长度自动出发compact，调用小模型压缩记忆
 
 ### 3. 工具系统基础 (`tools.rs`)
 - 定义 `Tool` Trait，包含方法：

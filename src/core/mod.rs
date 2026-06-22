@@ -1,3 +1,3 @@
-mod client;
+pub mod client;
 
 mod agent;

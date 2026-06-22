@@ -21,37 +21,70 @@ This is a **Rust agent framework** built from scratch (Rust 2024 edition, Tokio 
 ### Current phase (MVP)
 
 | Module | Purpose |
-|--------|---------|
-| `src/client/` | DeepSeek API client — typed request/response, streaming SSE support |
-| `src/main.rs` | Scratchpad: currently a raw HTTP-level SSE demo (does **not** use the `client` module yet) |
+| ------ | ------- |
+| `src/core/client/` | DeepSeek API client — typed request/response, streaming SSE support |
+| `src/core/agent.rs` | Agent scaffolding (empty — next to implement) |
+| `src/memory/mod.rs` | Conversation memory — `Memory`, `SharedMemory`, compaction with two-phase async API |
+| `src/main.rs` | Scratchpad: raw HTTP-level SSE demo (does **not** use the `client` module yet) |
 
-The `client` module is split by concern:
+The `core` module is the top-level crate root for the agent framework:
+
+- **`src/core/mod.rs`** — declares `pub mod client; mod agent;`
+- **`src/core/client/mod.rs`** — flat re-exports of all client types so callers `use core::client::*`
+
+The `client` submodule is split by concern:
 
 - **`error.rs`** — `DeepSeekError` enum (Http / Api / Parse / StreamingNotSupported)
-- **`request.rs`** — `DeepSeekRequest`, `Message`, `Role`, `ToolCall`, `ToolChoice`, `ToolDef`, etc.
-- **`response.rs`** — `DeepSeekResponse`, `FinishReason` (with `Other(String)` forward-compat), `Choice`, `Usage`
+- **`request.rs`** — `DeepSeekRequest`, `Message`, `Role`, `ToolCall`, `ToolChoice`, `ToolDef`, `FunctionDef`, `Thinking`, `ResponseFormat`, etc.
+- **`response.rs`** — `DeepSeekResponse`, `FinishReason` (with `Other(String)` forward-compat), `Choice`, `ChoiceMessage`, `Usage`
 - **`client.rs`** — `DeepSeekClient` — `send()` for non-streaming, `stream()` for SSE
-- **`stream.rs`** — `DeepSeekStream` and the SSE parsing pipeline (3 layers: `read_event` → `extract_sse_data` → `serde_json::from_str`)
-- **`mod.rs`** — flat re-exports so callers `use client::*`
+- **`stream.rs`** — `DeepSeekStream`, `DeepSeekChunk`, `ChunkChoice`, `Delta` and the SSE parsing pipeline (3 layers: `read_event` → `extract_sse_data` → `serde_json::from_str`)
 
 ### SSE streaming pipeline
 
-```
+```text
 HTTP chunk → buffer → find_event_end (\n\n) → trim_trailing_newlines → extract_sse_data (strip "data: ") → parse JSON → DeepSeekChunk
                                                                                           ↓
                                                                                    skip if empty / [DONE]
 ```
 
+### Memory module (`src/memory/mod.rs`)
+
+| Type | Purpose |
+| ---- | ------- |
+| `Memory` | Plain struct: `{ messages: Vec<Message>, compact_threshold: usize }` |
+| `SharedMemory` | `Arc<RwLock<Memory>>` — for sharing across tokio tasks |
+| `CompactSignal` | `Ok` / `NeedsCompact` — returned by `push()` |
+
+**Core API**: `push(msg) -> CompactSignal`, `messages()`, `get_context()`, `to_context_vec()`
+**Context length**: `total_chars()` (sums `content` lengths), `message_count()`, `needs_compact()`, `set_compact_threshold()`
+**Compaction** (two-phase, async-friendly):
+
+```text
+// Phase 1: drain old messages (everything before last KEEP_LAST_N_MESSAGES=10)
+let old = mem.split_for_compact();
+// Phase 2: summarize old via LLM, then insert summary
+mem.apply_compact(summary);
+// Result: [System("summary..."), msg_recent_0, ..., msg_recent_9]
+```
+
+Also provides `compact(fn)` convenience wrapper for sync use.
+
+Uses `Message` and `Role` from `crate::core::client` — `core/mod.rs` declares `pub mod client;` so this works.
+
 ### Key patterns
 
 - **Forward-compat enum**: `FinishReason::Other(String)` catches unknown values rather than failing deserialization. Custom `Serialize`/`Deserialize` because `#[serde(rename_all)]` can't handle a catch-all variant.
 - **SSE event buffering**: Network chunks can split an event mid-line. The stream accumulates bytes in a `Vec<u8>` buffer and only drains when `\n\n` appears.
+- **Two-phase compaction**: `split_for_compact()` + `apply_compact()` keeps the memory module decoupled from the API client. The agent loop handles the LLM call between phases, avoiding circular dependencies and working naturally with async.
 
 ### Roadmap (from README)
 
-The project is in **Phase 1** (MVP). Next items to build:
-1. `memory.rs` — conversation context with sliding window truncation (`Arc<RwLock<Memory>>`)
-2. `tools.rs` — `Tool` trait + tool registry + 1–2 example tools
-3. `core/agent.rs` — main loop: LLM → match (text → done / tool_calls → execute → push to memory → loop), with `max_steps` guard
+The project is in **Phase 1** (MVP). Completed and next:
+
+- [x] `core/client/` — DeepSeek API client with typed request/response and SSE streaming
+- [x] `memory/mod.rs` — conversation context with sliding window truncation (`Arc<RwLock<Memory>>`), push/get_context, two-phase compact API
+- [ ] `tools.rs` — `Tool` trait + tool registry + 1–2 example tools
+- [ ] `core/agent.rs` — main loop: LLM → match (text → done / tool_calls → execute → push to memory → loop), with `max_steps` guard (scaffolding exists)
 
 Phases 2 and 3 cover macros/schemars for auto-schema, streaming UX via mpsc, structured output, RAG with vector DB, TUI, and observability with `tracing`.
