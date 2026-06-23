@@ -58,17 +58,16 @@ HTTP chunk → buffer → find_event_end (\n\n) → trim_trailing_newlines → e
 
 **Core API**: `push(msg) -> CompactSignal`, `messages()`, `get_context()`, `to_context_vec()`
 **Context length**: `total_chars()` (sums `content` lengths), `message_count()`, `needs_compact()`, `set_compact_threshold()`
-**Compaction** (two-phase, async-friendly). **System messages are never compacted** — they stay verbatim; only `User`, `Assistant`, and `Tool` messages are candidates:
+**Compaction** — single async method that uses a flash model for summarisation. **System messages are never compacted** — they stay verbatim; only `User`, `Assistant`, and `Tool` messages are candidates:
 
-```text
-// Phase 1: drain old non-System messages (everything before last KEEP_LAST_N_MESSAGES=10 non-System)
-let old = mem.split_for_compact();
-// Phase 2: summarize old via LLM, then insert summary at position 0
-mem.apply_compact(summary);
+```rust
+// Automatically drains old non-System messages, sends them to the flash model,
+// and inserts the summary as a System message at position 0.
+mem.compact().await?;
 // Result: [System("summary..."), System(original...), msg_recent_0, ..., msg_recent_9]
 ```
 
-Also provides `compact(fn)` convenience wrapper for sync use.
+Uses `DEFAULT_FLASH_MODEL` env var (falls back to `"deepseek-chat"`) and `DeepSeek_API` for authentication.
 
 Uses `Message` and `Role` from `crate::core::client` — `core/mod.rs` declares `pub mod client;` so this works.
 
@@ -76,7 +75,7 @@ Uses `Message` and `Role` from `crate::core::client` — `core/mod.rs` declares 
 
 - **Forward-compat enum**: `FinishReason::Other(String)` catches unknown values rather than failing deserialization. Custom `Serialize`/`Deserialize` because `#[serde(rename_all)]` can't handle a catch-all variant.
 - **SSE event buffering**: Network chunks can split an event mid-line. The stream accumulates bytes in a `Vec<u8>` buffer and only drains when `\n\n` appears.
-- **Two-phase compaction**: `split_for_compact()` drains only non-System messages, keeping System messages verbatim. `apply_compact()` inserts the summary as a new System message at position 0. The agent loop handles the LLM call between phases, avoiding circular dependencies and working naturally with async.
+- **Single-call async compaction**: `compact()` drains only non-System messages (keeping System messages verbatim), creates a `DeepSeekClient` pointed at the flash model, sends old messages for summarisation, and inserts the summary as a System message at position 0 — all in one async call.
 
 ### Roadmap (from README)
 

@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use crate::core::client::{Message, Role};
+use crate::core::client::{DeepSeekClient, DeepSeekError, DeepSeekRequest, Message, Role};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ pub const KEEP_LAST_N_MESSAGES: usize = 10;
 ///
 /// 1. Call [`split_for_compact`](Self::split_for_compact) to drain old non-System messages (everything before the last N non-System
 ///    messages). **System messages are never drained** — they stay in
-    ///    memory verbatim.
+///    memory verbatim.
 /// 2. Summarize the drained messages (e.g., via LLM).
 /// 3. Call [`apply_compact`](Self::apply_compact) to insert the summary
 ///    as a new System message at position 0.
@@ -182,24 +182,10 @@ impl Memory {
 // ── Compaction ────────────────────────────────────────────────────────────────
 
 impl Memory {
-    /// Drains the "old" **non-System** messages (everything before the last
-    /// [`KEEP_LAST_N_MESSAGES`] non-System messages) and returns them for
-    /// summarization.
-    ///
-    /// **System messages are always preserved** — they are never drained
-    /// or included in the old-message batch. Only `User`, `Assistant`,
-    /// and `Tool` messages are candidates for compaction.
-    ///
-    /// After this call, `self` contains all System messages plus the
-    /// most recent [`KEEP_LAST_N_MESSAGES`] non-System messages, in
-    /// their original relative order. The caller should:
-    ///
-    /// 1. Send the returned messages to a (small) LLM for summarization.
-    /// 2. Call [`apply_compact`](Self::apply_compact) with the result.
-    ///
-    /// Returns an empty `Vec` if there are fewer non-System messages than
-    /// the keep-window (i.e., nothing to compact).
-    pub fn split_for_compact(&mut self) -> Vec<Message> {
+    /// Drains the first `to_drain` non-System messages, preserving System
+    /// messages and the last [`KEEP_LAST_N_MESSAGES`] non-System messages
+    /// in their original relative order.
+    fn drain_old_non_system(&mut self) -> Vec<Message> {
         let non_system_count = self
             .messages
             .iter()
@@ -212,8 +198,6 @@ impl Memory {
             return Vec::new();
         }
 
-        // Drain the first `to_drain` non-System messages, preserving
-        // System messages in place and keeping message order intact.
         let mut drained = Vec::with_capacity(to_drain);
         let mut remaining = Vec::with_capacity(self.messages.len() - to_drain);
         let mut drained_count = 0;
@@ -231,35 +215,78 @@ impl Memory {
         drained
     }
 
-    /// Inserts a compressed summary at the beginning of memory as a
-    /// System message.
+    /// Compacts old non-System messages by summarising them via a
+    /// lightweight "flash" LLM.
     ///
-    /// Call this **after** [`split_for_compact`](Self::split_for_compact)
-    /// once the summary text has been obtained (e.g., from an LLM).
+    /// The flash model is read from the `DEFAULT_FLASH_MODEL` environment
+    /// variable (falls back to `"deepseek-chat"`). The API key is read
+    /// from `DeepSeek_API`.
     ///
-    /// If `summary` is empty, this is a no-op (no message is inserted).
-    pub fn apply_compact(&mut self, summary: String) {
-        if !summary.is_empty() {
-            self.messages
-                .insert(0, Message::new(Role::System, summary));
-        }
-    }
-
-    /// Convenience method: runs the full compaction cycle synchronously.
+    /// # Behaviour
     ///
-    /// Calls [`split_for_compact`](Self::split_for_compact), passes the
-    /// old messages to `summarize`, then calls
-    /// [`apply_compact`](Self::apply_compact) with the result.
+    /// 1. Drains all non-System messages before the last
+    ///    [`KEEP_LAST_N_MESSAGES`].
+    /// 2. Sends them to the flash model for summarisation.
+    /// 3. Inserts the summary as a System message at position 0.
     ///
-    /// For async summarization (the common case), use the two-phase API
-    /// directly instead.
-    pub fn compact(&mut self, summarize: impl FnOnce(&[Message]) -> String) {
-        let old = self.split_for_compact();
+    /// **System messages are always preserved verbatim** — only `User`,
+    /// `Assistant`, and `Tool` messages are candidates for compaction.
+    ///
+    /// Does nothing (returns `Ok`) if there are insufficient non-System
+    /// messages to compact.
+    pub async fn compact(&mut self) -> Result<(), DeepSeekError> {
+        let old = self.drain_old_non_system();
         if old.is_empty() {
-            return;
+            return Ok(());
         }
-        let summary = summarize(&old);
-        self.apply_compact(summary);
+
+        let flash_model =
+            std::env::var("DEFAULT_FLASH_MODEL").unwrap_or_else(|_| "deepseek-chat".to_string());
+        let api_key = std::env::var("DeepSeek_API").map_err(|_| DeepSeekError::Api {
+            status: 0,
+            body: "DeepSeek_API environment variable not set".into(),
+        })?;
+
+        let client = DeepSeekClient::new(api_key);
+
+        // Build a compact conversation transcript for the summariser.
+        let transcript: String = old
+            .iter()
+            .map(|m| format!("[{}]: {}", role_label(m.role), m.content))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let prompt = format!(
+            "Summarise the following conversation history concisely. \
+             Preserve key facts, decisions, and context. \
+             Output only the summary, no preamble:\n\n{transcript}"
+        );
+
+        let request = DeepSeekRequest::new(flash_model, vec![Message::new(Role::User, prompt)]);
+
+        let response = client.send(request).await?;
+        let summary = response
+            .choices
+            .first()
+            .and_then(|c| c.message.content.clone())
+            .unwrap_or_default();
+
+        if !summary.is_empty() {
+            self.messages.insert(0, Message::new(Role::System, summary));
+        }
+
+        Ok(())
+    }
+}
+
+/// Human-readable label for each [`Role`], used when formatting the
+/// transcript for summarisation.
+const fn role_label(role: Role) -> &'static str {
+    match role {
+        Role::System => "System",
+        Role::User => "User",
+        Role::Assistant => "Assistant",
+        Role::Tool => "Tool",
     }
 }
 
@@ -393,10 +420,7 @@ mod tests {
     fn test_messages_and_get_context_are_same() {
         let mut mem = Memory::new();
         mem.push(user_msg("test"));
-        assert_eq!(
-            mem.messages().as_ptr(),
-            mem.get_context().as_ptr()
-        );
+        assert_eq!(mem.messages().as_ptr(), mem.get_context().as_ptr());
     }
 
     // ── Context Length ───────────────────────────────────────────────────
@@ -470,7 +494,7 @@ mod tests {
         for i in 0..15 {
             mem.push(user_msg(&format!("msg_{i}")));
         }
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         assert_eq!(old.len(), 5); // 15 - 10 = 5 drained
         assert_eq!(mem.message_count(), 10);
         // First remaining message should be msg_5 (0-indexed)
@@ -485,7 +509,7 @@ mod tests {
         for i in 0..15 {
             mem.push(user_msg(&format!("msg_{i}")));
         }
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         assert_eq!(old.len(), 5);
         for (i, m) in old.iter().enumerate() {
             assert_eq!(m.content, format!("msg_{i}"));
@@ -498,7 +522,7 @@ mod tests {
         mem.push(user_msg("a"));
         mem.push(user_msg("b"));
         mem.push(user_msg("c"));
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         assert!(old.is_empty());
         assert_eq!(mem.message_count(), 3); // unchanged
     }
@@ -509,7 +533,7 @@ mod tests {
         for i in 0..KEEP_LAST_N_MESSAGES {
             mem.push(user_msg(&format!("msg_{i}")));
         }
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         assert!(old.is_empty());
         assert_eq!(mem.message_count(), KEEP_LAST_N_MESSAGES);
     }
@@ -521,7 +545,7 @@ mod tests {
             // 11 messages total
             mem.push(user_msg(&format!("msg_{i}")));
         }
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         assert_eq!(old.len(), 1);
         assert_eq!(old[0].content, "msg_0");
         assert_eq!(mem.message_count(), KEEP_LAST_N_MESSAGES); // 10 kept
@@ -530,71 +554,64 @@ mod tests {
     #[test]
     fn test_split_for_compact_empty_memory() {
         let mut mem = Memory::new();
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         assert!(old.is_empty());
         assert_eq!(mem.message_count(), 0);
     }
 
-    // ── Compaction: apply_compact ────────────────────────────────────────
+    // ── Compaction: summary insertion ─────────────────────────────────────
 
     #[test]
-    fn test_apply_compact_inserts_system_summary() {
+    fn test_insert_summary_at_front() {
         let mut mem = Memory::new();
         for i in 0..15 {
             mem.push(user_msg(&format!("msg_{i}")));
         }
-        mem.split_for_compact(); // drain first 5
-        mem.apply_compact("Summary of old messages".into());
+        mem.drain_old_non_system(); // drain first 5
+        // Simulate what compact() does after receiving the LLM summary
+        let summary = "Summary of old messages";
+        mem.messages
+            .insert(0, Message::new(Role::System, summary.to_string()));
         assert_eq!(mem.message_count(), 11); // 1 summary + 10 kept
         assert_eq!(mem.messages()[0].role, Role::System);
         assert_eq!(mem.messages()[0].content, "Summary of old messages");
     }
 
     #[test]
-    fn test_apply_compact_empty_is_noop() {
+    fn test_empty_summary_is_not_inserted() {
         let mut mem = Memory::new();
         mem.push(user_msg("hello"));
-        mem.apply_compact(String::new());
+        let summary = "";
+        if !summary.is_empty() {
+            mem.messages
+                .insert(0, Message::new(Role::System, summary.to_string()));
+        }
         assert_eq!(mem.message_count(), 1); // unchanged
     }
 
-    #[test]
-    fn test_apply_compact_whitespace_only_is_inserted() {
-        let mut mem = Memory::new();
-        mem.push(user_msg("hello"));
-        mem.apply_compact("  ".into());
-        // Whitespace is not empty — it's a string, so it gets inserted
-        assert_eq!(mem.message_count(), 2);
-    }
-
-    // ── Compaction: compact (sync convenience) ───────────────────────────
+    // ── Compaction: full-cycle drain + insert ─────────────────────────────
 
     #[test]
-    fn test_compact_full_cycle() {
+    fn test_drain_and_insert_full_cycle() {
         let mut mem = Memory::new();
         for i in 0..15 {
             mem.push(user_msg(&format!("msg_{i}")));
         }
-        mem.compact(|old| {
-            assert_eq!(old.len(), 5);
-            format!("{} messages summarized", old.len())
-        });
+        let old = mem.drain_old_non_system();
+        assert_eq!(old.len(), 5);
+        let summary = format!("{} messages summarized", old.len());
+        mem.messages.insert(0, Message::new(Role::System, summary));
         assert_eq!(mem.message_count(), 11); // 1 summary + 10 kept
         assert_eq!(mem.messages()[0].role, Role::System);
         assert_eq!(mem.messages()[0].content, "5 messages summarized");
     }
 
     #[test]
-    fn test_compact_noop_when_few_messages() {
+    fn test_drain_noop_when_few_messages() {
         let mut mem = Memory::new();
         mem.push(user_msg("only one"));
-        let called = std::cell::Cell::new(false);
-        mem.compact(|_| {
-            called.set(true);
-            "should not be called".into()
-        });
-        // Summarize closure was never invoked
-        assert!(!called.get());
+        let old = mem.drain_old_non_system();
+        assert!(old.is_empty());
         assert_eq!(mem.message_count(), 1);
     }
 
@@ -683,7 +700,7 @@ mod tests {
             mem.push(make_msg(Role::Tool, &format!("tool_result_{i}")));
         }
         // 12 messages total, KEEP_LAST_N_MESSAGES = 10
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         assert_eq!(old.len(), 2); // first 2 drained
         assert_eq!(mem.message_count(), 10);
     }
@@ -701,7 +718,7 @@ mod tests {
         }
         assert_eq!(mem.message_count(), 13); // 1 system + 12 user
 
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         // 12 non-system - 10 kept = 2 drained
         assert_eq!(old.len(), 2);
         assert_eq!(old[0].content, "msg_0");
@@ -734,7 +751,7 @@ mod tests {
         mem.push(assistant_msg("msg_11"));
         // 14 total: 2 system + 12 non-system
 
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         // 12 non-system - 10 kept = 2 drained (msg_0, msg_1)
         assert_eq!(old.len(), 2);
         assert!(!old.iter().any(|m| m.role == Role::System));
@@ -758,7 +775,7 @@ mod tests {
         mem.push(make_msg(Role::System, "System B"));
         mem.push(make_msg(Role::System, "System C"));
 
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         // 0 non-system → nothing to drain
         assert!(old.is_empty());
         assert_eq!(mem.message_count(), 3); // all system messages kept
@@ -781,7 +798,7 @@ mod tests {
         mem.push(user_msg("q6"));
         // 12 total: 1 system + 11 non-system
 
-        let old = mem.split_for_compact();
+        let old = mem.drain_old_non_system();
         // 11 non-system - 10 kept = 1 drained (q1)
         assert_eq!(old.len(), 1);
         assert_eq!(old[0].role, Role::User);
@@ -793,7 +810,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compact_preserves_system_messages_full_cycle() {
+    fn test_drain_preserves_system_messages_full_cycle() {
         let mut mem = Memory::new();
         mem.push(make_msg(Role::System, "System instructions"));
         for i in 0..15 {
@@ -801,16 +818,16 @@ mod tests {
         }
         // 16 total: 1 system + 15 user
 
-        mem.compact(|old| {
-            // Only non-system messages are presented for summarization
-            assert!(!old.iter().any(|m| m.role == Role::System));
-            assert_eq!(old.len(), 5); // 15 - 10 = 5
-            format!("{} messages summarized", old.len())
-        });
+        let old = mem.drain_old_non_system();
+        // Only non-system messages are presented for summarization
+        assert!(!old.iter().any(|m| m.role == Role::System));
+        assert_eq!(old.len(), 5); // 15 - 10 = 5
+        let summary = format!("{} messages summarized", old.len());
+        mem.messages.insert(0, Message::new(Role::System, summary));
 
-        // 1 system + 1 summary + 10 recent non-system = 12
+        // 1 summary + 1 original system + 10 recent non-system = 12
         assert_eq!(mem.message_count(), 12);
-        // First is the summary System message (from apply_compact)
+        // First is the summary System message
         assert_eq!(mem.messages()[0].role, Role::System);
         assert_eq!(mem.messages()[0].content, "5 messages summarized");
         // Second is the original System message (preserved)
