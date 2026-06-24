@@ -12,7 +12,7 @@ cargo test -p agent_oxide -- test_find_event_end  # run a single test
 cargo clippy             # lint
 ```
 
-Set `DeepSeek_API` in `.env` before running — `dotenvy` loads it at startup.
+Set `DEEPSEEK_API` in `.env` before running — `dotenvy` loads it at startup.
 
 ## Architecture
 
@@ -67,7 +67,7 @@ mem.compact().await?;
 // Result: [System("summary..."), System(original...), msg_recent_0, ..., msg_recent_9]
 ```
 
-Uses `DEFAULT_FLASH_MODEL` env var (falls back to `"deepseek-chat"`) and `DeepSeek_API` for authentication.
+Uses `DEFAULT_FLASH_MODEL` env var (falls back to `"deepseek-chat"`) and `DEEPSEEK_API` for authentication.
 
 Uses `Message` and `Role` from `crate::core::client` — `core/mod.rs` declares `pub mod client;` so this works.
 

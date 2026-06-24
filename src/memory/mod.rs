@@ -220,7 +220,7 @@ impl Memory {
     ///
     /// The flash model is read from the `DEFAULT_FLASH_MODEL` environment
     /// variable (falls back to `"deepseek-chat"`). The API key is read
-    /// from `DeepSeek_API`.
+    /// from `DEEPSEEK_API`.
     ///
     /// # Behaviour
     ///
@@ -242,9 +242,9 @@ impl Memory {
 
         let flash_model =
             std::env::var("DEFAULT_FLASH_MODEL").unwrap_or_else(|_| "deepseek-chat".to_string());
-        let api_key = std::env::var("DeepSeek_API").map_err(|_| DeepSeekError::Api {
+        let api_key = std::env::var("DEEPSEEK_API").map_err(|_| DeepSeekError::Api {
             status: 0,
-            body: "DeepSeek_API environment variable not set".into(),
+            body: "DEEPSEEK_API environment variable not set".into(),
         })?;
 
         let client = DeepSeekClient::new(api_key);

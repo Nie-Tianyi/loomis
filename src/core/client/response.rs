@@ -142,9 +142,18 @@ mod tests {
     #[test]
     fn test_finish_reason_serialize() {
         use serde_json::json;
-        assert_eq!(serde_json::to_value(FinishReason::Stop).unwrap(), json!("stop"));
-        assert_eq!(serde_json::to_value(FinishReason::Length).unwrap(), json!("length"));
-        assert_eq!(serde_json::to_value(FinishReason::ToolCalls).unwrap(), json!("tool_calls"));
+        assert_eq!(
+            serde_json::to_value(FinishReason::Stop).unwrap(),
+            json!("stop")
+        );
+        assert_eq!(
+            serde_json::to_value(FinishReason::Length).unwrap(),
+            json!("length")
+        );
+        assert_eq!(
+            serde_json::to_value(FinishReason::ToolCalls).unwrap(),
+            json!("tool_calls")
+        );
         assert_eq!(
             serde_json::to_value(FinishReason::ContentFilter).unwrap(),
             json!("content_filter"),

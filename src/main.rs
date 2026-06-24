@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // 加载 .env 中的环境变量
     dotenvy::dotenv().ok();
     let api_key =
-        std::env::var("DeepSeek_API").expect("未找到环境变量 DeepSeek_API，请在 .env 文件中设置");
+        std::env::var("DEEPSEEK_API").expect("未找到环境变量 DEEPSEEK_API，请在 .env 文件中设置");
 
     let client = Client::new();
 
