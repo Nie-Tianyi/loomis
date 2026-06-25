@@ -24,8 +24,9 @@ This is a **Rust agent framework** built from scratch (Rust 2024 edition, Tokio 
 | ------ | ------- |
 | `src/core/client/` | DeepSeek API client — typed request/response, streaming SSE support |
 | `src/core/agent.rs` | Agent scaffolding (empty — next to implement) |
-| `src/lib.rs` | Library crate root — re-exports `core` and `memory` for doc tests and external consumers |
+| `src/lib.rs` | Library crate root — re-exports `core`, `memory`, `tools` |
 | `src/memory/mod.rs` | Conversation memory — `Memory`, `SharedMemory`, `MemoryBuilder`, two-phase compaction with `MemoryError` |
+| `src/tools/` | Tool system — `Tool` trait, `ToolRegistry`, `ToolError`, `CalculatorTool`, `EchoTool` |
 | `src/main.rs` | Scratchpad: raw HTTP-level SSE demo (does **not** use the `client` module yet) |
 
 The `core` module is the top-level crate root for the agent framework:
@@ -73,6 +74,40 @@ mem.apply_compact(summary);
 
 Convenience free function `compact_with_deepseek(memory, client, model)` composes both phases against a flash model via `DeepSeekClient`. Uses `Message` and `Role` from `crate::core::client`.
 
+### Tools module (`src/tools/`)
+
+Split by concern, mirroring `core/client/`:
+
+| File | Purpose |
+| ---- | ------- |
+| `mod.rs` | Module root — re-exports all public types (`Tool`, `ToolError`, `ToolRegistry`, `CalculatorTool`, `EchoTool`, `extract_string_arg`, `tool_to_def`) |
+| `error.rs` | `ToolError` — `Execution(String)` / `InvalidArgs(String)`, mirrors `MemoryError` style (Clone, Display, Error) |
+| `tool.rs` | `Tool` trait — `name()`, `description()`, `parameters()`, `execute()`, plus provided `to_def()` method. Free helper `extract_string_arg(args, field)` |
+| `registry.rs` | `ToolRegistry` — `HashMap<String, Arc<dyn Tool>>`, methods: `register`, `get`, `has`, `len`, `is_empty`, `iter`, `to_tool_defs()`, `execute()`. `tool_to_def(&dyn Tool) -> ToolDef` free function |
+| `calculator.rs` | `CalculatorTool` + recursive-descent expression evaluator (`Lexer` → `Parser` separation). Supports `+`, `-`, `*`, `/`, `()`, unary `+`/`-` |
+| `echo.rs` | `EchoTool` — minimal reference implementation for custom tools |
+
+**Tool trait** — sync, object-safe (no `async_trait` crate needed):
+
+```rust
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn parameters(&self) -> Value;                        // manual JSON Schema
+    fn execute(&self, args: &str) -> Result<String, ToolError>;
+    fn to_def(&self) -> ToolDef { .. }                    // provided default
+}
+```
+
+**Integration flow**:
+
+```text
+Tool impl → to_def() → ToolDef → DeepSeekRequest.tools
+Tool impl ← ToolRegistry::execute(name, args) ← ToolCall.function.{name, arguments}
+```
+
+**Test convention**: tests live inline in each submodule file (`#[cfg(test)]` on `impl` blocks / free functions), consistent with the rest of the crate.
+
 ### Key patterns
 
 - **Forward-compat enum**: `FinishReason::Other(String)` catches unknown values rather than failing deserialization. Custom `Serialize`/`Deserialize` because `#[serde(rename_all)]` can't handle a catch-all variant.
@@ -85,7 +120,7 @@ The project is in **Phase 1** (MVP). Completed and next:
 
 - [x] `core/client/` — DeepSeek API client with typed request/response and SSE streaming
 - [x] `memory/mod.rs` — conversation context with configurable compaction (`Arc<RwLock<Memory>>`), `MemoryBuilder`, two-phase `drain_for_compact`/`apply_compact`, `compact_with_deepseek` convenience fn
-- [ ] `tools.rs` — `Tool` trait + tool registry + 1–2 example tools
+- [x] `tools/` — `Tool` trait + `ToolRegistry` + `CalculatorTool` + `EchoTool`, split into `mod.rs` / `error.rs` / `tool.rs` / `registry.rs` / `calculator.rs` / `echo.rs`
 - [ ] `core/agent.rs` — main loop: LLM → match (text → done / tool_calls → execute → push to memory → loop), with `max_steps` guard (scaffolding exists)
 
 Phases 2 and 3 cover macros/schemars for auto-schema, streaming UX via mpsc, structured output, RAG with vector DB, TUI, and observability with `tracing`.
