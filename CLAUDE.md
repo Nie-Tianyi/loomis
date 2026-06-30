@@ -26,7 +26,7 @@ This is a **Rust agent framework** built from scratch (Rust 2024 edition, Tokio 
 | `src/core/agent.rs` | Agent scaffolding (empty — next to implement) |
 | `src/lib.rs` | Library crate root — re-exports `core`, `memory`, `tools` |
 | `src/memory/mod.rs` | Conversation memory — `Memory`, `SharedMemory`, `MemoryBuilder`, two-phase compaction with `MemoryError` |
-| `src/tools/` | Tool system — `Tool` trait, `ToolRegistry`, `ToolError`, `CalculatorTool`, `EchoTool` |
+| `src/tools/` | Tool system — `Tool` trait, `ToolRegistry`, `ToolError`, `CalculatorTool`, `EchoTool`, and file-editing tools (`ReadTool`, `WriteTool`, `EditTool`, `GlobTool`, `GrepTool`, `LsTool`) |
 | `src/main.rs` | Scratchpad: raw HTTP-level SSE demo (does **not** use the `client` module yet) |
 
 The `core` module is the top-level crate root for the agent framework:
@@ -80,12 +80,19 @@ Split by concern, mirroring `core/client/`:
 
 | File | Purpose |
 | ---- | ------- |
-| `mod.rs` | Module root — re-exports all public types (`Tool`, `ToolError`, `ToolRegistry`, `CalculatorTool`, `EchoTool`, `extract_string_arg`, `tool_to_def`) |
-| `error.rs` | `ToolError` — `Execution(String)` / `InvalidArgs(String)`, mirrors `MemoryError` style (Clone, Display, Error) |
+| `mod.rs` | Module root — re-exports all public types (`Tool`, `ToolError`, `ToolRegistry`, `FsError`, `WorkspaceFs`, all tool structs, `extract_string_arg`, `tool_to_def`) |
+| `error.rs` | `ToolError` — `Execution(String)` / `InvalidArgs(String)`. `FsError` — `PathEscapesWorkspace` / `NotFound` / `NotAFile` / `NotADirectory` / `Io` / `Glob` / `Regex` |
 | `tool.rs` | `Tool` trait — `name()`, `description()`, `parameters()`, `execute()`, plus provided `to_def()` method. Free helper `extract_string_arg(args, field)` |
 | `registry.rs` | `ToolRegistry` — `HashMap<String, Arc<dyn Tool>>`, methods: `register`, `get`, `has`, `len`, `is_empty`, `iter`, `to_tool_defs()`, `execute()`. `tool_to_def(&dyn Tool) -> ToolDef` free function |
+| `fs.rs` | `WorkspaceFs` — sandboxed filesystem backend. All paths canonicalized and checked against `workspace_root`. Methods: `read`, `write`, `edit_lines`, `glob`, `grep`, `ls`. Supporting types: `DirEntry`, `EntryType`, `GrepMatch` |
 | `calculator.rs` | `CalculatorTool` + recursive-descent expression evaluator (`Lexer` → `Parser` separation). Supports `+`, `-`, `*`, `/`, `()`, unary `+`/`-` |
 | `echo.rs` | `EchoTool` — minimal reference implementation for custom tools |
+| `tool_read.rs` | `ReadTool` — reads file content with optional `offset`/`limit`, returns `cat -n` style numbered output |
+| `tool_write.rs` | `WriteTool` — creates or overwrites a file, auto-creates parent directories |
+| `tool_edit.rs` | `EditTool` — replaces lines `start_line..=end_line` (1-indexed) with `new_content` |
+| `tool_glob.rs` | `GlobTool` — finds files matching a glob pattern, returns sorted relative paths |
+| `tool_grep.rs` | `GrepTool` — regex search in files, with optional `path_glob` to filter files |
+| `tool_ls.rs` | `LsTool` — lists directory contents with type/size, directories first |
 
 **Tool trait** — sync, object-safe (no `async_trait` crate needed):
 
@@ -113,6 +120,7 @@ Tool impl ← ToolRegistry::execute(name, args) ← ToolCall.function.{name, arg
 - **Forward-compat enum**: `FinishReason::Other(String)` catches unknown values rather than failing deserialization. Custom `Serialize`/`Deserialize` because `#[serde(rename_all)]` can't handle a catch-all variant.
 - **SSE event buffering**: Network chunks can split an event mid-line. The stream accumulates bytes in a `Vec<u8>` buffer and only drains when `\n\n` appears.
 - **Two-phase compaction**: `drain_for_compact()` + `apply_compact()` decouples Memory from any LLM provider. The caller controls summarisation strategy; a convenience free function `compact_with_deepseek()` ties them together with a `DeepSeekClient` for the common case. System messages are never drained.
+- **WorkspaceFs sandbox**: All file-editing tools hold `Arc<WorkspaceFs>` and delegate to it. `resolve()` canonicalizes every path and rejects anything outside `workspace_root`. `FsError` (I/O layer) is mapped to `ToolError` (LLM-visible) by each tool's `map_fs_err()`. The `normalize_partial()` helper handles non-existent paths by walking up to the first existing ancestor.
 
 ### Roadmap (from README)
 
@@ -121,6 +129,7 @@ The project is in **Phase 1** (MVP). Completed and next:
 - [x] `core/client/` — DeepSeek API client with typed request/response and SSE streaming
 - [x] `memory/mod.rs` — conversation context with configurable compaction (`Arc<RwLock<Memory>>`), `MemoryBuilder`, two-phase `drain_for_compact`/`apply_compact`, `compact_with_deepseek` convenience fn
 - [x] `tools/` — `Tool` trait + `ToolRegistry` + `CalculatorTool` + `EchoTool`, split into `mod.rs` / `error.rs` / `tool.rs` / `registry.rs` / `calculator.rs` / `echo.rs`
+- [x] `tools/fs.rs` + file-editing tools — `WorkspaceFs` sandbox + `ReadTool` / `WriteTool` / `EditTool` / `GlobTool` / `GrepTool` / `LsTool`
 - [ ] `core/agent.rs` — main loop: LLM → match (text → done / tool_calls → execute → push to memory → loop), with `max_steps` guard (scaffolding exists)
 
 Phases 2 and 3 cover macros/schemars for auto-schema, streaming UX via mpsc, structured output, RAG with vector DB, TUI, and observability with `tracing`.

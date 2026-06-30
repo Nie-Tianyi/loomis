@@ -1,15 +1,22 @@
-//! 工具系统 — [`Tool`] trait、工具注册表 [`ToolRegistry`] 以及示例工具实现。
+//! 工具系统 — [`Tool`] trait、工具注册表 [`ToolRegistry`] 以及内置工具实现。
 //!
 //! # 架构
 //!
 //! ```text
 //! tools/
 //!   mod.rs        — 模块根，公开 re-export
-//!   error.rs      — ToolError（工具执行错误）
+//!   error.rs      — ToolError / FsError（工具执行错误）
 //!   tool.rs       — Tool trait（工具抽象接口）
 //!   registry.rs   — ToolRegistry（工具注册与分发）
+//!   fs.rs         — WorkspaceFs（沙箱文件系统操作）
 //!   calculator.rs — CalculatorTool（表达式求值工具）
 //!   echo.rs       — EchoTool（回显工具，用于测试）
+//!   tool_read.rs  — ReadTool（文件读取）
+//!   tool_write.rs — WriteTool（文件写入）
+//!   tool_edit.rs  — EditTool（行级编辑）
+//!   tool_glob.rs  — GlobTool（文件模式匹配）
+//!   tool_grep.rs  — GrepTool（内容搜索）
+//!   tool_ls.rs    — LsTool（目录列表）
 //! ```
 //!
 //! # 与 `core::client` 的集成
@@ -30,8 +37,25 @@ mod registry;
 mod calculator;
 mod echo;
 
-pub use error::ToolError;
+// File-editing tools
+mod fs;
+mod tool_read;
+mod tool_write;
+mod tool_edit;
+mod tool_glob;
+mod tool_grep;
+mod tool_ls;
+
+pub use error::{FsError, ToolError};
 pub use tool::{extract_string_arg, Tool};
 pub use registry::{tool_to_def, ToolRegistry};
 pub use calculator::CalculatorTool;
 pub use echo::EchoTool;
+
+pub use fs::{DirEntry, EntryType, GrepMatch, WorkspaceFs};
+pub use tool_read::ReadTool;
+pub use tool_write::WriteTool;
+pub use tool_edit::EditTool;
+pub use tool_glob::GlobTool;
+pub use tool_grep::GrepTool;
+pub use tool_ls::LsTool;

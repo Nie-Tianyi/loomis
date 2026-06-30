@@ -33,3 +33,68 @@ impl fmt::Display for ToolError {
 }
 
 impl std::error::Error for ToolError {}
+
+// ── FsError ─────────────────────────────────────────────────────────────────
+
+/// 文件系统操作错误。
+///
+/// 由 [`WorkspaceFs`](crate::tools::WorkspaceFs) 方法返回，
+/// 在工具 `execute()` 中转换为 [`ToolError`]。
+///
+/// # 与 `ToolError` 的关系
+///
+/// `FsError` 是底层 I/O 错误；`ToolError` 是 LLM 可见的错误。
+/// 工具实现负责将 `FsError` 映射为合适的 `ToolError` 变体。
+#[derive(Debug)]
+pub enum FsError {
+    /// 路径解析后超出了 workspace 根目录。
+    PathEscapesWorkspace(String),
+    /// 文件或目录不存在。
+    NotFound(String),
+    /// 期望文件，但路径指向目录。
+    NotAFile(String),
+    /// 期望目录，但路径指向文件。
+    NotADirectory(String),
+    /// 底层 I/O 错误。
+    Io(std::io::Error),
+    /// glob 模式解析失败。
+    Glob(String),
+    /// 正则表达式编译失败。
+    Regex(String),
+}
+
+impl fmt::Display for FsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PathEscapesWorkspace(path) => {
+                write!(f, "path escapes workspace: {path}")
+            }
+            Self::NotFound(path) => write!(f, "not found: {path}"),
+            Self::NotAFile(path) => write!(f, "not a file: {path}"),
+            Self::NotADirectory(path) => write!(f, "not a directory: {path}"),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Glob(msg) => write!(f, "glob error: {msg}"),
+            Self::Regex(msg) => write!(f, "regex error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for FsError {}
+
+impl From<std::io::Error> for FsError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<glob::PatternError> for FsError {
+    fn from(e: glob::PatternError) -> Self {
+        Self::Glob(e.to_string())
+    }
+}
+
+impl From<regex::Error> for FsError {
+    fn from(e: regex::Error) -> Self {
+        Self::Regex(e.to_string())
+    }
+}
