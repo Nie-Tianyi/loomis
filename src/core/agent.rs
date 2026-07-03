@@ -93,6 +93,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::mpsc;
+
 use crate::core::client::{
     DeepSeekChunk, DeepSeekClient, DeepSeekError, DeepSeekRequest, DeepSeekResponse,
     DeepSeekStream, Message, Role, ToolCall, ToolCallFunction, ToolCallType, ToolChoice,
@@ -143,6 +145,53 @@ impl std::error::Error for AgentError {
             _ => None,
         }
     }
+}
+
+// ── AgentEvent ──────────────────────────────────────────────────────────────────
+
+/// Events emitted during [`Agent::run_with_events`] for real-time streaming UX.
+///
+/// The caller spawns a tokio task to consume these events from an
+/// `UnboundedReceiver` and render tokens, tool calls, and results as they happen.
+///
+/// # Example
+///
+/// ```ignore
+/// let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+///
+/// // Spawn a render task
+/// let printer = tokio::spawn(async move {
+///     while let Some(event) = rx.recv().await {
+///         match event {
+///             AgentEvent::Token(t) => print!("{t}"),
+///             AgentEvent::ToolCallStart { name, .. } => println!("\n🔧 {name}"),
+///             AgentEvent::Done => println!(),
+///             _ => {}
+///         }
+///     }
+/// });
+///
+/// // Run the agent — events stream to the printer task
+/// let response = agent.run_with_events(tx).await?;
+/// printer.await.unwrap();
+/// ```
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    /// A few characters of plain-text output from the model.
+    Token(String),
+    /// A few characters of reasoning/chain-of-thought (DeepSeek-R1 / V4).
+    ReasoningToken(String),
+    /// The model has started calling a tool. `id` is the unique call identifier
+    /// used to correlate subsequent fragments and the final result.
+    ToolCallStart { id: String, name: String },
+    /// A fragment of JSON arguments for an in-progress tool call.
+    /// Concatenate these across chunks to get the full arguments string.
+    ToolCallArgsDelta { id: String, delta: String },
+    /// A tool call completed execution. `output` is the tool's return value.
+    ToolResult { id: String, name: String, output: String },
+    /// The agent loop completed — the model produced a final text response.
+    /// The final content is returned by [`Agent::run_with_events`].
+    Done,
 }
 
 // ── StreamAccumulator ──────────────────────────────────────────────────────────
@@ -215,7 +264,11 @@ impl StreamAccumulator {
             // 3. Tool-call fragments
             if let Some(tool_calls) = &delta.tool_calls {
                 for tc in tool_calls {
-                    let entry = self.tool_calls.entry(choice.index).or_default();
+                    // Use the tool call's own index (not choice.index).
+                    // Each distinct tool call in a parallel batch gets its
+                    // own index (0, 1, 2, …) and fragments carry the same
+                    // index across chunks.
+                    let entry = self.tool_calls.entry(tc.index).or_default();
 
                     // First chunk for this index carries the identity fields.
                     // Later chunks have empty strings — we skip those so we
@@ -252,6 +305,7 @@ impl StreamAccumulator {
             .tool_calls
             .into_values()
             .map(|p| ToolCall {
+                index: 0, // final assembled call — index no longer relevant
                 id: p.id,
                 r#type: ToolCallType::Function,
                 function: ToolCallFunction {
@@ -398,6 +452,25 @@ impl Agent {
         self.compact_model = Some(model.into());
         self
     }
+
+    /// Returns `true` if the agent is in streaming mode (SSE).
+    ///
+    /// When `true`, [`run_loop`](Self::run_loop) dispatches to
+    /// [`run_streaming_loop`](Self::run_streaming_loop). When `false`,
+    /// it uses [`run_non_streaming_loop`](Self::run_non_streaming_loop).
+    pub fn streaming(&self) -> bool {
+        self.streaming
+    }
+
+    /// Returns the model name used in API requests.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Returns the maximum number of loop iterations allowed.
+    pub fn max_steps(&self) -> usize {
+        self.max_steps
+    }
 }
 
 // ── Core Loop ───────────────────────────────────────────────────────────────────
@@ -418,11 +491,39 @@ impl Agent {
     /// - `Err(AgentError::MaxStepsReached)` — the loop hit the step limit.
     /// - `Err(AgentError::DeepSeek)` — the API call failed after all retries.
     /// - `Err(AgentError::NoOutput)` — the model returned an empty response.
+    ///
+    /// # Real-time streaming
+    ///
+    /// Use [`run_with_events`](Self::run_with_events) if you need to display
+    /// tokens or tool calls to the user as they happen. This method discards
+    /// all intermediate events.
     pub async fn run_loop(&self) -> Result<String, AgentError> {
         if self.streaming {
-            self.run_streaming_loop().await
+            self.run_streaming_loop(None).await
         } else {
-            self.run_non_streaming_loop().await
+            self.run_non_streaming_loop(None).await
+        }
+    }
+
+    /// Like [`run_loop`](Self::run_loop), but streams [`AgentEvent`]s through
+    /// the given channel so the caller can display tokens, tool calls, and
+    /// results in real time.
+    ///
+    /// The channel is consumed (moved into this method). When this method
+    /// returns, the sender is dropped, which causes the receiver's
+    /// `recv().await` to return `None` — the caller's render task can exit.
+    ///
+    /// # Example
+    ///
+    /// See the [`AgentEvent`] documentation for a complete example.
+    pub async fn run_with_events(
+        &self,
+        tx: mpsc::UnboundedSender<AgentEvent>,
+    ) -> Result<String, AgentError> {
+        if self.streaming {
+            self.run_streaming_loop(Some(tx)).await
+        } else {
+            self.run_non_streaming_loop(Some(tx)).await
         }
     }
 }
@@ -435,17 +536,26 @@ impl Agent {
     /// Uses SSE (Server-Sent Events) to receive model output as it's
     /// generated. [`StreamAccumulator`] reassembles the fragments.
     ///
+    /// When `tx` is `Some`, [`AgentEvent`]s are sent in real time as
+    /// chunks arrive — tokens, tool-call starts, arguments fragments,
+    /// and tool results.
+    ///
     /// # Algorithm
     ///
     /// ```text
     /// for step in 0..max_steps:
     ///     build request
     ///     open SSE stream (with retry)
-    ///     accumulate chunks → (content, tool_calls)
-    ///     if tool_calls: execute → push results → loop
-    ///     else:          push content → return
+    ///     for each chunk:
+    ///         emit Token / ToolCallStart / ToolCallArgsDelta events
+    ///         accumulate into StreamAccumulator
+    ///     if tool_calls: execute → emit ToolResult events → push results → loop
+    ///     else:          emit Done → push content → return
     /// ```
-    async fn run_streaming_loop(&self) -> Result<String, AgentError> {
+    async fn run_streaming_loop(
+        &self,
+        tx: Option<mpsc::UnboundedSender<AgentEvent>>,
+    ) -> Result<String, AgentError> {
         for _step in 0..self.max_steps {
             // ── Optional compaction ──────────────────────────────
             if let Some(ref compact_model) = self.compact_model {
@@ -458,10 +568,19 @@ impl Agent {
             // ── Stream with retry ────────────────────────────────
             let mut stream = self.stream_with_retry(request).await?;
 
-            // ── Accumulate chunks ────────────────────────────────
+            // ── Accumulate chunks, emitting events in real time ─
             let mut acc = StreamAccumulator::new();
             while let Some(chunk_result) = stream.next().await {
                 let chunk = chunk_result.map_err(AgentError::DeepSeek)?;
+
+                // Emit events for this chunk before accumulation.
+                // We clone strings here to decouple the event payloads
+                // from the accumulator — events go to the channel,
+                // the accumulator keeps working.
+                if let Some(ref tx) = tx {
+                    emit_chunk_events(tx, &chunk);
+                }
+
                 acc.apply(&chunk);
             }
 
@@ -471,6 +590,23 @@ impl Agent {
             if !tool_calls.is_empty() {
                 // Model wants to use tools — execute them all
                 let results = self.execute_tool_calls(&tool_calls);
+
+                // Emit ToolResult events
+                if let Some(ref tx) = tx {
+                    for msg in &results {
+                        let tool_name = tool_calls
+                            .iter()
+                            .find(|tc| msg.tool_call_id.as_deref() == Some(&tc.id))
+                            .map(|tc| tc.function.name.as_str())
+                            .unwrap_or("unknown");
+                        let _ = tx.send(AgentEvent::ToolResult {
+                            id: msg.tool_call_id.clone().unwrap_or_default(),
+                            name: tool_name.to_owned(),
+                            output: msg.content.clone(),
+                        });
+                    }
+                }
+
                 {
                     let mut mem = self.memory.write().unwrap();
                     mem.push(Message::assistant_with_tools(content, tool_calls));
@@ -485,6 +621,10 @@ impl Agent {
                 return Err(AgentError::NoOutput);
             }
 
+            if let Some(ref tx) = tx {
+                let _ = tx.send(AgentEvent::Done);
+            }
+
             {
                 let mut mem = self.memory.write().unwrap();
                 mem.push(Message::new(Role::Assistant, &content));
@@ -496,6 +636,47 @@ impl Agent {
     }
 }
 
+/// Walks a single SSE chunk and emits the appropriate [`AgentEvent`]s.
+///
+/// Each chunk may carry text content, reasoning content, and/or
+/// tool-call fragments. We emit them as separate events so the
+/// renderer can format each category differently.
+fn emit_chunk_events(tx: &mpsc::UnboundedSender<AgentEvent>, chunk: &DeepSeekChunk) {
+    for choice in &chunk.choices {
+        let delta = &choice.delta;
+
+        // Plain text
+        if let Some(text) = &delta.content {
+            let _ = tx.send(AgentEvent::Token(text.clone()));
+        }
+
+        // Chain-of-thought / reasoning (DeepSeek-R1 / V4)
+        if let Some(reasoning) = &delta.reasoning_content {
+            let _ = tx.send(AgentEvent::ReasoningToken(reasoning.clone()));
+        }
+
+        // Tool-call fragments
+        if let Some(tool_calls) = &delta.tool_calls {
+            for tc in tool_calls {
+                // The first fragment carries the id and function name.
+                if !tc.id.is_empty() && !tc.function.name.is_empty() {
+                    let _ = tx.send(AgentEvent::ToolCallStart {
+                        id: tc.id.clone(),
+                        name: tc.function.name.clone(),
+                    });
+                }
+                // Every fragment may carry arguments.
+                if !tc.function.arguments.is_empty() {
+                    let _ = tx.send(AgentEvent::ToolCallArgsDelta {
+                        id: tc.id.clone(),
+                        delta: tc.function.arguments.clone(),
+                    });
+                }
+            }
+        }
+    }
+}
+
 // ── Non-Streaming Loop ─────────────────────────────────────────────────────────
 
 impl Agent {
@@ -504,16 +685,24 @@ impl Agent {
     /// Sends a single HTTP request and receives the complete JSON response.
     /// Simpler than streaming but has higher time-to-first-token latency.
     ///
+    /// When `tx` is `Some`, emits [`AgentEvent::ToolCallStart`],
+    /// [`AgentEvent::ToolCallArgsDelta`], and [`AgentEvent::ToolResult`]
+    /// for tool calls (but not [`AgentEvent::Token`] — there are no
+    /// streaming chunks in this mode).
+    ///
     /// # Algorithm
     ///
     /// ```text
     /// for step in 0..max_steps:
     ///     build request
     ///     send() with retry → response
-    ///     if response has tool_calls: execute → push results → loop
-    ///     else:                       push content → return
+    ///     if response has tool_calls: emit events → execute → push results → loop
+    ///     else:                       emit Done → push content → return
     /// ```
-    async fn run_non_streaming_loop(&self) -> Result<String, AgentError> {
+    async fn run_non_streaming_loop(
+        &self,
+        tx: Option<mpsc::UnboundedSender<AgentEvent>>,
+    ) -> Result<String, AgentError> {
         for _step in 0..self.max_steps {
             // ── Optional compaction ──────────────────────────────
             if let Some(ref compact_model) = self.compact_model {
@@ -537,7 +726,38 @@ impl Agent {
             {
                 let tool_calls = tool_calls.clone();
                 let content = choice.message.content.clone().unwrap_or_default();
+
+                // Emit tool-call events (non-streaming: all info in one go)
+                if let Some(ref tx) = tx {
+                    for tc in &tool_calls {
+                        let _ = tx.send(AgentEvent::ToolCallStart {
+                            id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                        });
+                        let _ = tx.send(AgentEvent::ToolCallArgsDelta {
+                            id: tc.id.clone(),
+                            delta: tc.function.arguments.clone(),
+                        });
+                    }
+                }
+
                 let results = self.execute_tool_calls(&tool_calls);
+
+                // Emit ToolResult events
+                if let Some(ref tx) = tx {
+                    for msg in &results {
+                        let tool_name = tool_calls
+                            .iter()
+                            .find(|tc| msg.tool_call_id.as_deref() == Some(&tc.id))
+                            .map(|tc| tc.function.name.as_str())
+                            .unwrap_or("unknown");
+                        let _ = tx.send(AgentEvent::ToolResult {
+                            id: msg.tool_call_id.clone().unwrap_or_default(),
+                            name: tool_name.to_owned(),
+                            output: msg.content.clone(),
+                        });
+                    }
+                }
 
                 // One write lock for both the assistant message and all tool results
                 {
@@ -552,6 +772,9 @@ impl Agent {
 
             // ── Text response — done ─────────────────────────────
             let content = choice.message.content.clone().unwrap_or_default();
+            if let Some(ref tx) = tx {
+                let _ = tx.send(AgentEvent::Done);
+            }
             {
                 let mut mem = self.memory.write().unwrap();
                 mem.push(Message::new(Role::Assistant, &content));
@@ -830,6 +1053,7 @@ mod tests {
 
     fn make_tool_call(id: &str, name: &str, arguments: &str) -> ToolCall {
         ToolCall {
+            index: 0,
             id: id.into(),
             r#type: ToolCallType::Function,
             function: ToolCallFunction {

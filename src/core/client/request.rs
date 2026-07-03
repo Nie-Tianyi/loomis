@@ -109,22 +109,35 @@ pub enum Role {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCall {
+    /// Tool-call index within the choice. Used in streaming deltas to
+    /// associate fragments with a specific tool-call slot.
+    /// Absent (`0`) in non-streaming responses.
+    #[serde(default)]
+    pub index: u32,
+    /// Unique identifier for this tool call. Present in the first streaming
+    /// chunk; absent (empty string) in follow-up chunks.
+    #[serde(default)]
     pub id: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub r#type: ToolCallType,
     pub function: ToolCallFunction,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolCallType {
+    #[default]
     Function,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCallFunction {
+    /// Function name. Present in the first streaming chunk;
+    /// absent (empty string) in follow-up chunks that only carry arguments.
+    #[serde(default)]
     pub name: String,
-    /// JSON-encoded arguments string.
+    /// JSON-encoded arguments string. Accumulated across streaming chunks.
+    #[serde(default)]
     pub arguments: String,
 }
 
