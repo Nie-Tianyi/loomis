@@ -206,7 +206,8 @@ fn truncate_args(args: &str, width: u16) -> String {
     if one_line.len() <= max {
         one_line
     } else {
-        format!("{}…", &one_line[..max])
+        let end = one_line.floor_char_boundary(max);
+        format!("{}…", &one_line[..end])
     }
 }
 
@@ -217,7 +218,8 @@ fn truncate_output(output: &str, width: u16) -> String {
     if one_line.len() <= max {
         one_line
     } else {
-        format!("{}…", &one_line[..max])
+        let end = one_line.floor_char_boundary(max);
+        format!("{}…", &one_line[..end])
     }
 }
 
