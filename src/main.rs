@@ -1,35 +1,15 @@
-//! # Agent Oxide — Interactive CLI
+//! # Agent Oxide — Interactive CLI & TUI
 //!
-//! A command-line chat interface with real-time streaming token display.
-//! Tokens appear as the model generates them; tool calls are highlighted
-//! inline so you can see what the agent is doing.
+//! By default, launches a ratatui-based chat interface similar to
+//! Claude Code's terminal UX. Pass `--no-tui` for the legacy
+//! line-based REPL.
 //!
 //! ## Usage
 //!
 //! ```text
-//! $ cargo run
-//! ╔══════════════════════════════════════════════╗
-//! ║       Agent Oxide — Interactive CLI          ║
-//! ╚══════════════════════════════════════════════╝
-//!
-//! > Write a short poem about Rust
-//! 🤖 A language born of fire and care...
-//!
-//! > What files are in the current directory?
-//! 🤖
-//!   🔧 ls
-//!   ✓ ls → src/ Cargo.toml ...
-//! The current directory contains: ...
+//! $ cargo run              # TUI mode (default)
+//! $ cargo run -- --no-tui  # Legacy line-based CLI
 //! ```
-//!
-//! ## Commands
-//!
-//! | Command  | Action |
-//! |----------|--------|
-//! | `/exit`  | Quit |
-//! | `/clear` | Reset conversation (system prompt preserved) |
-//! | `/stats` | Memory statistics |
-//! | `/tools` | List registered tools |
 //!
 //! Set `DEEPSEEK_API` in `.env` before running.
 
@@ -40,7 +20,8 @@ use agent_oxide::core::agent::{Agent, AgentEvent};
 use agent_oxide::core::client::{DeepSeekClient, Message, Role};
 use agent_oxide::memory::Memory;
 use agent_oxide::tools::{
-    CalculatorTool, GlobTool, GrepTool, LsTool, ReadTool, ToolRegistry, WorkspaceFs, WriteTool,
+    CalculatorTool, GlobTool, GrepTool, LsTool, ReadTool, ToolRegistry, WorkspaceFs,
+    WriteTool,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -62,7 +43,10 @@ If you use a tool, briefly explain what you're doing.\
 
 #[tokio::main]
 async fn main() {
-    // ── Load environment ─────────────────────────────────────────
+    // ── Mode selection ──────────────────────────────────────────────
+    let use_tui = !std::env::args().any(|a| a == "--no-tui");
+
+    // ── Load environment ────────────────────────────────────────────
     dotenvy::dotenv().ok();
     let api_key = std::env::var("DEEPSEEK_API").unwrap_or_else(|_| {
         eprintln!("ERROR: DEEPSEEK_API not set.");
@@ -70,7 +54,7 @@ async fn main() {
         std::process::exit(1);
     });
 
-    // ── Workspace filesystem ─────────────────────────────────────
+    // ── Workspace filesystem ────────────────────────────────────────
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let workspace = match WorkspaceFs::new(&cwd) {
         Ok(ws) => Arc::new(ws),
@@ -80,7 +64,7 @@ async fn main() {
         }
     };
 
-    // ── Tool registry ────────────────────────────────────────────
+    // ── Tool registry ───────────────────────────────────────────────
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(CalculatorTool));
     registry.register(Arc::new(ReadTool::new(workspace.clone())));
@@ -89,35 +73,60 @@ async fn main() {
     registry.register(Arc::new(GrepTool::new(workspace.clone())));
     registry.register(Arc::new(LsTool::new(workspace.clone())));
 
-    // ── Agent ────────────────────────────────────────────────────
+    // ── Collect tool names for the TUI /stats command ───────────────
+    let tool_names: Vec<String> = registry
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+
+    let registry = Arc::new(registry);
+
+    // ── Agent ───────────────────────────────────────────────────────
     let model = std::env::var("AGENT_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     let client = DeepSeekClient::new(&api_key);
     let memory = Arc::new(std::sync::RwLock::new(Memory::new()));
-    let agent = Agent::new(client, memory.clone(), Arc::new(registry))
+    let agent = Agent::new(client, memory.clone(), registry)
         .with_model(&model)
         .with_max_steps(MAX_STEPS);
 
-    // ── Seed system prompt ───────────────────────────────────────
+    // ── Seed system prompt ──────────────────────────────────────────
     {
         let mut mem = memory.write().unwrap();
         mem.push(Message::new(Role::System, SYSTEM_PROMPT));
     }
 
-    // ── Welcome ──────────────────────────────────────────────────
-    print_welcome(&model, &cwd, &agent);
+    // ── Dispatch ────────────────────────────────────────────────────
+    if use_tui {
+        match agent_oxide::tui::run(agent, memory, tool_names, &model) {
+            Ok(()) => {}
+            Err(e) => eprintln!("TUI error: {e}"),
+        }
+    } else {
+        run_cli(agent, memory, &model, &cwd).await;
+    }
+}
 
-    // ── Interactive loop ─────────────────────────────────────────
+// ── Legacy CLI ─────────────────────────────────────────────────────────────────
+
+/// Legacy line-based REPL. Pass `--no-tui` to reach this path.
+async fn run_cli(
+    agent: Agent,
+    memory: Arc<std::sync::RwLock<Memory>>,
+    model: &str,
+    cwd: &std::path::Path,
+) {
+    print_welcome(model, cwd, &agent);
+
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
     loop {
-        // Prompt
         print!("\n> ");
         stdout.flush().unwrap();
 
         let mut input = String::new();
         match stdin.lock().read_line(&mut input) {
-            Ok(0) => break, // EOF (Ctrl+D / Ctrl+Z)
+            Ok(0) => break,
             Ok(_) => {}
             Err(e) => {
                 eprintln!("Read error: {e}");
@@ -130,105 +139,40 @@ async fn main() {
             continue;
         }
 
-        // ── Handle special commands ───────────────────────────────
-        if handle_command(&input, &memory).await {
+        if handle_cli_command(&input, &memory).await {
             continue;
         }
 
-        // ── Push user message ─────────────────────────────────────
         {
             let mut mem = memory.write().unwrap();
             mem.push(Message::new(Role::User, &input));
         }
 
-        // ── Run agent with real-time event display ────────────────
         print!("🤖 ");
         stdout.flush().unwrap();
 
-        // Create a channel for streaming events from the agent.
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Spawn a render task that consumes events as they arrive.
-        // This runs concurrently with the agent loop — tokens appear
-        // on screen while the model is still generating.
         let printer = tokio::spawn(async move {
             render_events(&mut rx).await;
         });
 
-        // `tx` is moved into run_with_events and dropped when it
-        // returns, which causes rx.recv().await to return None,
-        // signalling the printer task to exit.
         match agent.run_with_events(tx).await {
-            Ok(_response) => {
-                // Tokens were already printed by render_events.
-            }
+            Ok(_response) => {}
             Err(e) => {
                 println!("\n  ✗ {e}");
             }
         }
 
-        // Wait for the printer task to finish consuming events.
         printer.await.unwrap();
     }
 
     println!("\nGoodbye!");
 }
 
-// ── Event Rendering ───────────────────────────────────────────────────────────
+// ── Legacy Helpers ─────────────────────────────────────────────────────────────
 
-/// Consumes [`AgentEvent`]s from the channel and renders them to stdout.
-///
-/// Runs in a dedicated tokio task so token display is concurrent with
-/// network I/O — the user sees output as it arrives.
-async fn render_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>) {
-    let mut stdout = io::stdout();
-    let mut tool_mode = false; // true while we're between tool calls
-
-    while let Some(event) = rx.recv().await {
-        match event {
-            AgentEvent::Token(text) => {
-                if tool_mode {
-                    // First text token after tool results — add spacing
-                    println!();
-                    tool_mode = false;
-                }
-                print!("{text}");
-            }
-
-            AgentEvent::ReasoningToken(_text) => {
-                // Chain-of-thought is verbose. Uncomment the next line
-                // to see the model's internal reasoning:
-                // print!("\x1b[2m{_text}\x1b[0m");
-            }
-
-            AgentEvent::ToolCallStart { name, .. } => {
-                print!("\n  🔧 {name} ");
-                tool_mode = true;
-            }
-
-            AgentEvent::ToolCallArgsDelta { .. } => {
-                // JSON arguments are not user-friendly to display.
-                // The accumulator reassembles them for execution.
-            }
-
-            AgentEvent::ToolResult { name, output, .. } => {
-                let preview = truncate_for_display(&output, 150);
-                println!("\n  ✓ {name} → {preview}");
-            }
-
-            AgentEvent::Done => {
-                println!();
-            }
-        }
-
-        // Critical: flush after every event so tokens appear immediately.
-        stdout.flush().unwrap();
-    }
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-/// Prints the welcome banner.
+/// Prints the welcome banner for CLI mode.
 fn print_welcome(model: &str, cwd: &std::path::Path, agent: &Agent) {
     let streaming_label = if agent.streaming() {
         "streaming"
@@ -250,8 +194,8 @@ fn print_welcome(model: &str, cwd: &std::path::Path, agent: &Agent) {
     println!("╚══════════════════════════════════════════════╝");
 }
 
-/// Handles slash commands. Returns `true` if the input was a command.
-async fn handle_command(
+/// Handles slash commands in CLI mode. Returns `true` if the input was a command.
+async fn handle_cli_command(
     input: &str,
     memory: &std::sync::Arc<std::sync::RwLock<Memory>>,
 ) -> bool {
@@ -262,7 +206,6 @@ async fn handle_command(
         }
         "/clear" => {
             let mut mem = memory.write().unwrap();
-            // Preserve only System messages
             let system_msgs: Vec<Message> = mem
                 .to_context_vec()
                 .into_iter()
@@ -298,8 +241,48 @@ async fn handle_command(
     false
 }
 
-/// Truncates `text` to `max_len` characters for compact display.
-/// Newlines are replaced with spaces to keep output on one line.
+/// Consumes [`AgentEvent`]s from the channel and renders them to stdout.
+async fn render_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>) {
+    let mut stdout = io::stdout();
+    let mut tool_mode = false;
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            AgentEvent::Token(text) => {
+                if tool_mode {
+                    println!();
+                    tool_mode = false;
+                }
+                print!("{text}");
+            }
+
+            AgentEvent::ReasoningToken(_text) => {
+                // Chain-of-thought is verbose — suppressed by default.
+                // Uncomment to see the model's internal reasoning:
+                // print!("\x1b[2m{_text}\x1b[0m");
+            }
+
+            AgentEvent::ToolCallStart { name, .. } => {
+                print!("\n  🔧 {name} ");
+                tool_mode = true;
+            }
+
+            AgentEvent::ToolCallArgsDelta { .. } => {}
+
+            AgentEvent::ToolResult { name, output, .. } => {
+                let preview = truncate_for_display(&output, 150);
+                println!("\n  ✓ {name} → {preview}");
+            }
+
+            AgentEvent::Done => {
+                println!();
+            }
+        }
+
+        stdout.flush().unwrap();
+    }
+}
+
 fn truncate_for_display(text: &str, max_len: usize) -> String {
     let text = text.replace('\n', " ");
     if text.len() <= max_len {
@@ -308,7 +291,6 @@ fn truncate_for_display(text: &str, max_len: usize) -> String {
     format!("{}...", &text[..max_len])
 }
 
-/// Truncates a path to fit within `max_len` characters, keeping the tail.
 fn truncate_path(path: &std::path::Path, max_len: usize) -> String {
     let s = path.display().to_string();
     if s.len() <= max_len {

@@ -12,3 +12,4 @@
 pub mod core;
 pub mod memory;
 pub mod tools;
+pub mod tui;
