@@ -6,7 +6,7 @@
 use serde_json::Value;
 
 use super::fs::WorkspaceFs;
-use super::tool::{extract_string_arg, Tool};
+use super::tool::{Tool, extract_string_arg};
 use super::{FsError, ToolError};
 
 /// 读取文件内容的工具。
@@ -67,15 +67,9 @@ impl Tool for ReadTool {
         let v: Value = serde_json::from_str(args)
             .map_err(|e| ToolError::InvalidArgs(format!("invalid JSON: {e}")))?;
 
-        let offset = v
-            .get("offset")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize);
+        let offset = v.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
 
-        let limit = v
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize);
+        let limit = v.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
 
         self.fs.read(&file_path, offset, limit).map_err(map_fs_err)
     }
@@ -130,7 +124,12 @@ mod tests {
         let (_dir, tool) = setup();
         let params = tool.parameters();
         assert_eq!(params["type"], "object");
-        assert!(params["required"].as_array().unwrap().contains(&serde_json::json!("file_path")));
+        assert!(
+            params["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("file_path"))
+        );
     }
 
     #[test]
@@ -138,9 +137,7 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "test.txt", "hello\nworld\n");
 
-        let result = tool
-            .execute(r#"{"file_path": "test.txt"}"#)
-            .unwrap();
+        let result = tool.execute(r#"{"file_path": "test.txt"}"#).unwrap();
         assert!(result.contains("hello"));
         assert!(result.contains("world"));
     }
@@ -162,9 +159,7 @@ mod tests {
     #[test]
     fn test_read_not_found() {
         let (_dir, tool) = setup();
-        let err = tool
-            .execute(r#"{"file_path": "nope.txt"}"#)
-            .unwrap_err();
+        let err = tool.execute(r#"{"file_path": "nope.txt"}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 

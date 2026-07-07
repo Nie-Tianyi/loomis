@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use super::fs::WorkspaceFs;
-use super::tool::{extract_string_arg, Tool};
+use super::tool::{Tool, extract_string_arg};
 use super::{FsError, ToolError};
 
 /// 使用 glob 模式查找文件的工具。

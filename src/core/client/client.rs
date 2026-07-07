@@ -17,8 +17,7 @@ pub struct DeepSeekClient {
 
 impl DeepSeekClient {
     pub fn new(api_key: impl Into<String>) -> Self {
-        let base_url = std::env::var("BASE_URL")
-            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned());
+        let base_url = std::env::var("BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned());
         Self {
             api_key: api_key.into(),
             base_url,

@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyEventKind};
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -77,8 +77,7 @@ pub fn run(
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ =
-            crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+        let _ = crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen);
         prev_hook(info);
     }));
 
@@ -127,8 +126,7 @@ fn run_event_loop(
         if crossterm::event::poll(Duration::from_millis(50))? {
             match crossterm::event::read()? {
                 Event::Key(key)
-                    if key.kind == KeyEventKind::Press
-                        || key.kind == KeyEventKind::Repeat =>
+                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
                 {
                     if let Some(cmd) = app.handle_key(key) {
                         match cmd {
@@ -216,9 +214,7 @@ async fn agent_handler(
                             // Agent sends Done internally on success.
                         }
                         Err(e) => {
-                            let _ = tx.send(AgentEvent::Token(format!(
-                                "\n✗ Error: {e}\n"
-                            )));
+                            let _ = tx.send(AgentEvent::Token(format!("\n✗ Error: {e}\n")));
                             let _ = tx.send(AgentEvent::Done);
                         }
                     }
@@ -232,9 +228,7 @@ async fn agent_handler(
                     h.abort();
                 }
                 // Send cancellation notice to the TUI.
-                let _ = agent_tx.send(AgentEvent::Token(
-                    "\n[Cancelled]\n".to_string(),
-                ));
+                let _ = agent_tx.send(AgentEvent::Token("\n[Cancelled]\n".to_string()));
                 let _ = agent_tx.send(AgentEvent::Done);
             }
 

@@ -14,8 +14,8 @@
 
 use serde_json::Value;
 
-use super::tool::{extract_string_arg, Tool};
 use super::ToolError;
+use super::tool::{Tool, extract_string_arg};
 
 /// 将输入文本原样返回的工具。
 ///

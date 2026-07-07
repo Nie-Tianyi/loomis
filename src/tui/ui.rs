@@ -3,11 +3,11 @@
 //! All ratatui drawing for the three-panel layout: chat area, input area,
 //! and status bar.
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use ratatui::Frame;
 
 use super::app::{App, ChatMessage, ToolCallState};
 
@@ -24,9 +24,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.rebuild_line_counts(area.width);
 
     let layout = Layout::vertical([
-        Constraint::Fill(1),      // chat
-        Constraint::Length(3),    // input
-        Constraint::Length(1),    // status bar
+        Constraint::Fill(1),   // chat
+        Constraint::Length(3), // input
+        Constraint::Length(1), // status bar
     ])
     .split(area);
 
@@ -35,10 +35,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_status(frame, layout[2], app);
 
     // Place the hardware cursor inside the input area.
-    frame.set_cursor_position((
-        layout[1].x + 2 + app.cursor_column(),
-        layout[1].y + 1,
-    ));
+    frame.set_cursor_position((layout[1].x + 2 + app.cursor_column(), layout[1].y + 1));
 }
 
 // ── Chat Area ────────────────────────────────────────────────────────────────────
@@ -112,10 +109,7 @@ fn message_to_lines(msg: &ChatMessage, area_width: u16) -> Vec<Line<'_>> {
             .collect(),
 
         ChatMessage::ToolCall {
-            name,
-            args,
-            state,
-            ..
+            name, args, state, ..
         } => {
             let mut lines = Vec::new();
 
@@ -148,10 +142,7 @@ fn message_to_lines(msg: &ChatMessage, area_width: u16) -> Vec<Line<'_>> {
                 ToolCallState::Complete(output) => {
                     lines.push(Line::from(vec![
                         Span::raw("  "),
-                        Span::styled(
-                            "✓ ",
-                            Style::default().fg(Color::Green),
-                        ),
+                        Span::styled("✓ ", Style::default().fg(Color::Green)),
                         Span::styled(
                             name.as_str(),
                             Style::default()
@@ -190,9 +181,7 @@ fn message_to_lines(msg: &ChatMessage, area_width: u16) -> Vec<Line<'_>> {
             .map(|line| {
                 Line::from(Span::styled(
                     line.to_string(),
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ))
             })
             .collect(),
@@ -246,13 +235,9 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
 
     // Build the input line with cursor highlighting
     let cursor_style = if app.streaming {
-        Style::default()
-            .bg(Color::DarkGray)
-            .fg(Color::White)
+        Style::default().bg(Color::DarkGray).fg(Color::White)
     } else {
-        Style::default()
-            .bg(Color::White)
-            .fg(Color::Black)
+        Style::default().bg(Color::White).fg(Color::Black)
     };
 
     let display_line = build_input_line(app, cursor_style);
@@ -263,7 +248,9 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
             Line::from(Span::raw("")),
             Line::from(Span::styled(
                 " Type a message and press Enter. /help for commands.",
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
             )),
         ];
         let p = Paragraph::new(hint).block(block);
@@ -274,7 +261,9 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
             display_line,
             Line::from(Span::styled(
                 " Generating… press Esc to cancel.",
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
             )),
         ]
     } else {
@@ -306,10 +295,7 @@ fn build_input_line(app: &App, cursor_style: Style) -> Line<'_> {
 
     // Cursor character
     if cursor < input.len() {
-        let ch = input[cursor..]
-            .chars()
-            .next()
-            .unwrap_or(' ');
+        let ch = input[cursor..].chars().next().unwrap_or(' ');
         spans.push(Span::styled(ch.to_string(), cursor_style));
         // After cursor
         let after_start = cursor + ch.len_utf8();
@@ -342,18 +328,12 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let line = Line::from(vec![
-        Span::styled(
-            left,
-            Style::default().fg(Color::Black).bg(Color::Cyan),
-        ),
+        Span::styled(left, Style::default().fg(Color::Black).bg(Color::Cyan)),
         Span::styled(
             " ".repeat(gap),
             Style::default().fg(Color::Black).bg(Color::Cyan),
         ),
-        Span::styled(
-            right,
-            Style::default().fg(Color::Black).bg(Color::Cyan),
-        ),
+        Span::styled(right, Style::default().fg(Color::Black).bg(Color::Cyan)),
     ]);
 
     let paragraph = Paragraph::new(line);
@@ -428,7 +408,9 @@ fn estimate_lines(msg: &ChatMessage, width: u16) -> usize {
         }
         ChatMessage::Assistant { content } => content.clone(),
         ChatMessage::Reasoning { content } => content.clone(),
-        ChatMessage::ToolCall { name, args, state, .. } => match state {
+        ChatMessage::ToolCall {
+            name, args, state, ..
+        } => match state {
             ToolCallState::Running => format!("  🔧 {name} {args}"),
             ToolCallState::Complete(output) => {
                 format!("  ✓ {name} → {output}")

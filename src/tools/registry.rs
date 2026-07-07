@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use crate::core::client::ToolDef;
 
-use super::tool::Tool;
 use super::ToolError;
+use super::tool::Tool;
 
 /// 具名工具的注册表。线程安全（内部使用 `Arc<dyn Tool>`）。
 ///

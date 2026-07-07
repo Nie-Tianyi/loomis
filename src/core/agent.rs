@@ -127,10 +127,9 @@ impl fmt::Display for AgentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DeepSeek(e) => write!(f, "DeepSeek error: {e}"),
-            Self::MaxStepsReached(n) => write!(
-                f,
-                "max steps ({n}) reached without a final text response"
-            ),
+            Self::MaxStepsReached(n) => {
+                write!(f, "max steps ({n}) reached without a final text response")
+            }
             Self::NoChoices => write!(f, "response contained no choices"),
             Self::NoOutput => write!(f, "response had neither content nor tool calls"),
             Self::Memory(msg) => write!(f, "memory error: {msg}"),
@@ -188,7 +187,11 @@ pub enum AgentEvent {
     /// Concatenate these across chunks to get the full arguments string.
     ToolCallArgsDelta { id: String, delta: String },
     /// A tool call completed execution. `output` is the tool's return value.
-    ToolResult { id: String, name: String, output: String },
+    ToolResult {
+        id: String,
+        name: String,
+        output: String,
+    },
     /// The agent loop completed — the model produced a final text response.
     /// The final content is returned by [`Agent::run_with_events`].
     Done,
@@ -372,16 +375,12 @@ impl Agent {
     /// | `max_retries` | `3` | Retry attempts for transient failures |
     /// | `streaming` | `true` | Use SSE streaming by default |
     /// | `compact_model` | `None` (off) | Auto-compaction disabled |
-    pub fn new(
-        client: DeepSeekClient,
-        memory: SharedMemory,
-        registry: Arc<ToolRegistry>,
-    ) -> Self {
+    pub fn new(client: DeepSeekClient, memory: SharedMemory, registry: Arc<ToolRegistry>) -> Self {
         Self {
             client,
             memory,
             registry,
-            model: "deepseek-chat".to_string(),
+            model: "deepseek-v4-flash".to_string(),
             max_steps: 10,
             max_retries: 3,
             streaming: true,
@@ -715,10 +714,7 @@ impl Agent {
             // ── Call LLM ─────────────────────────────────────────
             let response = self.send_with_retry(request).await?;
 
-            let choice = response
-                .choices
-                .first()
-                .ok_or(AgentError::NoChoices)?;
+            let choice = response.choices.first().ok_or(AgentError::NoChoices)?;
 
             // ── Tool calls? ──────────────────────────────────────
             if let Some(tool_calls) = &choice.message.tool_calls
@@ -1186,10 +1182,7 @@ mod tests {
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].id, "call_abc");
         assert_eq!(tool_calls[0].function.name, "calculator");
-        assert_eq!(
-            tool_calls[0].function.arguments,
-            r#"{"expression":"2+2"}"#
-        );
+        assert_eq!(tool_calls[0].function.arguments, r#"{"expression":"2+2"}"#);
     }
 
     #[test]
@@ -1314,7 +1307,10 @@ mod tests {
     fn test_is_retryable_client_errors() {
         for status in [400, 401, 404, 429] {
             assert!(
-                !is_retryable(&DeepSeekError::Api { status, body: "".into() }),
+                !is_retryable(&DeepSeekError::Api {
+                    status,
+                    body: "".into()
+                }),
                 "status {status} should NOT be retryable"
             );
         }

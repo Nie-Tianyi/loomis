@@ -28,8 +28,8 @@
 
 use serde_json::Value;
 
-use super::tool::{extract_string_arg, Tool};
 use super::ToolError;
+use super::tool::{Tool, extract_string_arg};
 
 // ── CalculatorTool ────────────────────────────────────────────────────────────
 
@@ -77,10 +77,7 @@ impl Tool for CalculatorTool {
         let expression = extract_string_arg(args, "expression")?;
 
         let result = ExprEvaluator::evaluate(&expression).map_err(|e| {
-            ToolError::Execution(format!(
-                "at position {}: {e}",
-                e.position.unwrap_or(0)
-            ))
+            ToolError::Execution(format!("at position {}: {e}", e.position.unwrap_or(0)))
         })?;
 
         // 整数结果去掉尾随 ".0"
@@ -387,7 +384,11 @@ mod tests {
 
     #[test]
     fn test_description() {
-        assert!(CalculatorTool.description().contains("mathematical expression"));
+        assert!(
+            CalculatorTool
+                .description()
+                .contains("mathematical expression")
+        );
     }
 
     #[test]
@@ -395,10 +396,12 @@ mod tests {
         let params = CalculatorTool.parameters();
         assert_eq!(params["type"], "object");
         assert!(params["properties"]["expression"]["type"] == "string");
-        assert!(params["required"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::json!("expression")));
+        assert!(
+            params["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("expression"))
+        );
     }
 
     #[test]
@@ -458,7 +461,9 @@ mod tests {
 
     #[test]
     fn test_division_by_zero() {
-        let err = CalculatorTool.execute(r#"{"expression": "1 / 0"}"#).unwrap_err();
+        let err = CalculatorTool
+            .execute(r#"{"expression": "1 / 0"}"#)
+            .unwrap_err();
         assert!(matches!(err, ToolError::Execution(_)));
         assert!(err.to_string().contains("division by zero"));
     }

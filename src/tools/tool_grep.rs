@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use super::fs::WorkspaceFs;
-use super::tool::{extract_string_arg, Tool};
+use super::tool::{Tool, extract_string_arg};
 use super::{FsError, ToolError};
 
 /// 使用正则表达式搜索文件内容的工具。
@@ -124,11 +124,13 @@ mod tests {
     #[test]
     fn test_grep_find_function() {
         let (dir, tool) = setup();
-        write_file(&dir, "a.rs", "fn main() {\n    let x = 1;\n}\nfn test() {}\n");
+        write_file(
+            &dir,
+            "a.rs",
+            "fn main() {\n    let x = 1;\n}\nfn test() {}\n",
+        );
 
-        let result = tool
-            .execute(r#"{"pattern": "fn "}"#)
-            .unwrap();
+        let result = tool.execute(r#"{"pattern": "fn "}"#).unwrap();
         assert!(result.contains("fn main()"));
         assert!(result.contains("fn test()"));
         assert!(!result.contains("let x"));
@@ -152,18 +154,14 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "hello world\n");
 
-        let result = tool
-            .execute(r#"{"pattern": "NOMATCH"}"#)
-            .unwrap();
+        let result = tool.execute(r#"{"pattern": "NOMATCH"}"#).unwrap();
         assert!(result.contains("No matches"));
     }
 
     #[test]
     fn test_grep_invalid_regex() {
         let (_dir, tool) = setup();
-        let err = tool
-            .execute(r#"{"pattern": "[unclosed"}"#)
-            .unwrap_err();
+        let err = tool.execute(r#"{"pattern": "[unclosed"}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
@@ -179,9 +177,7 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "test.rs", "fn hello() {\n    println!();\n}\n");
 
-        let result = tool
-            .execute(r#"{"pattern": "fn"}"#)
-            .unwrap();
+        let result = tool.execute(r#"{"pattern": "fn"}"#).unwrap();
         // 格式: file_path:line_number: line_content
         assert!(result.contains("test.rs:1: fn hello()"));
     }

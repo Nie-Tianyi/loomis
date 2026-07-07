@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use super::fs::WorkspaceFs;
-use super::tool::{extract_string_arg, Tool};
+use super::tool::{Tool, extract_string_arg};
 use super::{FsError, ToolError};
 
 /// 用行号替换文件内容的工具。
@@ -197,7 +197,9 @@ mod tests {
     fn test_nonexistent_file() {
         let (_dir, tool) = setup();
         let err = tool
-            .execute(r#"{"file_path": "nope.txt", "start_line": 1, "end_line": 1, "new_content": "x"}"#)
+            .execute(
+                r#"{"file_path": "nope.txt", "start_line": 1, "end_line": 1, "new_content": "x"}"#,
+            )
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }

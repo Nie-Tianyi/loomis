@@ -31,31 +31,31 @@
 //!
 //! 参考 [`Tool`] trait 的文档中的示例，或查看 [`EchoTool`] 的源码作为最小实现模板。
 
-mod error;
-mod tool;
-mod registry;
 mod calculator;
 mod echo;
+mod error;
+mod registry;
+mod tool;
 
 // File-editing tools
 mod fs;
-mod tool_read;
-mod tool_write;
 mod tool_edit;
 mod tool_glob;
 mod tool_grep;
 mod tool_ls;
+mod tool_read;
+mod tool_write;
 
-pub use error::{FsError, ToolError};
-pub use tool::{extract_string_arg, Tool};
-pub use registry::{tool_to_def, ToolRegistry};
 pub use calculator::CalculatorTool;
 pub use echo::EchoTool;
+pub use error::{FsError, ToolError};
+pub use registry::{ToolRegistry, tool_to_def};
+pub use tool::{Tool, extract_string_arg};
 
 pub use fs::{DirEntry, EntryType, GrepMatch, WorkspaceFs};
-pub use tool_read::ReadTool;
-pub use tool_write::WriteTool;
 pub use tool_edit::EditTool;
 pub use tool_glob::GlobTool;
 pub use tool_grep::GrepTool;
 pub use tool_ls::LsTool;
+pub use tool_read::ReadTool;
+pub use tool_write::WriteTool;

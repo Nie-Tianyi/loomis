@@ -1,405 +1,445 @@
 [
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
                     "role": "assistant",
-                    "content": "",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "content": ""
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "北京",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_00_O5jbxVRsSr8FlWEnaTzu1593",
+                            "type": "function",
+                            "function": {
+                                "name": "calculator",
+                                "arguments": ""
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "是",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": "{"
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "中国的",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": "\""
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "首都",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": "expression"
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "，",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": "\""
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "是一座",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": ": "
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 8: arguments 增量 - '\"' ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "融合",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": "\""
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 9: arguments 增量 - '123' ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "了",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": "123"
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 10: arguments 增量 - ' *' ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "悠久",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": " *"
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 11: arguments 增量 - ' ' ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "历史",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": " "
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 12: arguments 增量 - '456' ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "文化和",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": "456"
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 13: arguments 增量 - ' +' ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "现代",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": " +"
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 14: arguments 增量 - ' ' ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "国际",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": " "
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 15: arguments 增量 - '789' ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "气息",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": "789"
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 16: arguments 增量 - '\"' ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "的",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": "\""
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 17: arguments 增量 - '}' ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "繁华",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": "}"
+                            }
+                        }
+                    ]
                 },
+                "logprobs": null,
                 "finish_reason": null
             }
-        ],
-        "usage": null
+        ]
     },
     {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
+        "_comment": "========== Chunk 18 (最终): finish_reason = \"tool_calls\" + usage ==========",
+        "id": "d25f3bbe-20c5-40ed-ac63-57536dd9daca",
         "object": "chat.completion.chunk",
-        "created": 1782030672,
+        "created": 1783406072,
         "model": "deepseek-v4-flash",
+        "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402",
         "choices": [
             {
                 "index": 0,
                 "delta": {
-                    "role": null,
-                    "content": "大",
-                    "reasoning_content": null,
-                    "tool_calls": null
+                    "content": ""
                 },
-                "finish_reason": null
-            }
-        ],
-        "usage": null
-    },
-    {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
-        "object": "chat.completion.chunk",
-        "created": 1782030672,
-        "model": "deepseek-v4-flash",
-        "choices": [
-            {
-                "index": 0,
-                "delta": {
-                    "role": null,
-                    "content": "都市",
-                    "reasoning_content": null,
-                    "tool_calls": null
-                },
-                "finish_reason": null
-            }
-        ],
-        "usage": null
-    },
-    {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
-        "object": "chat.completion.chunk",
-        "created": 1782030672,
-        "model": "deepseek-v4-flash",
-        "choices": [
-            {
-                "index": 0,
-                "delta": {
-                    "role": null,
-                    "content": "。",
-                    "reasoning_content": null,
-                    "tool_calls": null
-                },
-                "finish_reason": null
-            }
-        ],
-        "usage": null
-    },
-    {
-        "id": "32f7e4c3-06a9-468a-bfaa-09802822fda0",
-        "object": "chat.completion.chunk",
-        "created": 1782030672,
-        "model": "deepseek-v4-flash",
-        "choices": [
-            {
-                "index": 0,
-                "delta": {
-                    "role": null,
-                    "content": "",
-                    "reasoning_content": null,
-                    "tool_calls": null
-                },
-                "finish_reason": "stop"
+                "logprobs": null,
+                "finish_reason": "tool_calls"
             }
         ],
         "usage": {
-            "prompt_tokens": 13,
-            "completion_tokens": 19,
-            "total_tokens": 32
+            "prompt_tokens": 297,
+            "completion_tokens": 48,
+            "total_tokens": 345,
+            "prompt_tokens_details": {
+                "cached_tokens": 0
+            },
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 297
         }
     }
 ]

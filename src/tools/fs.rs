@@ -48,9 +48,7 @@ impl WorkspaceFs {
             return Err(FsError::NotADirectory(root.display().to_string()));
         }
 
-        let workspace_root = root
-            .canonicalize()
-            .map_err(FsError::Io)?;
+        let workspace_root = root.canonicalize().map_err(FsError::Io)?;
 
         Ok(Self { workspace_root })
     }
@@ -88,9 +86,10 @@ impl WorkspaceFs {
 
         // 边界检查：规范化路径必须以 workspace_root 开头
         if !normalized.starts_with(&self.workspace_root) {
-            return Err(FsError::PathEscapesWorkspace(
-                format!("'{}' resolves outside workspace", path)
-            ));
+            return Err(FsError::PathEscapesWorkspace(format!(
+                "'{}' resolves outside workspace",
+                path
+            )));
         }
 
         Ok(normalized)
@@ -277,11 +276,7 @@ impl WorkspaceFs {
     ///
     /// - `pattern`: 正则表达式
     /// - `path_glob`: 可选的文件过滤 glob。默认搜索所有文件。
-    pub fn grep(
-        &self,
-        pattern: &str,
-        path_glob: Option<&str>,
-    ) -> Result<Vec<GrepMatch>, FsError> {
+    pub fn grep(&self, pattern: &str, path_glob: Option<&str>) -> Result<Vec<GrepMatch>, FsError> {
         let re = regex::Regex::new(pattern).map_err(FsError::from)?;
         let glob_pattern = path_glob.unwrap_or("**/*");
         let files = self.glob(glob_pattern)?;
@@ -333,7 +328,11 @@ impl WorkspaceFs {
                 EntryType::File
             };
             let size = metadata.len();
-            entries.push(DirEntry { name, entry_type, size });
+            entries.push(DirEntry {
+                name,
+                entry_type,
+                size,
+            });
         }
 
         // 按名称排序，目录优先
@@ -471,7 +470,8 @@ mod tests {
     #[test]
     fn test_read_with_offset() {
         let (_dir, fs) = setup_fs();
-        fs.write("test.txt", "line1\nline2\nline3\nline4\n").unwrap();
+        fs.write("test.txt", "line1\nline2\nline3\nline4\n")
+            .unwrap();
 
         let result = fs.read("test.txt", Some(2), None).unwrap();
         assert!(!result.contains("line1"));
@@ -481,7 +481,8 @@ mod tests {
     #[test]
     fn test_read_with_limit() {
         let (_dir, fs) = setup_fs();
-        fs.write("test.txt", "line1\nline2\nline3\nline4\n").unwrap();
+        fs.write("test.txt", "line1\nline2\nline3\nline4\n")
+            .unwrap();
 
         let result = fs.read("test.txt", None, Some(2)).unwrap();
         assert!(result.contains("line1"));
@@ -492,7 +493,8 @@ mod tests {
     #[test]
     fn test_read_with_offset_and_limit() {
         let (_dir, fs) = setup_fs();
-        fs.write("test.txt", "line1\nline2\nline3\nline4\n").unwrap();
+        fs.write("test.txt", "line1\nline2\nline3\nline4\n")
+            .unwrap();
 
         let result = fs.read("test.txt", Some(2), Some(2)).unwrap();
         assert!(!result.contains("line1"));
@@ -555,8 +557,7 @@ mod tests {
     fn test_write_creates_parent_dirs() {
         let (_dir, fs) = setup_fs();
         fs.write("a/b/c/file.txt", "nested").unwrap();
-        let content =
-            fs::read_to_string(_dir.path().join("a/b/c/file.txt")).unwrap();
+        let content = fs::read_to_string(_dir.path().join("a/b/c/file.txt")).unwrap();
         assert_eq!(content, "nested");
     }
 
@@ -650,7 +651,8 @@ mod tests {
     #[test]
     fn test_grep_basic() {
         let (_dir, fs) = setup_fs();
-        fs.write("a.rs", "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+        fs.write("a.rs", "fn main() {\n    println!(\"hello\");\n}\n")
+            .unwrap();
         fs.write("b.rs", "fn test() {}\n").unwrap();
 
         let results = fs.grep("fn", None).unwrap();

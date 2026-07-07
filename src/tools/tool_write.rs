@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use super::fs::WorkspaceFs;
-use super::tool::{extract_string_arg, Tool};
+use super::tool::{Tool, extract_string_arg};
 use super::{FsError, ToolError};
 
 /// 写入文件内容的工具。
@@ -60,11 +60,7 @@ impl Tool for WriteTool {
 
         self.fs.write(&file_path, &content).map_err(map_fs_err)?;
 
-        Ok(format!(
-            "Wrote {} bytes to {}",
-            content.len(),
-            file_path
-        ))
+        Ok(format!("Wrote {} bytes to {}", content.len(), file_path))
     }
 }
 
@@ -131,10 +127,8 @@ mod tests {
     #[test]
     fn test_write_nested_path() {
         let (dir, tool) = setup();
-        tool.execute(
-            r#"{"file_path": "a/b/c/file.txt", "content": "deep"}"#,
-        )
-        .unwrap();
+        tool.execute(r#"{"file_path": "a/b/c/file.txt", "content": "deep"}"#)
+            .unwrap();
         assert_eq!(read_file(&dir, "a/b/c/file.txt"), "deep");
     }
 
@@ -149,9 +143,7 @@ mod tests {
     #[test]
     fn test_missing_file_path() {
         let (_dir, tool) = setup();
-        let err = tool
-            .execute(r#"{"content": "stuff"}"#)
-            .unwrap_err();
+        let err = tool.execute(r#"{"content": "stuff"}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 }

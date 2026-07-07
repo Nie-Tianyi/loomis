@@ -17,17 +17,11 @@ use crate::memory::SharedMemory;
 #[derive(Debug, Clone)]
 pub enum ChatMessage {
     /// User input — cyan, bold, `>` prefix.
-    User {
-        content: String,
-    },
+    User { content: String },
     /// Model text output — white, no prefix. Streamed token-by-token.
-    Assistant {
-        content: String,
-    },
+    Assistant { content: String },
     /// Chain-of-thought reasoning — yellow, dimmed.
-    Reasoning {
-        content: String,
-    },
+    Reasoning { content: String },
     /// A tool call, either in-progress or completed.
     ToolCall {
         id: String,
@@ -36,13 +30,9 @@ pub enum ChatMessage {
         state: ToolCallState,
     },
     /// System-level message (slash commands, info).
-    System {
-        content: String,
-    },
+    System { content: String },
     /// Error display — red, bold.
-    Error {
-        content: String,
-    },
+    Error { content: String },
 }
 
 #[derive(Debug, Clone)]
@@ -114,17 +104,11 @@ pub struct App {
 
 impl App {
     /// Creates a fresh app with a welcome system message.
-    pub fn new(
-        model: impl Into<String>,
-        memory: SharedMemory,
-        tool_names: Vec<String>,
-    ) -> Self {
+    pub fn new(model: impl Into<String>, memory: SharedMemory, tool_names: Vec<String>) -> Self {
         let model = model.into();
         Self {
             messages: vec![ChatMessage::System {
-                content: format!(
-                    "Agent Oxide — Model: {model} | /help for commands",
-                ),
+                content: format!("Agent Oxide — Model: {model} | /help for commands",),
             }],
             line_counts: vec![1],
             input: String::new(),
@@ -152,29 +136,23 @@ impl App {
     /// events faster than the render frame rate, so the display stays current.
     pub fn apply_event(&mut self, event: AgentEvent) {
         match event {
-            AgentEvent::Token(text) => {
-                match self.messages.last_mut() {
-                    Some(ChatMessage::Assistant { content }) => {
-                        content.push_str(&text);
-                    }
-                    _ => {
-                        self.messages
-                            .push(ChatMessage::Assistant { content: text });
-                    }
+            AgentEvent::Token(text) => match self.messages.last_mut() {
+                Some(ChatMessage::Assistant { content }) => {
+                    content.push_str(&text);
                 }
-            }
+                _ => {
+                    self.messages.push(ChatMessage::Assistant { content: text });
+                }
+            },
 
-            AgentEvent::ReasoningToken(text) => {
-                match self.messages.last_mut() {
-                    Some(ChatMessage::Reasoning { content }) => {
-                        content.push_str(&text);
-                    }
-                    _ => {
-                        self.messages
-                            .push(ChatMessage::Reasoning { content: text });
-                    }
+            AgentEvent::ReasoningToken(text) => match self.messages.last_mut() {
+                Some(ChatMessage::Reasoning { content }) => {
+                    content.push_str(&text);
                 }
-            }
+                _ => {
+                    self.messages.push(ChatMessage::Reasoning { content: text });
+                }
+            },
 
             AgentEvent::ToolCallStart { id, name } => {
                 self.messages.push(ChatMessage::ToolCall {
@@ -187,9 +165,7 @@ impl App {
 
             AgentEvent::ToolCallArgsDelta { id, delta } => {
                 for msg in self.messages.iter_mut().rev() {
-                    if let ChatMessage::ToolCall {
-                        id: mid, args, ..
-                    } = msg
+                    if let ChatMessage::ToolCall { id: mid, args, .. } = msg
                         && *mid == id
                     {
                         args.push_str(&delta);
@@ -200,9 +176,7 @@ impl App {
 
             AgentEvent::ToolResult { id, output, .. } => {
                 for msg in self.messages.iter_mut().rev() {
-                    if let ChatMessage::ToolCall {
-                        id: mid, state, ..
-                    } = msg
+                    if let ChatMessage::ToolCall { id: mid, state, .. } = msg
                         && *mid == id
                     {
                         *state = ToolCallState::Complete(output);
@@ -261,8 +235,9 @@ impl App {
                 }
 
                 // Normal user message
-                self.messages
-                    .push(ChatMessage::User { content: input.clone() });
+                self.messages.push(ChatMessage::User {
+                    content: input.clone(),
+                });
                 self.input.clear();
                 self.input_cursor = 0;
                 self.auto_scroll = true;
@@ -282,9 +257,7 @@ impl App {
                 Some(TuiCommand::Exit)
             }
 
-            KeyCode::Char('d')
-                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.input.is_empty() && !self.streaming {
                     self.should_quit = true;
                     return Some(TuiCommand::Exit);
@@ -523,8 +496,7 @@ mod tests {
     use super::*;
 
     fn make_app() -> App {
-        let memory =
-            std::sync::Arc::new(std::sync::RwLock::new(crate::memory::Memory::new()));
+        let memory = std::sync::Arc::new(std::sync::RwLock::new(crate::memory::Memory::new()));
         App::new("test-model", memory, vec!["echo".into(), "ls".into()])
     }
 
@@ -620,7 +592,12 @@ mod tests {
 
         assert_eq!(app.messages.len(), 1);
         match &app.messages[0] {
-            ChatMessage::ToolCall { id, name, args, state } => {
+            ChatMessage::ToolCall {
+                id,
+                name,
+                args,
+                state,
+            } => {
                 assert_eq!(id, "abc");
                 assert_eq!(name, "ls");
                 assert_eq!(args, r#"{"path":"."}"#);

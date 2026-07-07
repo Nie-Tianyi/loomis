@@ -20,8 +20,7 @@ use agent_oxide::core::agent::{Agent, AgentEvent};
 use agent_oxide::core::client::{DeepSeekClient, Message, Role};
 use agent_oxide::memory::Memory;
 use agent_oxide::tools::{
-    CalculatorTool, GlobTool, GrepTool, LsTool, ReadTool, ToolRegistry, WorkspaceFs,
-    WriteTool,
+    CalculatorTool, GlobTool, GrepTool, LsTool, ReadTool, ToolRegistry, WorkspaceFs, WriteTool,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -101,15 +100,12 @@ async fn main() {
     registry.register(Arc::new(LsTool::new(workspace.clone())));
 
     // ── Collect tool names for the TUI /stats command ───────────────
-    let tool_names: Vec<String> = registry
-        .iter()
-        .map(|(name, _)| name.to_string())
-        .collect();
+    let tool_names: Vec<String> = registry.iter().map(|(name, _)| name.to_string()).collect();
 
     let registry = Arc::new(registry);
 
     // ── Agent ───────────────────────────────────────────────────────
-    let model = std::env::var("AGENT_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+    let model = std::env::var("DEFAULT_PRO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     let client = DeepSeekClient::new(&api_key);
     let memory = Arc::new(std::sync::RwLock::new(Memory::new()));
     let agent = Agent::new(client, memory.clone(), registry)
