@@ -1,101 +1,144 @@
-# 从零构建 Agent 框架 (Rust版)：架构蓝图与开发指南
-使用 Rust 构建 Agent，我们将充分享受强类型带来的安全感。利用 serde 处理 JSON，利用 Trait 抽象大模型和工具，可以让整个主控循环异常坚固。
+# Agent Oxide
 
-我们将整个项目分为三个阶段（MVP -> 进阶 -> 生产级），并以一个具体的实战项目为目标。
-## 实战项目建议：自动调研助手 (Auto-Researcher)
-**目标**：你输入一个问题（例如：“对比 2024 年大模型上下文技术的最新进展”），Agent 能够自主思考，调用“搜索引擎”工具查找资料，调用“网页读取”工具提取内容，最后在本地生成一份 Markdown 格式的调研报告。
+一个用 Rust 从零构建的 AI Agent 框架，基于 Tokio 异步运行时，以**自动调研助手 (Auto-Researcher)** 为实战目标——输入一个问题，Agent 能自主思考、调用工具、生成 Markdown 调研报告。
 
-## 第一阶段：最小可行性产品 (MVP) - 让核心转起来
-这一阶段的目标是跑通主控循环引擎。基于 Tokio 异步运行时，手动处理 JSON 和工具调用。
+## 特性
 
-### 1. LLM 客户端封装 (`llm_client.rs`)
-- 引入 `reqwest` 处理异步 HTTP 请求，`serde` 和 `serde_json` 处理序列化
-- 定义核心结构体：`Message`、`Role`（Enum：System/User/Assistant/Tool）、`ToolCall`
-- 定义一个 trait `LlmClient`，实现发送请求并返回结果的方法
+- **DeepSeek API 客户端** — 完整的类型化请求/响应定义，支持 SSE 流式输出，自定义 `FinishReason` 向前兼容
+- **Agent 主循环** — `run_loop()` 批量模式 + `run_with_events()` 实时流式模式，`max_steps` 防死循环，自动工具调用分发
+- **工具系统** — `Tool` trait + `ToolRegistry`，内置计算器、文件读写/编辑、Glob/Grep 搜索、目录列表等工具，支持 `WorkspaceFs` 沙箱隔离
+- **记忆模块** — 可配置阈值 + 两阶段压缩（`drain_for_compact` → `apply_compact`），`Arc<RwLock<Memory>>` 多任务共享，System 消息永不被压缩
+- **TUI 交互界面** — ratatui + crossterm 打造的终端聊天界面，实时流式 Token 显示、工具调用状态、滚动历史、斜杠命令
 
-### 2. 基础记忆模块 (`memory.rs`)
-- 定义结构体 `Memory { messages: Vec<Message> }`
-  > 注意：多异步任务共享上下文时，需包装为 `Arc<Mutex<Memory>>` 或 `Arc<RwLock<Memory>>`
-- 实现基础方法：`push()`、`get_context()`
-- 达到1M上下文长度自动出发compact，调用小模型压缩记忆
+## 快速开始
 
-### 3. 工具系统基础 (`tools.rs`)
-- 定义 `Tool` Trait，包含方法：
-  - `name()`：工具名称
-  - `description()`：工具描述
-  - `parameters()`：返回 `serde_json::Value` 格式 Schema
-  - `async fn execute(&self, args: &str) -> Result<String, Error>`：工具执行逻辑
-- 实现 1~2 个示例工具结构体（如 `CalculatorTool`）
-- 手动拼接 JSON Schema 返回
+### 前置条件
 
-### 4. 核心主循环 (`agent.rs`)
-- 构建异步主函数 `async fn run_loop()`，循环主体 `loop { ... }`
-- 调用 LLM 后通过 `match` 匹配返回结果分支：
-  1. 纯文本回复：终止循环并输出结果
-  2. 工具调用 `tool_calls`：解析参数、批量执行本地工具，将工具结果封装为 `Role::Tool` 写入记忆
-- 附加能力：失败重试、最大执行步数 `max_steps` 防死循环
+- Rust 工具链（2024 edition）
+- DeepSeek API Key
 
-## 第二阶段：进阶能力 - 释放 Rust 宏与类型系统的威力
-拥抱 Rust 宏编程，消除重复样板代码，优化开发体验。
+### 配置
 
-### 5. 工具 Schema 自动生成 (`macros / schemars`)
-- 引入 `schemars` 库
-- 核心优势：工具入参定义为 `Args` 结构体，通过 `#[derive(JsonSchema, Deserialize)]` 注解
-- 使用 `schemars::schema_for!(Args)` 一键生成 OpenAI/Gemini 标准 JSON Schema，彻底手写 Schema
+在项目根目录创建 `.env` 文件：
 
-### 6. 模板引擎与提示词管理 (`prompt.rs`)
-- 可选库：`minijinja` / `askama`（编译期安全模板引擎）
-- 将复杂 System Prompt 抽离为独立模板文件，动态注入角色、时间等变量
-
-### 7. 异步流式输出 (Streaming)
-- 依赖库：`reqwest-eventsource`、`futures::stream::StreamExt`
-- 基于 `tokio::sync::mpsc` 通道实时推送文字流至终端
-- 支持 `Stream<Item = Result<String, Error>>` 类型转换，兼容复杂流式响应
-
-### 8. 结构化输出 (Structured Output)
-- 依托 Rust 强类型反序列化能力
-- 结合大模型 `response_format` 结构化输出特性，直接将返回内容反序列化为自定义结构体（如 `ResearchReport`）
-```rust
-serde_json::from_str::<ResearchReport>(&response.content)
+```bash
+DEEPSEEK_API=your_api_key_here
 ```
-- 全程类型安全，无需手动解析字符串
 
-## 第三阶段：高级特性 - 迈向生产级（选做）
-适配复杂业务场景，完善生产环境配套架构。
+### 编译与运行
 
-### 9. 长期记忆与知识库 (RAG & Vector DB)
-- 向量库选型：`qdrant-rust` / `pgvector`（配合 `sqlx`）
-- 完整流程：文档切片拆分 → 调用 Embedding 接口生成向量 → 存入向量数据库
-- 主循环前置逻辑：每次请求前检索向量库，注入相关历史上下文
+```bash
+# 调试构建
+cargo build
 
-### 10. 交互界面 (TUI / UI)
-- 终端界面：使用 `ratatui` 搭建命令行交互面板
-- Web/桌面端：
-  - `Axum`：提供后端 HTTP API
-  - `Tauri`：打包跨平台轻量桌面客户端
+# 发布构建
+cargo build --release
 
-### 11. 可观测性 (Observability)
-- 日志库：`tracing`（替代原生 `println!` / `log`）
-- 配套 `tracing-subscriber`，分层埋点：HTTP 请求、Agent 主循环、工具执行
-- 完整链路 Span 日志，快速排查模型幻觉、工具调用崩溃问题
+# 启动 TUI 模式（默认）
+cargo run
 
-# 推荐 Cargo 项目目录结构
+# 启动传统命令行模式
+cargo run -- --no-tui
 ```
-my_agent_framework/
+
+### 测试与检查
+
+```bash
+cargo test                    # 运行所有测试
+cargo test tui                # 仅运行 TUI 模块测试
+cargo test -p agent_oxide -- test_find_event_end  # 运行单个测试
+cargo clippy                  # 代码检查
+```
+
+## 架构概览
+
+```
+agent_oxide/
 ├── Cargo.toml
 └── src/
-    ├── main.rs               # Tokio 异步运行时程序入口
+    ├── main.rs               # 入口：TUI（默认）/ --no-tui 传统模式
+    ├── lib.rs                 # 库根，统一导出
     ├── core/
     │   ├── mod.rs
-    │   ├── agent.rs          # Agent 核心主循环逻辑
-    │   └── llm_client.rs     # LLM API 请求封装
-    ├── memory.rs             # 记忆、上下文管理模块
+    │   ├── agent.rs           # Agent 核心主循环
+    │   └── client/
+    │       ├── mod.rs         # 扁平重导出
+    │       ├── client.rs      # DeepSeekClient（send / stream）
+    │       ├── request.rs     # 请求类型定义
+    │       ├── response.rs    # 响应类型定义
+    │       ├── stream.rs      # SSE 流解析管道
+    │       └── error.rs       # DeepSeekError
+    ├── memory/
+    │   └── mod.rs             # Memory / SharedMemory / MemoryBuilder / 压缩
     ├── tools/
-    │   ├── mod.rs
-    │   ├── registry.rs       # 工具注册分发器 + Tool Trait 定义
-    │   ├── search_tool.rs    # 搜索引擎工具实现
-    │   └── file_tool.rs      # 本地文件读写工具实现
-    ├── prompts/
-    │   ├── mod.rs
-    │   └── templates/        # minijinja 提示词模板文件
+    │   ├── mod.rs             # Tool trait + ToolRegistry + 重导出
+    │   ├── tool.rs            # Tool trait 定义 + extract_string_arg
+    │   ├── registry.rs        # 工具注册与分发
+    │   ├── error.rs           # ToolError / FsError
+    │   ├── fs.rs              # WorkspaceFs 沙箱文件系统
+    │   ├── calculator.rs      # 计算器工具（递归下降解析器）
+    │   ├── echo.rs            # 最小参考实现
+    │   ├── tool_read.rs       # 文件读取工具
+    │   ├── tool_write.rs      # 文件写入工具
+    │   ├── tool_edit.rs       # 文件编辑工具
+    │   ├── tool_glob.rs       # Glob 文件搜索工具
+    │   ├── tool_grep.rs       # Grep 正则搜索工具
+    │   └── tool_ls.rs         # 目录列表工具
+    └── tui/
+        ├── mod.rs             # 模块根
+        ├── app.rs             # 核心状态机 + ChatMessage + apply_event
+        ├── ui.rs              # ratatui 渲染（三面板布局）
+        └── event.rs           # 事件循环 + Agent 桥接
 ```
+
+### 核心模块
+
+| 模块 | 职责 |
+| ---- | ---- |
+| `core/client/` | DeepSeek API 客户端——类型化请求/响应、SSE 流式处理 |
+| `core/agent.rs` | Agent 主循环——`run_loop()` 批量模式、`run_with_events()` 流式模式、`max_steps` 保护 |
+| `memory/` | 对话记忆——可配置压缩、两阶段 `drain`/`apply`、`compact_with_deepseek` 便捷函数 |
+| `tools/` | 工具系统——`Tool` trait、`ToolRegistry`、`WorkspaceFs` 沙箱、7 个内置工具 |
+| `tui/` | ratatui 终端界面——滚动历史、实时流式显示、工具调用状态、斜杠命令 |
+
+### SSE 流式管道
+
+```
+HTTP chunk → buffer → find_event_end (\n\n) → trim_trailing_newlines
+→ extract_sse_data (strip "data: ") → parse JSON → DeepSeekChunk
+```
+
+### 关键设计模式
+
+- **向前兼容枚举**: `FinishReason::Other(String)` 捕获未知值，避免反序列化失败
+- **两阶段压缩**: `drain_for_compact()` + `apply_compact()` 将记忆模块与 LLM 提供者解耦，System 消息永不参与压缩
+- **WorkspaceFs 沙箱**: 所有文件操作工具通过 `Arc<WorkspaceFs>` 代理，`resolve()` 规范化路径并拒绝工作区外的访问
+- **异步桥接 (TUI)**: TUI 事件循环在主线程同步运行，Agent 在 `tokio::spawn` 后台任务运行，通过 `mpsc::unbounded_channel` 通信
+
+## 开发路线
+
+### 第一阶段（已完成 ✅）
+
+- [x] `core/client/` — DeepSeek API 客户端
+- [x] `memory/` — 对话记忆 + 可配置压缩
+- [x] `tools/` — Tool trait + ToolRegistry + CalculatorTool + EchoTool
+- [x] `tools/fs.rs` + 文件编辑工具 — WorkspaceFs 沙箱 + 6 个文件系统工具
+- [x] `core/agent.rs` — Agent 主循环 + 流式事件
+- [x] `tui/` — ratatui 终端聊天界面
+
+### 第二阶段（计划中）
+
+- [ ] 宏编程 + `schemars` 自动生成工具 Schema
+- [ ] 模板引擎与提示词管理
+- [ ] 结构化输出（`response_format`）
+- [ ] 增强的流式交互体验
+
+### 第三阶段（远期）
+
+- [ ] RAG + 向量数据库（长期记忆与知识库）
+- [ ] Web 服务 + 桌面客户端（Axum / Tauri）
+- [ ] 可观测性（`tracing` 全链路埋点）
+
+## License
+
+MIT
