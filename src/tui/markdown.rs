@@ -2,11 +2,16 @@
 //!
 //! Parses markdown text with `pulldown_cmark` and converts it to styled
 //! ratatui [`Line`]s. Supports code blocks, headers, bold, italic,
-//! inline code, lists, blockquotes, links, and horizontal rules.
+//! inline code, tables (with box-drawing borders, column alignment,
+//! and responsive width shrinking), lists, blockquotes, links, and
+//! horizontal rules.
 
-use pulldown_cmark::{CodeBlockKind, CowStr, Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    Alignment, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 // ── Public API ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +56,8 @@ struct MdRenderer<'a> {
     /// Blockquote nesting depth.
     quote_depth: usize,
     area_width: u16,
+    /// Active table being built (if any).
+    table_state: Option<TableState>,
 }
 
 /// Tracks the current block-level element we're inside.
@@ -61,6 +68,19 @@ enum BlockCtx {
     BlockQuote,
     ListItem,
     Heading { level: u8 },
+}
+
+/// Buffered state for rendering a markdown table.
+///
+/// Cells are collected row-by-row during parsing and flushed as
+/// box-drawing–styled lines when the table block ends.
+struct TableState {
+    alignments: Vec<Alignment>,
+    header: Vec<String>,
+    body: Vec<Vec<String>>,
+    current_row: Vec<String>,
+    current_cell: String,
+    in_head: bool,
 }
 
 // ── Renderer Implementation ───────────────────────────────────────────────────────
@@ -77,12 +97,13 @@ impl<'a> MdRenderer<'a> {
             list_number: 0,
             quote_depth: 0,
             area_width,
+            table_state: None,
         }
     }
 
     /// Main entry: parse `content` and build styled lines.
     fn render(&mut self, content: &'a str) {
-        let parser = Parser::new(content);
+        let parser = Parser::new_ext(content, Options::ENABLE_TABLES);
 
         for event in parser {
             match event {
@@ -91,20 +112,33 @@ impl<'a> MdRenderer<'a> {
                 Event::Text(text) => self.handle_text(text),
                 Event::Code(text) => self.handle_inline_code(text),
                 Event::Html(html) | Event::InlineHtml(html) => {
-                    self.push_span(Span::styled(
-                        html.into_string(),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::DIM),
-                    ));
+                    if self.table_state.is_some() {
+                        // Inside a table cell — skip HTML
+                    } else {
+                        self.push_span(Span::styled(
+                            html.into_string(),
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::DIM),
+                        ));
+                    }
                 }
                 Event::SoftBreak => {
-                    // Space between words in a paragraph
-                    self.push_span(Span::raw(" "));
+                    if let Some(ref mut ts) = self.table_state {
+                        ts.current_cell.push(' ');
+                    } else {
+                        self.push_span(Span::raw(" "));
+                    }
                 }
                 Event::HardBreak => {
-                    // Explicit line break
-                    self.flush_line();
+                    if self.table_state.is_some() {
+                        // Inside a table cell — treat as a space
+                        if let Some(ref mut ts) = self.table_state {
+                            ts.current_cell.push(' ');
+                        }
+                    } else {
+                        self.flush_line();
+                    }
                 }
                 Event::Rule => {
                     self.flush_line();
@@ -219,8 +253,38 @@ impl<'a> MdRenderer<'a> {
                 self.pending_block_start = true;
             }
 
-            Tag::Table(_) | Tag::TableHead | Tag::TableRow | Tag::TableCell => {
-                // Tables — simplified: treat as normal text with separators
+            // ── Table events ──────────────────────────────────────
+            Tag::Table(alignments) => {
+                self.flush_line();
+                // NB: pulldown-cmark 0.12 does NOT emit Tag::TableHead start;
+                // the first TableRow after Table IS the header, and it ends
+                // with TagEnd::TableHead. So we set in_head=true here.
+                self.table_state = Some(TableState {
+                    alignments,
+                    header: Vec::new(),
+                    body: Vec::new(),
+                    current_row: Vec::new(),
+                    current_cell: String::new(),
+                    in_head: true,
+                });
+            }
+
+            Tag::TableHead => {
+                if let Some(ref mut ts) = self.table_state {
+                    ts.in_head = true;
+                }
+            }
+
+            Tag::TableRow => {
+                if let Some(ref mut ts) = self.table_state {
+                    ts.current_row = Vec::new();
+                }
+            }
+
+            Tag::TableCell => {
+                if let Some(ref mut ts) = self.table_state {
+                    ts.current_cell = String::new();
+                }
             }
 
             // ── Inline tags — push style onto stack ──────────────
@@ -355,12 +419,38 @@ impl<'a> MdRenderer<'a> {
                 }
             }
 
-            TagEnd::Table | TagEnd::TableHead | TagEnd::TableRow => {
-                self.flush_line();
+            TagEnd::TableCell => {
+                if let Some(ref mut ts) = self.table_state {
+                    ts.current_row.push(std::mem::take(&mut ts.current_cell));
+                }
             }
 
-            TagEnd::TableCell => {
-                self.push_span(Span::raw(" │ "));
+            TagEnd::TableRow => {
+                if let Some(ref mut ts) = self.table_state {
+                    let row = std::mem::take(&mut ts.current_row);
+                    if ts.in_head {
+                        ts.header = row;
+                    } else {
+                        ts.body.push(row);
+                    }
+                }
+            }
+
+            TagEnd::TableHead => {
+                if let Some(ref mut ts) = self.table_state {
+                    // NB: pulldown-cmark 0.12 does NOT emit TagEnd::TableRow
+                    // for the header row — the header cells are followed
+                    // directly by TagEnd::TableHead. Flush current_row now.
+                    ts.header = std::mem::take(&mut ts.current_row);
+                    ts.in_head = false;
+                }
+            }
+
+            TagEnd::Table => {
+                if let Some(ts) = self.table_state.take() {
+                    self.flush_table(ts);
+                    self.pending_block_start = true;
+                }
             }
 
             // ── Inline ends — pop style ──────────────────────────
@@ -380,6 +470,12 @@ impl<'a> MdRenderer<'a> {
     }
 
     fn handle_text(&mut self, text: CowStr<'a>) {
+        // Inside a table cell: accumulate raw text (inline formatting stripped).
+        if let Some(ref mut ts) = self.table_state {
+            ts.current_cell.push_str(&text);
+            return;
+        }
+
         if self.pending_block_start {
             self.flush_block_prefix();
             self.pending_block_start = false;
@@ -405,6 +501,12 @@ impl<'a> MdRenderer<'a> {
     }
 
     fn handle_inline_code(&mut self, text: CowStr<'a>) {
+        // Inside a table cell: accumulate as plain text.
+        if let Some(ref mut ts) = self.table_state {
+            ts.current_cell.push_str(&text);
+            return;
+        }
+
         if self.pending_block_start {
             self.flush_block_prefix();
             self.pending_block_start = false;
@@ -497,6 +599,164 @@ impl<'a> MdRenderer<'a> {
         self.lines.push(Line::from(spans));
     }
 
+    /// Render the buffered table state as box-drawing–styled lines.
+    ///
+    /// Computes column widths from all cells, shrinks if the table is wider
+    /// than the terminal, applies per-column alignment, and draws borders
+    /// with box-drawing characters.
+    fn flush_table(&mut self, state: TableState) {
+        let TableState {
+            alignments,
+            header,
+            body,
+            ..
+        } = state;
+
+        if alignments.is_empty() {
+            return;
+        }
+        let ncols = alignments.len();
+        if header.is_empty() && body.is_empty() {
+            return;
+        }
+
+        // ── Compute column widths ──────────────────────────────────
+        let mut col_widths: Vec<usize> = vec![0; ncols];
+        for (ci, cell) in header.iter().enumerate() {
+            if ci < ncols {
+                col_widths[ci] = col_widths[ci].max(UnicodeWidthStr::width(cell.as_str()));
+            }
+        }
+        for row in &body {
+            for (ci, cell) in row.iter().enumerate() {
+                if ci < ncols {
+                    col_widths[ci] = col_widths[ci].max(UnicodeWidthStr::width(cell.as_str()));
+                }
+            }
+        }
+        // Minimum 1 char per content cell
+        for w in &mut col_widths {
+            *w = (*w).max(1);
+        }
+
+        // Padded width = content + 1 space on each side
+        let padded: Vec<usize> = col_widths.iter().map(|w| w + 2).collect();
+        let total_width: usize = padded.iter().sum::<usize>() + ncols + 1;
+        let area_w = self.area_width.max(20) as usize;
+
+        let widths: Vec<usize> = if total_width > area_w {
+            shrink_widths(&padded, area_w)
+        } else {
+            padded
+        };
+        let content_w: Vec<usize> = widths.iter().map(|w| w - 2).collect();
+
+        // ── Cell formatting helpers ────────────────────────────────
+        let format_cell = |content: &str, ci: usize| -> String {
+            let cw = content_w[ci];
+            let dw = UnicodeWidthStr::width(content);
+            if dw > cw {
+                // Content wider than column — truncate
+                let truncated = truncate_str_to_width(content, cw);
+                format!(" {} ", truncated)
+            } else {
+                let pad = cw - dw;
+                let aligned = match alignments.get(ci).unwrap_or(&Alignment::None) {
+                    Alignment::Center => {
+                        let left = pad / 2;
+                        let right = pad - left;
+                        format!("{}{}{}", " ".repeat(left), content, " ".repeat(right))
+                    }
+                    Alignment::Right => format!("{}{}", " ".repeat(pad), content),
+                    _ => format!("{}{}", content, " ".repeat(pad)), // Left | None
+                };
+                format!(" {} ", aligned)
+            }
+        };
+
+        let border_line = |left: char, mid: char, right: char| -> String {
+            let mut s = String::from(left);
+            for (i, w) in widths.iter().enumerate() {
+                if i > 0 {
+                    s.push(mid);
+                }
+                s.push_str(&"─".repeat(*w));
+            }
+            s.push(right);
+            s
+        };
+
+        let border_style = Style::default()
+            .fg(Color::Rgb(80, 85, 95))
+            .add_modifier(Modifier::DIM);
+        let header_style = Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD);
+        let body_style = Style::default().fg(Color::Rgb(220, 225, 235));
+
+        // ── Blank line before table ────────────────────────────────
+        self.lines.push(Line::from(Span::raw("")));
+
+        // ── Top border ─────────────────────────────────────────────
+        self.lines.push(Line::from(Span::styled(
+            border_line('┌', '┬', '┐'),
+            border_style,
+        )));
+
+        // ── Header ─────────────────────────────────────────────────
+        if !header.is_empty() {
+            let mut row_s = String::from('│');
+            for ci in 0..ncols {
+                row_s.push_str(&format_cell(
+                    header.get(ci).map(|s| s.as_str()).unwrap_or(""),
+                    ci,
+                ));
+                row_s.push('│');
+            }
+            self.lines
+                .push(Line::from(Span::styled(row_s, header_style)));
+
+            // Header separator
+            self.lines.push(Line::from(Span::styled(
+                border_line('├', '┼', '┤'),
+                border_style,
+            )));
+        }
+
+        // ── Body ───────────────────────────────────────────────────
+        for (ri, row) in body.iter().enumerate() {
+            // Optional row separator between body rows
+            if ri > 0 && body.len() > 4 {
+                // Thin separator every row for large tables
+                self.lines.push(Line::from(Span::styled(
+                    border_line('├', '┼', '┤'),
+                    Style::default()
+                        .fg(Color::Rgb(50, 55, 60))
+                        .add_modifier(Modifier::DIM),
+                )));
+            }
+
+            let mut row_s = String::from('│');
+            for ci in 0..ncols {
+                row_s.push_str(&format_cell(
+                    row.get(ci).map(|s| s.as_str()).unwrap_or(""),
+                    ci,
+                ));
+                row_s.push('│');
+            }
+            self.lines.push(Line::from(Span::styled(row_s, body_style)));
+        }
+
+        // ── Bottom border ──────────────────────────────────────────
+        self.lines.push(Line::from(Span::styled(
+            border_line('└', '┴', '┘'),
+            border_style,
+        )));
+
+        // Blank line after table
+        self.lines.push(Line::from(Span::raw("")));
+    }
+
     /// Final flush: remove trailing blank lines and return.
     fn finish(mut self) -> Vec<Line<'a>> {
         self.flush_line();
@@ -510,6 +770,63 @@ impl<'a> MdRenderer<'a> {
 
         self.lines
     }
+}
+
+// ── Table helpers ─────────────────────────────────────────────────────────────────
+
+/// Truncates `text` to fit within `max_width` display columns,
+/// cutting at a valid UTF-8 character boundary.
+fn truncate_str_to_width(text: &str, max_width: usize) -> String {
+    let mut current_width = 0usize;
+    let mut byte_end = 0usize;
+    for (idx, ch) in text.char_indices() {
+        let ch_w = UnicodeWidthStr::width(ch.encode_utf8(&mut [0u8; 4]));
+        if current_width + ch_w > max_width {
+            break;
+        }
+        current_width += ch_w;
+        byte_end = idx + ch.len_utf8();
+    }
+    if byte_end == 0 {
+        String::new()
+    } else {
+        text[..byte_end].to_string()
+    }
+}
+
+// ── Table width helper ────────────────────────────────────────────────────────────
+
+/// Proportionally shrinks column widths so the total table width fits within
+/// `area_width`. Always preserves at least 3 columns per cell (1 char + 2 padding).
+fn shrink_widths(widths: &[usize], area_width: usize) -> Vec<usize> {
+    let ncols = widths.len();
+    let current_total: usize = widths.iter().sum::<usize>() + ncols + 1;
+    if current_total <= area_width {
+        return widths.to_vec();
+    }
+
+    let mut result: Vec<usize> = widths.to_vec();
+    let mut excess = current_total.saturating_sub(area_width);
+
+    while excess > 0 {
+        // Find the widest column that can still be shrunk
+        let max_idx = result
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| **w > 3) // minimum 3 (1 content + 2 padding)
+            .max_by_key(|(_, w)| **w)
+            .map(|(i, _)| i);
+
+        match max_idx {
+            Some(idx) => {
+                result[idx] -= 1;
+                excess -= 1;
+            }
+            None => break, // all columns at minimum; can't shrink further
+        }
+    }
+
+    result
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
@@ -638,5 +955,107 @@ mod tests {
             .iter()
             .any(|l| l.spans.iter().any(|s| s.content.contains("这是")));
         assert!(has_chinese, "Chinese text missing");
+    }
+
+    // ── Table tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_simple_table() {
+        let md = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob   | 25 |";
+        let lines = render_markdown(md, 80);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        // Box-drawing characters present
+        assert!(text.contains('┌'), "top border missing: {text}");
+        assert!(text.contains('┬'), "column separators missing: {text}");
+        assert!(text.contains('└'), "bottom border missing: {text}");
+        // Content present
+        assert!(text.contains("Name"), "header missing: {text}");
+        assert!(text.contains("Alice"), "body row 1 missing: {text}");
+        assert!(text.contains("Bob"), "body row 2 missing: {text}");
+    }
+
+    #[test]
+    fn test_table_with_alignment() {
+        // Right-aligned numbers column
+        let md = "| Item | Price |\n|:-----|------:|\n| Apple | 100 |\n| Banana | 50 |";
+        let lines = render_markdown(md, 80);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(text.contains("Apple"), "item missing: {text}");
+        assert!(text.contains("100"), "price missing: {text}");
+    }
+
+    #[test]
+    fn test_table_no_header() {
+        // Without a separator row, markdown pipes are just regular text (not a table).
+        // Test that table markdown without header separator is NOT rendered as a table.
+        let md = "| a | b |\n| c | d |";
+        let lines = render_markdown(md, 80);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        // Without separator, pipes are inline text — no box-drawing chars
+        assert!(
+            !text.contains('┌'),
+            "should not render as table without separator row: {text}"
+        );
+    }
+
+    #[test]
+    fn test_table_header_bold() {
+        let md = "| Key | Value |\n|-----|-------|\n| x | 1 |";
+        let lines = render_markdown(md, 80);
+
+        // Find the header line (contains "Key") and check it has BOLD modifier
+        let header_line = lines
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.content.contains("Key")))
+            .expect("header line not found");
+
+        let has_bold = header_line
+            .spans
+            .iter()
+            .any(|s| s.style.add_modifier.contains(Modifier::BOLD));
+        assert!(has_bold, "header should be bold");
+    }
+
+    #[test]
+    fn test_table_skip_html_in_cells() {
+        // HTML inside table cells should be skipped, not rendered
+        let md = "| Col |\n|-----|\n| <b>text</b> |";
+        let lines = render_markdown(md, 80);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        // The text should be present without HTML tags
+        assert!(text.contains("text"), "cell text missing: {text}");
+        assert!(!text.contains("<b>"), "HTML tag leaked through: {text}");
+    }
+
+    #[test]
+    fn test_table_narrow_terminal() {
+        // A wide table rendered at 40 columns — should shrink to fit
+        let md = "| Very Long Column Name | Another Long Header | Short |\n|----|----|----|\n| data here | more data | ok |";
+        let lines = render_markdown(md, 40);
+
+        // Each line should fit within ~40 chars
+        for line in &lines {
+            let line_str: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let display_w = UnicodeWidthStr::width(line_str.as_str());
+            assert!(
+                display_w <= 40,
+                "line too wide ({display_w} cols): {line_str}"
+            );
+        }
     }
 }
