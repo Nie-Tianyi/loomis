@@ -1,144 +1,328 @@
-# Agent Oxide
+# 🦀 Agent Oxide
 
-一个用 Rust 从零构建的 AI Agent 框架，基于 Tokio 异步运行时，以**自动调研助手 (Auto-Researcher)** 为实战目标——输入一个问题，Agent 能自主思考、调用工具、生成 Markdown 调研报告。
+<p align="center">
+  <img src="https://img.shields.io/badge/Rust-2024%20edition-orange?style=flat-square&logo=rust" alt="Rust 2024">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License">
+  <img src="https://img.shields.io/badge/状态-MVP-green?style=flat-square" alt="Status: MVP">
+  <img src="https://img.shields.io/badge/DeepSeek-API-4B6BFB?style=flat-square" alt="DeepSeek API">
+</p>
+
+<p align="center">
+  <em>一个完全用 Rust 从零构建的 AI 编码助手。<br>
+  Tokio 异步 · Trait 工具抽象 · SSE 流式响应 · 终端交互界面</em>
+</p>
+
+<p align="center">
+  <img src="UI_screenshot.png" alt="Agent Oxide TUI 截图" width="80%">
+</p>
+
+---
+
+## 项目简介
+
+Agent Oxide 是一个纯 Rust（2024 edition）编写的 **AI 编码助手**。它在终端中运行，提供完整的 TUI 聊天界面，能够在沙箱化的工作区内读写文件、用 glob 和 grep 搜索代码，并通过 SSE 协议实时流式输出模型回复——全部基于 DeepSeek API。
+
+不依赖任何黑盒框架，从 HTTP 请求到 SSE 解析再到终端渲染，每一层的设计决策都透明可追溯。
 
 ## 特性
 
-- **DeepSeek API 客户端** — 完整的类型化请求/响应定义，支持 SSE 流式输出，自定义 `FinishReason` 向前兼容
-- **Agent 主循环** — `run_loop()` 批量模式 + `run_with_events()` 实时流式模式，`max_steps` 防死循环，自动工具调用分发
-- **工具系统** — `Tool` trait + `ToolRegistry`，内置计算器、文件读写/编辑、Glob/Grep 搜索、目录列表等工具，支持 `WorkspaceFs` 沙箱隔离
-- **记忆模块** — 可配置阈值 + 两阶段压缩（`drain_for_compact` → `apply_compact`），`Arc<RwLock<Memory>>` 多任务共享，System 消息永不被压缩
-- **TUI 交互界面** — ratatui + crossterm 打造的终端聊天界面，实时流式 Token 显示、工具调用状态、滚动历史、斜杠命令
+- **DeepSeek API 客户端** — 完整的请求/响应类型定义，三层 SSE 流式解析管道，`FinishReason::Other(String)` 向前兼容未知值
+- **Agent 主循环** — `run_loop()` 批量模式 + `run_with_events()` 实时流式模式，通过 `mpsc` 通道推送事件，`max_steps` 防止无限循环
+- **可插拔工具系统** — `Tool` trait + `ToolRegistry`，内置计算器、文件读写/编辑、glob 文件匹配、grep 内容搜索、ls 目录列表等 7 个工具，统一由 `WorkspaceFs` 沙箱隔离
+- **对话记忆管理** — 可配置压缩阈值，两阶段压缩（`drain_for_compact` → `apply_compact`），`Arc<RwLock<Memory>>` 多任务共享，系统消息永不被压缩
+- **终端交互界面** — [ratatui](https://ratatui.rs/) + [crossterm](https://crates.io/crates/crossterm) 打造，支持实时流式 Token、工具调用状态展示、滚动历史、斜杠命令
 
 ## 快速开始
 
 ### 前置条件
 
-- Rust 工具链（2024 edition）
-- DeepSeek API Key
+- [Rust](https://www.rust-lang.org/tools/install) 工具链（2024 edition）
+- [DeepSeek API](https://platform.deepseek.com/) 密钥
 
-### 配置
-
-在项目根目录创建 `.env` 文件：
+### 环境配置
 
 ```bash
-DEEPSEEK_API=your_api_key_here
+# 克隆仓库
+git clone https://github.com/your-username/agent_oxide.git
+cd agent_oxide
+
+# 创建 .env 文件
+echo 'DEEPSEEK_API=sk-your-key-here' > .env
 ```
 
-### 编译与运行
+### 运行
 
 ```bash
-# 调试构建
-cargo build
-
-# 发布构建
-cargo build --release
-
 # 启动 TUI 模式（默认）
-cargo run
+cargo run --release
 
-# 启动传统命令行模式
-cargo run -- --no-tui
+# 或使用传统命令行模式
+cargo run --release -- --no-tui
 ```
 
 ### 测试与检查
 
 ```bash
-cargo test                    # 运行所有测试
-cargo test tui                # 仅运行 TUI 模块测试
-cargo test -p agent_oxide -- test_find_event_end  # 运行单个测试
-cargo clippy                  # 代码检查
+cargo test                # 运行所有测试
+cargo test tui            # 仅运行 TUI 模块测试
+cargo clippy              # 代码检查
 ```
 
-## 架构概览
+## 架构详解
 
-```
+### 项目结构
+
+```text
 agent_oxide/
 ├── Cargo.toml
+├── .env                        # DeepSeek API 密钥（不纳入版本控制）
+├── UI_screenshot.png           # TUI 截图
 └── src/
-    ├── main.rs               # 入口：TUI（默认）/ --no-tui 传统模式
-    ├── lib.rs                 # 库根，统一导出
+    ├── main.rs                 # 程序入口，TUI（默认）/ --no-tui 传统 CLI
+    ├── lib.rs                  # 库根，统一 re-export 各模块
     ├── core/
-    │   ├── mod.rs
-    │   ├── agent.rs           # Agent 核心主循环
+    │   ├── mod.rs              # 声明 pub mod client; mod agent;
+    │   ├── agent.rs            # Agent 核心主循环
     │   └── client/
-    │       ├── mod.rs         # 扁平重导出
-    │       ├── client.rs      # DeepSeekClient（send / stream）
-    │       ├── request.rs     # 请求类型定义
-    │       ├── response.rs    # 响应类型定义
-    │       ├── stream.rs      # SSE 流解析管道
-    │       └── error.rs       # DeepSeekError
+    │       ├── mod.rs          # 扁平重导出所有 client 类型
+    │       ├── client.rs       # DeepSeekClient：send()（非流式）+ stream()（SSE 流式）
+    │       ├── request.rs      # 请求类型：DeepSeekRequest, Message, Role, ToolCall, ToolDef, FunctionDef 等
+    │       ├── response.rs     # 响应类型：DeepSeekResponse, Choice, FinishReason, Usage
+    │       ├── stream.rs       # SSE 流解析：DeepSeekStream, DeepSeekChunk, ChunkChoice, Delta
+    │       └── error.rs        # DeepSeekError：Http / Api / Parse / StreamingNotSupported
     ├── memory/
-    │   └── mod.rs             # Memory / SharedMemory / MemoryBuilder / 压缩
+    │   └── mod.rs              # Memory, SharedMemory, MemoryBuilder, 两阶段压缩
     ├── tools/
-    │   ├── mod.rs             # Tool trait + ToolRegistry + 重导出
-    │   ├── tool.rs            # Tool trait 定义 + extract_string_arg
-    │   ├── registry.rs        # 工具注册与分发
-    │   ├── error.rs           # ToolError / FsError
-    │   ├── fs.rs              # WorkspaceFs 沙箱文件系统
-    │   ├── calculator.rs      # 计算器工具（递归下降解析器）
-    │   ├── echo.rs            # 最小参考实现
-    │   ├── tool_read.rs       # 文件读取工具
-    │   ├── tool_write.rs      # 文件写入工具
-    │   ├── tool_edit.rs       # 文件编辑工具
-    │   ├── tool_glob.rs       # Glob 文件搜索工具
-    │   ├── tool_grep.rs       # Grep 正则搜索工具
-    │   └── tool_ls.rs         # 目录列表工具
+    │   ├── mod.rs              # 模块根，re-export Tool, ToolRegistry, 所有内置工具
+    │   ├── tool.rs             # Tool trait 定义 + extract_string_arg 辅助函数
+    │   ├── registry.rs         # ToolRegistry：HashMap 存储，register/execute/to_tool_defs
+    │   ├── error.rs            # ToolError（Execution/InvalidArgs）+ FsError（文件系统错误）
+    │   ├── fs.rs               # WorkspaceFs：路径规范化 + 沙箱边界检查
+    │   ├── calculator.rs       # CalculatorTool：词法分析器 → 递归下降解析器 → 求值
+    │   ├── echo.rs             # EchoTool：最小参考实现，用于自定义工具开发
+    │   ├── tool_read.rs        # ReadTool：支持 offset/limit，cat -n 风格输出
+    │   ├── tool_write.rs       # WriteTool：创建或覆盖文件，自动创建父目录
+    │   ├── tool_edit.rs        # EditTool：行级替换（start_line..=end_line，1-indexed）
+    │   ├── tool_glob.rs        # GlobTool：模式匹配文件，返回排序后的相对路径
+    │   ├── tool_grep.rs        # GrepTool：正则搜索，支持 path_glob 过滤
+    │   └── tool_ls.rs          # LsTool：列出目录内容，显示类型/大小，目录优先
     └── tui/
-        ├── mod.rs             # 模块根
-        ├── app.rs             # 核心状态机 + ChatMessage + apply_event
-        ├── ui.rs              # ratatui 渲染（三面板布局）
-        └── event.rs           # 事件循环 + Agent 桥接
+        ├── mod.rs              # 模块根，re-export App, ChatMessage, ToolCallState, TuiCommand, run
+        ├── app.rs              # 核心状态机：App, ChatMessage（6 种变体）, apply_event 流式合并, 键盘处理
+        ├── ui.rs               # ratatui 渲染：三面板布局（聊天/输入/状态栏），message_to_lines 样式映射
+        └── event.rs            # 事件循环 + Agent 桥接：run() 入口，run_event_loop() 主循环，agent_handler 后台任务
 ```
 
-### 核心模块
+### 模块职责表
 
-| 模块 | 职责 |
+| 模块 | 核心类型 | 职责 |
+| ---- | -------- | ---- |
+| `core/client/` | `DeepSeekClient`, `DeepSeekStream`, `DeepSeekChunk` | DeepSeek API 的类型化请求/响应封装，SSE 流式解析与反序列化 |
+| `core/agent.rs` | `Agent`, `AgentEvent`, `AgentError` | Agent 主循环：两种运行模式、指数退避重试、工具调用分发、内存压缩触发 |
+| `memory/` | `Memory`, `SharedMemory`, `MemoryBuilder`, `CompactSignal` | 对话上下文存储：可配置阈值、两阶段压缩、字符数估算 |
+| `tools/` | `Tool`, `ToolRegistry`, `WorkspaceFs`, 7 个工具结构体 | 工具抽象层：trait 定义、注册分发、沙箱文件系统、内置工具集 |
+| `tui/` | `App`, `ChatMessage`, `ToolCallState`, `TuiCommand` | 终端 UI：滚动历史、流式 Token 合并、工具调用状态卡片、键盘输入与斜杠命令 |
+
+### Agent 主循环 (`core/agent.rs`)
+
+Agent 是整个框架的控制中心，对外提供两种运行模式：
+
+| 模式 | 传输方式 | 首字节延迟 | 适用场景 |
+| ---- | -------- | --------- | -------- |
+| **流式**（默认） | SSE (`text/event-stream`) | ~100ms | 交互式聊天、实时 UI |
+| **非流式** | JSON (`application/json`) | 完整响应时间 | 批量处理、调试 |
+
+**运行流程**：
+
+```text
+run_loop()
+  ├─ [流式]  run_streaming_loop()
+  └─ [非流]  run_non_streaming_loop()
+       │
+       ├─ maybe_compact()          — 检查是否触发记忆压缩
+       ├─ stream_with_retry()      — 指数退避重试瞬时错误
+       │
+       ├─ 有 tool_calls? → execute_all() → push 结果 → 继续循环
+       └─ 纯文本?       → push 到 memory → 返回
+```
+
+**关键设计决策**：
+
+1. **`std::sync::RwLock` + async** — 锁在每次 `.await` 之前释放。`std::sync` guard 不能跨越 await 点，因为 Tokio 的工作窃取调度器可能会将 future 迁移到不同 OS 线程。这是 Rust 异步编程的基本模式。
+2. **同步 Tool 执行** — `Tool` trait 是对象安全的，无需 `async_trait`。CPU 密集型工具内联执行；I/O 密集型工具可内部包装 `tokio::task::spawn_blocking`。
+3. **流式 Tool Call 合并** — SSE 流中，单个 tool call 被分散到多个 chunk。`StreamAccumulator` 按 index 重新组装：第一个 chunk 携带 `id` + `function.name`，后续 chunk 追加 `function.arguments`。
+4. **批量锁获取** — 所有工具结果先收集到 `Vec<Message>` 中，然后在单次写锁下批量写入 memory，减少锁竞争。
+
+### SSE 流式管道 (`core/client/stream.rs`)
+
+```text
+HTTP chunk → buffer → find_event_end(\n\n) → trim_trailing_newlines
+           → extract_sse_data("data: ") → [DONE]? 跳过
+                                         → parse JSON → DeepSeekChunk
+                                                     ├─ content → Token
+                                                     ├─ reasoning_content → ReasoningToken
+                                                     └─ tool_calls → ToolCallStart / ToolCallArgsDelta
+```
+
+三层解析，逐层剥离：
+
+| 层 | 函数 | 输入 | 输出 |
+| --- | ---- | --- | ---- |
+| 1. 分帧 | `find_event_end` | 字节流 buffer | 完整 SSE 事件（以 `\n\n` 分隔） |
+| 2. 提取 | `extract_sse_data` | SSE 事件 | `data:` 行内容（空行 → `[DONE]` 跳过） |
+| 3. 反序列化 | `serde_json::from_str` | JSON 字符串 | `DeepSeekChunk` 结构体 |
+
+### 记忆模块 (`memory/mod.rs`)
+
+**核心类型**：
+
+| 类型 | 作用 |
 | ---- | ---- |
-| `core/client/` | DeepSeek API 客户端——类型化请求/响应、SSE 流式处理 |
-| `core/agent.rs` | Agent 主循环——`run_loop()` 批量模式、`run_with_events()` 流式模式、`max_steps` 保护 |
-| `memory/` | 对话记忆——可配置压缩、两阶段 `drain`/`apply`、`compact_with_deepseek` 便捷函数 |
-| `tools/` | 工具系统——`Tool` trait、`ToolRegistry`、`WorkspaceFs` 沙箱、7 个内置工具 |
-| `tui/` | ratatui 终端界面——滚动历史、实时流式显示、工具调用状态、斜杠命令 |
+| `Memory` | 持有 `Vec<Message>`，包含压缩逻辑 |
+| `SharedMemory` | `Arc<RwLock<Memory>>` — 线程安全共享包装 |
+| `MemoryBuilder` | 流式构造器：`.threshold().keep_last().build()` |
+| `CompactSignal` | `push()` 返回的建议信号：`WithinBudget` / `NeedsCompact` |
+| `MemoryError` | 压缩操作错误：`SummariserFailed` / `NothingToCompact` |
 
-### SSE 流式管道
+**两阶段压缩**：
 
+将 Memory 与 LLM 提供者解耦——压缩由调用方完全控制：
+
+```rust
+// Phase 1: 排空旧的非 System 消息
+let drained: Vec<Message> = mem.drain_for_compact();
+// Phase 2: 外部调用 LLM 总结（调用方控制），然后应用
+mem.apply_compact(summary);
+// 结果: [System("summary..."), System(原始...), 最近消息...]
 ```
-HTTP chunk → buffer → find_event_end (\n\n) → trim_trailing_newlines
-→ extract_sse_data (strip "data: ") → parse JSON → DeepSeekChunk
+
+**设计要点**：
+
+- **System 消息永不被排空**——它们承载持久化指令（系统提示词、历史摘要），必须保留
+- **字符数阈值而非 Token 数**——不同模型的 Tokenizer 不同且计算成本高；字符数是快速、确定性的近似值（2M 字符 ≈ 500k–1M Token）
+- **`CompactSignal` 仅为建议**——调用方决定何时执行压缩
+
+### 工具系统 (`tools/`)
+
+**层次架构**：
+
+```text
+tools/
+  ├── Tool trait (tool.rs)          — 定义统一的工具接口
+  ├── ToolRegistry (registry.rs)    — HashMap<名称, Arc<dyn Tool>> 存储与分发
+  ├── WorkspaceFs (fs.rs)           — 沙箱文件系统层，所有文件工具共享
+  ├── 错误类型 (error.rs)            — ToolError（LLM 可见）+ FsError（I/O 层）
+  └── 7 个内置工具
+      ├── CalculatorTool             — 递归下降表达式求值（Lexer → Parser 分离）
+      ├── EchoTool                   — 最小参考实现
+      ├── ReadTool                   — cat -n 风格带行号输出
+      ├── WriteTool                  — 创建/覆盖，自动创建父目录
+      ├── EditTool                   — 行级替换（1-indexed 闭区间）
+      ├── GlobTool                   — 文件模式匹配
+      ├── GrepTool                   — 正则内容搜索
+      └── LsTool                     — 目录列表（类型/大小显示）
 ```
 
-### 关键设计模式
+**Tool trait** — 同步、对象安全，无需 `async_trait`：
 
-- **向前兼容枚举**: `FinishReason::Other(String)` 捕获未知值，避免反序列化失败
-- **两阶段压缩**: `drain_for_compact()` + `apply_compact()` 将记忆模块与 LLM 提供者解耦，System 消息永不参与压缩
-- **WorkspaceFs 沙箱**: 所有文件操作工具通过 `Arc<WorkspaceFs>` 代理，`resolve()` 规范化路径并拒绝工作区外的访问
-- **异步桥接 (TUI)**: TUI 事件循环在主线程同步运行，Agent 在 `tokio::spawn` 后台任务运行，通过 `mpsc::unbounded_channel` 通信
+```rust
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn parameters(&self) -> Value;                // 手动编写的 JSON Schema
+    fn execute(&self, args: &str) -> Result<String, ToolError>;
+    fn to_def(&self) -> ToolDef { .. }            // 提供默认实现
+}
+```
+
+**集成链路**：
+
+```text
+Tool impl → to_def() → ToolDef → DeepSeekRequest.tools
+Tool impl ← ToolRegistry::execute(name, args) ← ToolCall.function.{name, arguments}
+```
+
+**WorkspaceFs 沙箱**：
+
+所有文件工具持有 `Arc<WorkspaceFs>`。`resolve()` 方法会规范化路径并拒绝任何超出 `workspace_root` 的访问。`normalize_partial()` 辅助函数处理不存在的路径（向上查找到第一个存在的祖先目录）。`FsError` 映射为 `ToolError` 后展示给 LLM。
+
+### TUI 交互界面 (`tui/`)
+
+ratatui + crossterm 实现的终端聊天界面，行为上参考了 Claude Code 的交互体验。
+
+**通道拓扑** — 单 Tokio 运行时，主线程同步 TUI 循环，后台 `tokio::spawn` 管理 Agent 生命周期：
+
+```text
+TUI 线程                                 Agent 任务 (tokio::spawn)
+─────────                               ────────────────────────
+cmd_tx ───── TuiCommand ──────────────→ cmd_rx
+agent_rx ←── AgentEvent ─────────────── agent_tx
+```
+
+**`ChatMessage` 变体（6 种）**：`User`, `Assistant`, `Reasoning`, `ToolCall { id, name, args, state }`, `System`, `Error` —— 每种在 `ui.rs` 中有独立渲染样式。
+
+**`apply_event` 流式状态机**：
+
+| 事件 | 行为 |
+| ---- | ---- |
+| `Token(t)` | 追加到最后一条 `Assistant` 消息（或创建新的） |
+| `ReasoningToken(t)` | 追加到最后一条 `Reasoning` 消息（或创建新的） |
+| `ToolCallStart { id, name }` | 创建新 `ToolCall { state: Running }` |
+| `ToolCallArgsDelta { id, delta }` | 按 id 查找，追加 args |
+| `ToolResult { id, name, output }` | 按 id 查找，设置 `state: Complete(output)` |
+| `Done` | 设置 `streaming = false` |
+
+**键盘操作**：Enter（发送）、Ctrl+C（取消/退出）、Esc（取消）、Ctrl+D（输入为空时退出）、PgUp/PgDown（滚动）、↑/↓（历史）、←/→/Home/End（光标移动）。
+
+**斜杠命令**（本地处理）：`/exit`, `/clear`, `/stats`, `/tools`, `/help`。
+
+**事件循环**：50ms 轮询间隔，每帧后 drain agent 事件，收集到 `Vec` 后在 `terminal.draw()` 释放不可变借用后应用，确保渲染流畅。
+
+### 关键设计模式总结
+
+| 模式 | 应用位置 | 说明 |
+| ---- | -------- | ---- |
+| 向前兼容枚举 | `FinishReason::Other(String)` | 捕获未知值，反序列化不失败 |
+| 两阶段操作 | `drain_for_compact` → `apply_compact` | Memory 与 LLM 提供者解耦 |
+| 沙箱隔离 | `WorkspaceFs::resolve()` | 路径规范化 + 工作区边界检查 |
+| 通道桥接 | `mpsc::unbounded_channel` | TUI 主线程 ↔ Agent 异步任务 |
+| 批量锁操作 | Agent::execute_all | 工具结果收集后一次写锁写入 |
+| 指数退避重试 | `stream_with_retry` | 瞬时网络错误的健壮性保障 |
 
 ## 开发路线
 
-### 第一阶段（已完成 ✅）
+### 第一阶段 — MVP ✅
 
-- [x] `core/client/` — DeepSeek API 客户端
-- [x] `memory/` — 对话记忆 + 可配置压缩
-- [x] `tools/` — Tool trait + ToolRegistry + CalculatorTool + EchoTool
-- [x] `tools/fs.rs` + 文件编辑工具 — WorkspaceFs 沙箱 + 6 个文件系统工具
-- [x] `core/agent.rs` — Agent 主循环 + 流式事件
-- [x] `tui/` — ratatui 终端聊天界面
+- [x] DeepSeek API 客户端 + SSE 流式响应
+- [x] Agent 主循环：批量 + 流式两种模式，`max_steps` 保护，工具自动分发
+- [x] 工具系统：`Tool` trait + `ToolRegistry`，7 个内置工具，`WorkspaceFs` 沙箱
+- [x] 记忆模块：可配置阈值，两阶段压缩
+- [x] 终端 UI：ratatui 聊天界面，流式 Token，工具调用卡片，斜杠命令
 
-### 第二阶段（计划中）
+### 第二阶段 — 进阶
 
-- [ ] 宏编程 + `schemars` 自动生成工具 Schema
-- [ ] 模板引擎与提示词管理
-- [ ] 结构化输出（`response_format`）
-- [ ] 增强的流式交互体验
+- [ ] 宏驱动 `#[derive(JsonSchema)]` 自动生成工具 Schema
+- [ ] Jinja 风格提示词模板引擎
+- [ ] 结构化输出（`response_format` → 类型反序列化）
+- [ ] 流式交互体验打磨
 
-### 第三阶段（远期）
+### 第三阶段 — 生产级
 
-- [ ] RAG + 向量数据库（长期记忆与知识库）
-- [ ] Web 服务 + 桌面客户端（Axum / Tauri）
-- [ ] 可观测性（`tracing` 全链路埋点）
+- [ ] RAG + 向量数据库（Qdrant / pgvector）
+- [ ] HTTP API + 桌面客户端（Axum / Tauri）
+- [ ] `tracing` 全链路可观测性埋点
 
-## License
+## 参与贡献
 
-MIT
+欢迎提交 Issue 和 PR！项目处于活跃开发阶段，任何 bug 修复、功能改进或文档完善都很有价值。
+
+```bash
+git checkout -b feature/your-feature
+cargo test
+cargo clippy
+# ... 提交、推送、创建 PR
+```
+
+## 许可证
+
+MIT © 2025
