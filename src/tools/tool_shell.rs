@@ -67,13 +67,23 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a shell command in the workspace directory. \
-         Returns stdout and stderr output. \
-         Use this to run build commands, tests, linters, version control, \
-         or any other command-line tool. \
-         The command runs with a timeout — long-running commands will be \
-         killed and their partial output returned. \
-         Always prefer this over guessing command output."
+        "Execute a shell command in the workspace directory. The command runs inside \
+         the workspace root as the working directory.\n\n\
+         Output is capped at 100 KB to avoid flooding context. If the command \
+         exceeds the timeout it is killed and partial output is returned. Exit code \
+         is appended to the output when non-zero.\n\n\
+         When to use: running build commands (`cargo build`, `npm install`, `make`), \
+         running tests (`cargo test`, `pytest`), version control (`git status`, \
+         `git diff`, `git log`), any CLI tool without a dedicated equivalent.\n\n\
+         IMPORTANT — use dedicated tools instead of shell when possible:\n\
+         - Reading files → use read (safer, cat -n format with line numbers)\n\
+         - Listing directories → use ls or glob (structured output)\n\
+         - Searching content → use grep (structured output with line numbers)\n\
+         - Editing files → use edit or write (sandbox-safe, undoable)\n\
+         Do NOT use shell to run `cat`, `ls`, `find`, `grep`, `echo`, or `sed` \
+         unless you have verified that the dedicated tool cannot accomplish the task.\n\n\
+         Timed out or killed commands return partial output — do not assume success \
+         when output is incomplete."
     }
 
     fn parameters(&self) -> Value {
@@ -82,15 +92,11 @@ impl Tool for ShellTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute. \
-                                    Examples: 'cargo build', 'git status', 'ls -la'. \
-                                    The command runs in the workspace directory."
+                    "description": "The shell command to execute. Runs with the workspace root as working directory. On Windows: cmd /C. On Unix: sh -c. Examples: 'cargo build', 'git status', 'npm test'. Do NOT use for cat/ls/find/grep/echo — use the dedicated tools instead."
                 },
                 "timeout_secs": {
                     "type": "integer",
-                    "description": "Optional timeout in seconds (max 120). \
-                                    If the command runs longer, it is killed \
-                                    and partial output is returned."
+                    "description": "Max execution time in seconds (range: 1-120). Default: 60. The process is killed if exceeded; partial output captured so far is returned. Set shorter for quick commands, longer for builds."
                 }
             },
             "required": ["command"]

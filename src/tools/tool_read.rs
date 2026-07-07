@@ -34,9 +34,20 @@ impl Tool for ReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read a file from the workspace. \
-         Returns file contents with line numbers (like cat -n). \
-         Use optional 'offset' and 'limit' to read a specific range of lines."
+        "Read a file from the workspace and return its contents with line numbers \
+         (like `cat -n`). Each output line is prefixed with a 6-digit right-aligned \
+         number followed by a tab.\n\n\
+         IMPORTANT: Read a file BEFORE editing or writing to it — accurate edits \
+         depend on seeing the file's actual current contents. Do NOT re-read a file \
+         you just wrote or edited; the write/edit tool would have errored if the \
+         change failed, and re-reading wastes context.\n\n\
+         When to use: inspecting file contents, reading source code, checking \
+         configuration, verifying code before making edits.\n\n\
+         When NOT to use: finding files by name (use glob), searching text across \
+         files (use grep), listing directory contents (use ls), verifying a completed \
+         write/edit (trust the tool result).\n\n\
+         For large files, start with limit=100 and increase if needed to avoid \
+         flooding the conversation with irrelevant content."
     }
 
     fn parameters(&self) -> Value {
@@ -45,15 +56,15 @@ impl Tool for ReadTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Path to the file to read, relative to workspace root"
+                    "description": "Path to the file, relative to workspace root. Must be a file (not a directory). Always use forward slashes."
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "Line number to start reading from (1-indexed, optional)"
+                    "description": "Line to start reading from (1-indexed). Omit to start at line 1."
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of lines to read (optional)"
+                    "description": "Maximum lines to return. Omit for the full file. For large files, set to 100-200 to avoid flooding context."
                 }
             },
             "required": ["file_path"],

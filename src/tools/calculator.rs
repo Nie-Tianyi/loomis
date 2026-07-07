@@ -54,9 +54,19 @@ impl Tool for CalculatorTool {
     }
 
     fn description(&self) -> &str {
-        "Evaluate a mathematical expression. \
-         Supports +, -, *, /, parentheses, and decimal numbers \
-         (e.g. \"2 + 3 * (4 - 1)\")."
+        "Evaluate a mathematical expression and return the numeric result. Supports \
+         standard arithmetic with correct operator precedence.\n\n\
+         Supported operators: + (addition), - (subtraction), * (multiplication), \
+         / (division), () (grouping), unary + and - (e.g. -5 + 3).\n\
+         Supported numbers: integers and decimals (e.g. 42, 3.14, -0.5).\n\
+         NOT supported: ^ (exponentiation, use repeated multiplication), % (modulo), \
+         sqrt/sin/cos/log (no functions), hex/binary/octal literals, variables.\n\n\
+         Example expressions:\n\
+         - `2 + 3 * 4` → 14 (multiplication before addition)\n\
+         - `(100 - 20) / 4` → 20 (parentheses first)\n\
+         - `-5 + 3.14 * 2` → 1.28 (unary minus + decimal)\n\n\
+         When NOT to use: complex math beyond basic arithmetic, unit conversions \
+         requiring lookup tables, statistical analysis (use shell + a script)."
     }
 
     fn parameters(&self) -> Value {
@@ -65,7 +75,7 @@ impl Tool for CalculatorTool {
             "properties": {
                 "expression": {
                     "type": "string",
-                    "description": "A mathematical expression to evaluate"
+                    "description": "A mathematical expression using +, -, *, /, parentheses, and decimal numbers. Examples: '2 + 3 * 4', '(100 - 20) / 4', '-5 + 3.14 * 2'. No functions, no variables, no exponentiation."
                 }
             },
             "required": ["expression"],

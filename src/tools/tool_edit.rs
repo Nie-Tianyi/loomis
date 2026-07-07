@@ -38,9 +38,18 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &str {
-        "Replace lines in a file by line number. \
-         Provide start_line (1-indexed), end_line (inclusive), and new_content. \
-         Passing empty new_content deletes the lines."
+        "Replace a specific range of lines in a file by line number. \
+         start_line and end_line are 1-indexed and inclusive (e.g. start=3, end=5 \
+         replaces lines 3, 4, and 5). Pass empty new_content to delete the range.\n\n\
+         IMPORTANT: Always read the file first to get accurate line numbers. The \
+         line numbers you provide MUST match the file's current state — stale line \
+         numbers from memory or a prior read will corrupt the file.\n\n\
+         When to use: modifying a few lines of an existing file, deleting lines, \
+         inserting lines at a specific position.\n\n\
+         When NOT to use: creating a new file (use write), replacing the entire file \
+         (use write — simpler and less error-prone).\n\n\
+         Return format: 'Edited {file_path}: replaced lines {start}-{end} with {N} \
+         new lines'."
     }
 
     fn parameters(&self) -> Value {
@@ -49,19 +58,19 @@ impl Tool for EditTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Path to the file to edit, relative to workspace root"
+                    "description": "Path to the file to edit, relative to workspace root. Must be an existing file. Always use forward slashes."
                 },
                 "start_line": {
                     "type": "integer",
-                    "description": "First line to replace (1-indexed, inclusive)"
+                    "description": "First line to replace (1-indexed, inclusive). MUST match the file's current state — always read the file first to get accurate line numbers."
                 },
                 "end_line": {
                     "type": "integer",
-                    "description": "Last line to replace (1-indexed, inclusive)"
+                    "description": "Last line to replace (1-indexed, inclusive). Must be >= start_line. Same line number as start_line to replace a single line."
                 },
                 "new_content": {
                     "type": "string",
-                    "description": "New text to insert in place of the replaced lines"
+                    "description": "Replacement text to insert in place of the selected lines. Pass empty string to delete the line range. Use \\n for multiple lines."
                 }
             },
             "required": ["file_path", "start_line", "end_line", "new_content"],

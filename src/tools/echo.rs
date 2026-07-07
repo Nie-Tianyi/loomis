@@ -44,7 +44,13 @@ impl Tool for EchoTool {
     }
 
     fn description(&self) -> &str {
-        "Returns the input text as-is. Useful for testing tool-use loops."
+        "Echo the input text back unchanged. This is a no-op tool that exists solely \
+         for testing and debugging the agent's tool-dispatch loop.\n\n\
+         IMPORTANT: This tool has no practical use for real work. Do NOT call it in \
+         normal conversation — it does nothing useful.\n\n\
+         When to use: ONLY for verifying that the tool-call pipeline works correctly \
+         during development or debugging.\n\n\
+         When NOT to use: any actual task or user request."
     }
 
     fn parameters(&self) -> Value {
@@ -53,7 +59,7 @@ impl Tool for EchoTool {
             "properties": {
                 "text": {
                     "type": "string",
-                    "description": "The text to echo back"
+                    "description": "The text to echo back verbatim. Only useful for testing the tool-call pipeline."
                 }
             },
             "required": ["text"],
@@ -79,7 +85,7 @@ mod tests {
 
     #[test]
     fn test_description() {
-        assert!(EchoTool.description().contains("Returns"));
+        assert!(EchoTool.description().contains("no-op"));
     }
 
     #[test]

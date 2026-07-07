@@ -31,9 +31,16 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write content to a file in the workspace. \
-         Creates the file if it does not exist; overwrites it if it does. \
-         Parent directories are created automatically."
+        "Write content to a file in the workspace. Creates the file if it does not \
+         exist; silently overwrites if it does. Parent directories are created \
+         automatically.\n\n\
+         IMPORTANT: Read the file first before overwriting, so you understand the \
+         current state and don't accidentally destroy work.\n\n\
+         When to use: creating a new file, replacing an entire file's contents, \
+         writing a file that does not yet exist.\n\n\
+         When NOT to use: modifying part of a file (use edit), appending (use shell \
+         with >>), checking if a file exists (use ls or glob).\n\n\
+         Return format: 'Wrote {N} bytes to {file_path}'."
     }
 
     fn parameters(&self) -> Value {
@@ -42,11 +49,11 @@ impl Tool for WriteTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Path to write to, relative to workspace root"
+                    "description": "Path to write to, relative to workspace root. Parent directories are created automatically. Always use forward slashes."
                 },
                 "content": {
                     "type": "string",
-                    "description": "Content to write to the file"
+                    "description": "The full content to write. Multi-line text is supported via \\n newlines. CAUTION: existing content at this path is silently overwritten — read the file first."
                 }
             },
             "required": ["file_path", "content"],

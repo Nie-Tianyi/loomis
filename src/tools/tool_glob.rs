@@ -31,9 +31,21 @@ impl Tool for GlobTool {
     }
 
     fn description(&self) -> &str {
-        "Find files matching a glob pattern. \
-         Returns a sorted list of relative file paths. \
-         Supports ** for recursive matching (e.g., '**/*.rs', 'src/**/*.rs')."
+        "Find files matching a glob pattern. Returns a sorted list of relative file \
+         paths, one per line. Supports `**` for recursive directory matching.\n\n\
+         When to use: finding files by name pattern (e.g. all .rs files), discovering \
+         project structure before reading, checking if a file exists without knowing \
+         its exact path.\n\n\
+         When NOT to use: searching file contents (use grep), listing a single \
+         directory (use ls — more readable output for one directory), reading a file \
+         at a known path (use read directly).\n\n\
+         Pattern examples:\n\
+         - `**/*.rs` — all Rust files recursively\n\
+         - `src/**/*.rs` — Rust files under src/ only\n\
+         - `*.toml` — files in workspace root only (no recursion)\n\
+         - `src/tui/*.rs` — files directly in src/tui/, non-recursive\n\n\
+         Returns 'No files matched.' when nothing matches. Always use forward \
+         slashes; backslashes are not valid glob separators."
     }
 
     fn parameters(&self) -> Value {
@@ -42,7 +54,7 @@ impl Tool for GlobTool {
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "Glob pattern to match files, e.g. '**/*.rs' or 'src/*.md'"
+                    "description": "Glob pattern relative to workspace root. Use ** for recursive matching, * for any name segment, ? for single character. Examples: '**/*.rs', 'src/**/*.rs', '*.toml'. Always use forward slashes; backslashes are not valid."
                 }
             },
             "required": ["pattern"],

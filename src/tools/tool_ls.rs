@@ -33,9 +33,23 @@ impl Tool for LsTool {
     }
 
     fn description(&self) -> &str {
-        "List the contents of a directory in the workspace. \
-         Returns entry names, types (file/dir/symlink), and sizes in bytes. \
-         Directories are listed first. Omit the path argument to list the workspace root."
+        "List the contents of a directory in the workspace. Entries are shown with \
+         type, size, and name. Directories are listed first, then files. Sizes use \
+         human-readable format (B, K, M, G).\n\n\
+         Output format:\n\
+         ```\n\
+         d        -  dir_name/\n\
+         -    1.2 K  file_name.rs\n\
+         -    256 B  another_file.md\n\
+         ```\n\
+         Column 1: d=directory, -=file, l=symlink. Column 2: size.\n\n\
+         When to use: exploring project structure, checking what is in a directory \
+         before reading or editing, verifying that a file or directory exists.\n\n\
+         When NOT to use: finding files by pattern (use glob — sorted, recursive, \
+         cleaner for pattern-based search), searching content (use grep), reading a \
+         file (use read).\n\n\
+         Omit the path argument to list the workspace root. Returns '(empty \
+         directory)' when the directory has no entries."
     }
 
     fn parameters(&self) -> Value {
@@ -44,7 +58,7 @@ impl Tool for LsTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Directory path relative to workspace root. Omit for root."
+                    "description": "Directory to list, relative to workspace root. Omit, pass empty string, or pass '.' to list the workspace root. Must be a directory — passing a file path returns an error."
                 }
             },
             "required": [],

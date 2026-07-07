@@ -33,9 +33,21 @@ impl Tool for GrepTool {
     }
 
     fn description(&self) -> &str {
-        "Search file contents using a regular expression. \
-         Returns file path, line number, and line content for each match. \
-         Optionally filter files with a glob pattern."
+        "Search file contents using a regular expression. Returns every matching \
+         line with its file path and line number: `{path}:{line}: {content}`. Use \
+         `path_glob` to limit the search to specific files.\n\n\
+         When to use: finding where a function, type, or variable is defined or used; \
+         searching for error messages or configuration keys; locating all occurrences \
+         of a pattern before refactoring.\n\n\
+         When NOT to use: finding files by name (use glob), reading a file's contents \
+         (use read), searching a single known file (read it and scan — grep searches \
+         ALL files and may return noise).\n\n\
+         Pattern examples:\n\
+         - `fn main` — literal substring match\n\
+         - `pub struct \\w+` — regex for struct definitions\n\
+         - `TODO|FIXME` — alternation\n\
+         - `(?i)error` — case-insensitive (use (?i) prefix)\n\n\
+         Returns 'No matches found.' when nothing matches."
     }
 
     fn parameters(&self) -> Value {
@@ -44,11 +56,11 @@ impl Tool for GrepTool {
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "Regular expression to search for"
+                    "description": "Regular expression to search for. Rust regex syntax. Examples: 'fn main', 'pub struct \\w+', 'TODO|FIXME', '(?i)error' for case-insensitive."
                 },
                 "path_glob": {
                     "type": "string",
-                    "description": "Optional glob pattern to filter files to search, e.g. 'src/**/*.rs'. Defaults to '**/*'."
+                    "description": "Optional glob to limit which files to search. Default: all text files. Example: 'src/**/*.rs' to search only Rust sources. Use when searching broadly returns too much noise."
                 }
             },
             "required": ["pattern"],
