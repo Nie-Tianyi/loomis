@@ -44,6 +44,7 @@ mod tool_glob;
 mod tool_grep;
 mod tool_ls;
 mod tool_read;
+mod tool_shell;
 mod tool_write;
 
 pub use calculator::CalculatorTool;
@@ -58,4 +59,5 @@ pub use tool_glob::GlobTool;
 pub use tool_grep::GrepTool;
 pub use tool_ls::LsTool;
 pub use tool_read::ReadTool;
+pub use tool_shell::ShellTool;
 pub use tool_write::WriteTool;

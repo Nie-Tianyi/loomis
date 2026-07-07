@@ -251,6 +251,19 @@ async fn agent_handler(
                 }
             }
 
+            TuiCommand::ShellConfirmation {
+                tool_call_id,
+                approved,
+            } => {
+                // Relay user's decision to the agent via the oneshot channel.
+                if let Some(pc) = agent.pending_confirmations() {
+                    let mut map = pc.lock().unwrap();
+                    if let Some(sender) = map.remove(&tool_call_id) {
+                        let _ = sender.send(approved);
+                    }
+                }
+            }
+
             TuiCommand::Exit => {
                 if let Some(h) = current_run.take() {
                     h.abort();

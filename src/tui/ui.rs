@@ -323,6 +323,52 @@ fn message_to_lines(msg: &ChatMessage, area_width: u16) -> Vec<Line<'_>> {
                 .collect()
         }
 
+        ChatMessage::ShellConfirm {
+            command,
+            responded,
+            timestamp,
+            ..
+        } => {
+            let mut lines = Vec::new();
+            if *responded {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{timestamp} "), ts_style),
+                    Span::styled(
+                        "✓ ",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("Shell: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(command.clone(), Style::default().fg(Color::White)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{timestamp} "), ts_style),
+                    Span::styled(
+                        "⚡ Shell command requested:",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("       "),
+                    Span::styled(command.clone(), Style::default().fg(Color::Cyan)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("       "),
+                    Span::styled(
+                        "Run this command? (Y/n)",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+            lines
+        }
+
         ChatMessage::Error { content, timestamp } => {
             let error_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
             let content_lines: Vec<&str> = content.lines().collect();
@@ -731,6 +777,15 @@ fn estimate_lines(msg: &ChatMessage, width: u16) -> usize {
             }
         },
         ChatMessage::System { content, .. } => format!("  ℹ {content}"),
+        ChatMessage::ShellConfirm {
+            command, responded, ..
+        } => {
+            if *responded {
+                format!("  ✓ Shell: {command}")
+            } else {
+                format!("  ⚡ Shell: {command}\n       Run this command? (Y/n)")
+            }
+        }
         ChatMessage::Error { content, .. } => content.clone(),
     };
 

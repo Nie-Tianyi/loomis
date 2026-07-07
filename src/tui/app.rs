@@ -34,6 +34,13 @@ pub enum ChatMessage {
     },
     /// System-level message (slash commands, info).
     System { content: String, timestamp: String },
+    /// A shell command awaiting user confirmation.
+    ShellConfirm {
+        tool_call_id: String,
+        command: String,
+        responded: bool,
+        timestamp: String,
+    },
     /// Error display — red, bold.
     Error { content: String, timestamp: String },
 }
@@ -74,6 +81,11 @@ pub enum TuiCommand {
     CancelGeneration,
     /// Reset conversation, preserving system prompt.
     ClearConversation,
+    /// User responded to a shell confirmation prompt.
+    ShellConfirmation {
+        tool_call_id: String,
+        approved: bool,
+    },
     /// Signal the agent thread to exit.
     Exit,
 }
@@ -213,6 +225,18 @@ impl App {
                 }
                 // Tool results mean we're still between tool calls —
                 // keep `streaming = true` so the loop looks correct.
+            }
+
+            AgentEvent::ConfirmShell {
+                tool_call_id,
+                command,
+            } => {
+                self.messages.push(ChatMessage::ShellConfirm {
+                    tool_call_id,
+                    command,
+                    responded: false,
+                    timestamp: ChatMessage::now_timestamp(),
+                });
             }
 
             AgentEvent::Done => {
@@ -466,6 +490,15 @@ impl App {
 
             // ── Character insertion ────────────────────────────
             KeyCode::Char(c) => {
+                // If there's a pending shell confirmation, intercept Y/n
+                if self.has_pending_shell_confirm() {
+                    return match c {
+                        'Y' | 'y' => self.handle_shell_confirmation(true),
+                        'n' | 'N' => self.handle_shell_confirmation(false),
+                        _ => None, // ignore other chars while waiting
+                    };
+                }
+
                 if self.streaming {
                     return None;
                 }
@@ -552,6 +585,7 @@ impl App {
                     "  Up/Down      — input history / multi-line nav",
                     "  Ctrl+C       — cancel generation / exit",
                     "  Esc          — cancel generation",
+                    "  Y / n        — approve / deny shell command",
                 ]
                 .join("\n");
                 self.messages.push(ChatMessage::System {
@@ -599,6 +633,49 @@ impl App {
             let next = self.next_char_boundary();
             self.input.drain(self.input_cursor..next);
         }
+    }
+}
+
+// ── Shell Confirmation Helpers ────────────────────────────────────────────────────
+
+impl App {
+    /// Returns `true` if there is an unresponded [`ChatMessage::ShellConfirm`]
+    /// in the message list.
+    fn has_pending_shell_confirm(&self) -> bool {
+        self.messages.iter().rev().any(|msg| {
+            matches!(
+                msg,
+                ChatMessage::ShellConfirm {
+                    responded: false,
+                    ..
+                }
+            )
+        })
+    }
+
+    /// Marks the last unresponded [`ChatMessage::ShellConfirm`] as
+    /// responded and returns a [`TuiCommand::ShellConfirmation`] with
+    /// the user's answer.
+    ///
+    /// Returns `None` if no unresponded confirmation is found (e.g.
+    /// because the user pressed Y/n when nothing was pending).
+    fn handle_shell_confirmation(&mut self, approved: bool) -> Option<TuiCommand> {
+        for msg in self.messages.iter_mut().rev() {
+            if let ChatMessage::ShellConfirm {
+                tool_call_id,
+                responded,
+                ..
+            } = msg
+                && !*responded
+            {
+                *responded = true;
+                return Some(TuiCommand::ShellConfirmation {
+                    tool_call_id: tool_call_id.clone(),
+                    approved,
+                });
+            }
+        }
+        None
     }
 }
 

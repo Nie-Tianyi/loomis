@@ -13,14 +13,17 @@
 //!
 //! Set `DEEPSEEK_API` in `.env` before running.
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use agent_oxide::core::agent::{Agent, AgentEvent};
+use agent_oxide::core::agent::{Agent, AgentEvent, PendingConfirmations};
 use agent_oxide::core::client::{DeepSeekClient, Message, Role};
 use agent_oxide::memory::Memory;
 use agent_oxide::tools::{
-    CalculatorTool, GlobTool, GrepTool, LsTool, ReadTool, ToolRegistry, WorkspaceFs, WriteTool,
+    CalculatorTool, GlobTool, GrepTool, LsTool, ReadTool, ShellTool, ToolRegistry, WorkspaceFs,
+    WriteTool,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -98,11 +101,18 @@ async fn main() {
     registry.register(Arc::new(GlobTool::new(workspace.clone())));
     registry.register(Arc::new(GrepTool::new(workspace.clone())));
     registry.register(Arc::new(LsTool::new(workspace.clone())));
+    registry.register(Arc::new(ShellTool::new(
+        cwd.clone(),
+        Duration::from_secs(30),
+    )));
 
     // ── Collect tool names for the TUI /stats command ───────────────
     let tool_names: Vec<String> = registry.iter().map(|(name, _)| name.to_string()).collect();
 
     let registry = Arc::new(registry);
+
+    // ── Shell confirmation state (shared between TUI and agent) ────
+    let pending_confirmations: PendingConfirmations = Arc::new(Mutex::new(HashMap::new()));
 
     // ── Agent ───────────────────────────────────────────────────────
     let model = std::env::var("DEFAULT_PRO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
@@ -110,7 +120,8 @@ async fn main() {
     let memory = Arc::new(std::sync::RwLock::new(Memory::new()));
     let agent = Agent::new(client, memory.clone(), registry)
         .with_model(&model)
-        .with_max_steps(MAX_STEPS);
+        .with_max_steps(MAX_STEPS)
+        .with_pending_confirmations(pending_confirmations);
 
     // ── Seed system prompt ──────────────────────────────────────────
     {
@@ -295,6 +306,14 @@ async fn render_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>
             AgentEvent::ToolResult { name, output, .. } => {
                 let preview = truncate_for_display(&output, 150);
                 println!("\n  ✓ {name} → {preview}");
+            }
+
+            AgentEvent::ConfirmShell { command, .. } => {
+                // In CLI mode, shell commands execute unconditionally
+                // (no user to ask). The agent doesn't send this event
+                // when pending_confirmations is None, but we handle it
+                // defensively.
+                println!("\n  ⚡ Shell: {command}");
             }
 
             AgentEvent::Done => {

@@ -89,11 +89,12 @@
 //! `finish_reason` set, or `data: [DONE]`).
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::core::client::{
     DeepSeekChunk, DeepSeekClient, DeepSeekError, DeepSeekRequest, DeepSeekResponse,
@@ -101,6 +102,18 @@ use crate::core::client::{
 };
 use crate::memory::SharedMemory;
 use crate::tools::ToolRegistry;
+
+// ── PendingConfirmations ────────────────────────────────────────────────────────
+
+/// Shared state for pending shell-command confirmation requests.
+///
+/// Maps `tool_call_id` → `oneshot::Sender<bool>`. The agent inserts a sender
+/// before emitting [`AgentEvent::ConfirmShell`] and then awaits the receiver.
+/// The TUI thread (via [`crate::tui::event::agent_handler`]) completes the
+/// sender when the user presses Y or n.
+///
+/// `true` = approved, `false` = denied.
+pub type PendingConfirmations = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
 
 // ── AgentError ──────────────────────────────────────────────────────────────────
 
@@ -191,6 +204,12 @@ pub enum AgentEvent {
         id: String,
         name: String,
         output: String,
+    },
+    /// The agent wants to execute a shell command and needs user approval.
+    /// The TUI renders a confirmation prompt; the user presses Y or n.
+    ConfirmShell {
+        tool_call_id: String,
+        command: String,
     },
     /// The agent loop completed — the model produced a final text response.
     /// The final content is returned by [`Agent::run_with_events`].
@@ -350,6 +369,9 @@ pub struct Agent {
     max_retries: usize,
     streaming: bool,
     compact_model: Option<String>,
+
+    // ── Shell confirmation (optional) ──
+    pending_confirmations: Option<PendingConfirmations>,
 }
 
 // ── Construction ────────────────────────────────────────────────────────────────
@@ -385,6 +407,7 @@ impl Agent {
             max_retries: 3,
             streaming: true,
             compact_model: None,
+            pending_confirmations: None,
         }
     }
 
@@ -452,6 +475,22 @@ impl Agent {
         self
     }
 
+    /// Enables user confirmation for shell commands.
+    ///
+    /// When set, any tool call to `"shell"` will pause the agent loop and
+    /// wait for the user to approve (Y) or deny (n) via the TUI. Without
+    /// this, shell commands execute unconditionally (the `--no-tui` path).
+    ///
+    /// ```ignore
+    /// let pc = Arc::new(Mutex::new(HashMap::new()));
+    /// let agent = Agent::new(client, mem, reg)
+    ///     .with_pending_confirmations(pc);
+    /// ```
+    pub fn with_pending_confirmations(mut self, pc: PendingConfirmations) -> Self {
+        self.pending_confirmations = Some(pc);
+        self
+    }
+
     /// Returns `true` if the agent is in streaming mode (SSE).
     ///
     /// When `true`, [`run_loop`](Self::run_loop) dispatches to
@@ -469,6 +508,14 @@ impl Agent {
     /// Returns the maximum number of loop iterations allowed.
     pub fn max_steps(&self) -> usize {
         self.max_steps
+    }
+
+    /// Returns a reference to the pending-confirmations map, if configured.
+    ///
+    /// Used by [`crate::tui::event::agent_handler`] to relay user
+    /// confirmation responses back to the agent.
+    pub fn pending_confirmations(&self) -> Option<&PendingConfirmations> {
+        self.pending_confirmations.as_ref()
     }
 }
 
@@ -587,8 +634,15 @@ impl Agent {
             let (content, tool_calls) = acc.into_parts();
 
             if !tool_calls.is_empty() {
-                // Model wants to use tools — execute them all
-                let results = self.execute_tool_calls(&tool_calls);
+                // Model wants to use tools — execute them all.
+                // If shell confirmation is configured, shell tool calls
+                // will pause for user approval before executing.
+                let results = if let Some(ref pc) = self.pending_confirmations {
+                    self.execute_tool_calls_with_confirmations(&tool_calls, pc, tx.as_ref())
+                        .await
+                } else {
+                    self.execute_tool_calls(&tool_calls)
+                };
 
                 // Emit ToolResult events
                 if let Some(ref tx) = tx {
@@ -737,7 +791,13 @@ impl Agent {
                     }
                 }
 
-                let results = self.execute_tool_calls(&tool_calls);
+                // Execute tools — with shell confirmation if configured.
+                let results = if let Some(ref pc) = self.pending_confirmations {
+                    self.execute_tool_calls_with_confirmations(&tool_calls, pc, tx.as_ref())
+                        .await
+                } else {
+                    self.execute_tool_calls(&tool_calls)
+                };
 
                 // Emit ToolResult events
                 if let Some(ref tx) = tx {
@@ -827,6 +887,101 @@ impl Agent {
                 Message::tool_result(&tc.id, output)
             })
             .collect()
+    }
+
+    /// Executes tool calls with optional user confirmation for shell commands.
+    ///
+    /// When `pending` is provided (TUI mode), any tool call named `"shell"`
+    /// is intercepted: the agent sends a [`AgentEvent::ConfirmShell`] to the
+    /// TUI, then awaits the user's response via a oneshot channel. Non-shell
+    /// tools execute immediately as usual.
+    ///
+    /// When `pending` is `None` (CLI mode), all tools execute unconditionally.
+    async fn execute_tool_calls_with_confirmations(
+        &self,
+        tool_calls: &[ToolCall],
+        pending: &PendingConfirmations,
+        tx: Option<&mpsc::UnboundedSender<AgentEvent>>,
+    ) -> Vec<Message> {
+        let mut results = Vec::with_capacity(tool_calls.len());
+
+        for tc in tool_calls {
+            if tc.function.name == "shell" {
+                // Extract the command arg for display to the user.
+                let command = Self::extract_shell_command_for_display(&tc.function.arguments);
+
+                // ── Set up oneshot channel ─────────────────────
+                let (confirm_tx, confirm_rx) = oneshot::channel();
+                {
+                    let mut map = pending.lock().unwrap();
+                    map.insert(tc.id.clone(), confirm_tx);
+                }
+
+                // ── Notify TUI ────────────────────────────────
+                if let Some(tx) = tx {
+                    let _ = tx.send(AgentEvent::ConfirmShell {
+                        tool_call_id: tc.id.clone(),
+                        command: command.clone(),
+                    });
+                }
+
+                // ── Wait for user response ────────────────────
+                // 5-minute safety timeout prevents a hung TUI from
+                // blocking the agent indefinitely.
+                let approved = tokio::time::timeout(Duration::from_secs(300), confirm_rx)
+                    .await
+                    .map(|r| r.unwrap_or(false))
+                    .unwrap_or(false);
+
+                // ── Cleanup ──────────────────────────────────
+                {
+                    let mut map = pending.lock().unwrap();
+                    map.remove(&tc.id);
+                }
+
+                // ── Execute or deny ──────────────────────────
+                if approved {
+                    let output = self
+                        .registry
+                        .execute(&tc.function.name, &tc.function.arguments);
+                    let result = match output {
+                        Some(Ok(s)) => s,
+                        Some(Err(e)) => format!("Error: {e}"),
+                        None => format!("Tool '{}' not found", tc.function.name),
+                    };
+                    results.push(Message::tool_result(&tc.id, result));
+                } else {
+                    results.push(Message::tool_result(
+                        &tc.id,
+                        "User denied the command. Inform the user that the \
+                         command was not executed.",
+                    ));
+                }
+            } else {
+                // Non-shell tool — execute unconditionally.
+                let output = self
+                    .registry
+                    .execute(&tc.function.name, &tc.function.arguments);
+                let result = match output {
+                    Some(Ok(s)) => s,
+                    Some(Err(e)) => format!("Error: {e}"),
+                    None => format!("Tool '{}' not found", tc.function.name),
+                };
+                results.push(Message::tool_result(&tc.id, result));
+            }
+        }
+
+        results
+    }
+
+    /// Extracts the `command` field from a JSON arguments string for
+    /// display in the confirmation prompt. Returns the raw args on
+    /// parse failure so the user can still see what was requested.
+    fn extract_shell_command_for_display(args: &str) -> String {
+        serde_json::from_str::<serde_json::Value>(args)
+            .ok()
+            .and_then(|v| v.get("command").and_then(|c| c.as_str().map(String::from)))
+            .unwrap_or_else(|| args.to_string())
     }
 }
 
