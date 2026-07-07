@@ -27,7 +27,7 @@ This is a **Rust agent framework** built from scratch (Rust 2024 edition, Tokio 
 | `src/core/agent.rs` | Agent loop — `run_loop()` (fire-and-forget) and `run_with_events()` (real-time streaming via channel) with `max_steps` guard |
 | `src/tui/` | ratatui-based chat interface — scrollable history, streaming tokens, styled tool calls, slash commands |
 | `src/memory/mod.rs` | Conversation memory — `Memory`, `SharedMemory`, `MemoryBuilder`, two-phase compaction with `MemoryError` |
-| `src/tools/` | Tool system — `Tool` trait, `ToolRegistry`, `ToolError`, `CalculatorTool`, `EchoTool`, and file-editing tools (`ReadTool`, `WriteTool`, `EditTool`, `GlobTool`, `GrepTool`, `LsTool`) |
+| `src/tools/` | Tool system — `Tool` trait, `ToolRegistry`, `ToolError`, `CalculatorTool`, `EchoTool`, `ShellTool`, and file-editing tools (`ReadTool`, `WriteTool`, `EditTool`, `GlobTool`, `GrepTool`, `LsTool`) |
 | `src/lib.rs` | Library crate root — re-exports `core`, `memory`, `tools`, `tui` |
 | `src/main.rs` | Binary entry point — TUI by default, `--no-tui` for legacy line-based CLI |
 
@@ -56,15 +56,16 @@ HTTP chunk → buffer → find_event_end (\n\n) → trim_trailing_newlines → e
 
 | Type | Purpose |
 | ---- | ------- |
-| `Agent` | `{ client: DeepSeekClient, memory: SharedMemory, registry: Arc<ToolRegistry>, model, max_steps, streaming }` |
-| `AgentEvent` | `Token(String)` / `ReasoningToken(String)` / `ToolCallStart { id, name }` / `ToolCallArgsDelta { id, delta }` / `ToolResult { id, name, output }` / `Done` — sent through `mpsc::UnboundedSender` during streaming |
+| `Agent` | `{ client: DeepSeekClient, memory: SharedMemory, registry: Arc<ToolRegistry>, model, max_steps, streaming, pending_confirmations }` |
+| `AgentEvent` | `Token(String)` / `ReasoningToken(String)` / `ToolCallStart { id, name }` / `ToolCallArgsDelta { id, delta }` / `ToolResult { id, name, output }` / `ConfirmShell { tool_call_id, command }` / `Done` — sent through `mpsc::UnboundedSender` during streaming |
 | `AgentError` | `DeepSeek(String)` / `Tool { name, error }` |
+| `PendingConfirmations` | `Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>` — shared state for user shell-command approval handshake |
 
 **Core API**:
 
 - `run_loop()` — fire-and-forget: runs the agent until `max_steps` is reached or the model returns no tool calls. Returns the final text content.
 - `run_with_events(tx: UnboundedSender<AgentEvent>)` — streaming variant: sends real-time events as they arrive from the model. The caller consumes events from the receiver side.
-- Builder methods: `with_model()`, `with_max_steps()`, `streaming()`.
+- Builder methods: `with_model()`, `with_max_steps()`, `streaming()`, `with_pending_confirmations()`.
 - **Streaming loop**: sends `Token`/`ReasoningToken` for text deltas, `ToolCallStart` when a tool call begins, `ToolCallArgsDelta` as argument chunks arrive, executes the tool after full args are assembled, sends `ToolResult`, and finally `Done`. On error, sends an error token then `Done`.
 
 ### Memory module (`src/memory/mod.rs`)
@@ -110,6 +111,7 @@ Split by concern, mirroring `core/client/`:
 | `tool_glob.rs` | `GlobTool` — finds files matching a glob pattern, returns sorted relative paths |
 | `tool_grep.rs` | `GrepTool` — regex search in files, with optional `path_glob` to filter files |
 | `tool_ls.rs` | `LsTool` — lists directory contents with type/size, directories first |
+| `tool_shell.rs` | `ShellTool` — executes shell commands in workspace with configurable timeout. In TUI mode, every invocation prompts the user for approval (Y/n) via an async oneshot handshake before execution |
 
 **Tool trait** — sync, object-safe (no `async_trait` crate needed):
 
@@ -152,7 +154,7 @@ cmd_tx ───────── TuiCommand ──────→ cmd_rx
 agent_rx ←────── AgentEvent ─────── agent_tx
 ```
 
-**`ChatMessage` variants**: `User`, `Assistant`, `Reasoning`, `ToolCall { id, name, args, state }`, `System`, `Error` — each rendered with distinct styling (see `message_to_lines()` in ui.rs).
+**`ChatMessage` variants**: `User`, `Assistant`, `Reasoning`, `ToolCall { id, name, args, state }`, `System`, `ShellConfirm { tool_call_id, command, responded }`, `Error` — each rendered with distinct styling (see `message_to_lines()` in ui.rs).
 
 **`apply_event` streaming state machine**:
 
@@ -161,9 +163,10 @@ agent_rx ←────── AgentEvent ─────── agent_tx
 - `ToolCallStart { id, name }` → push new `ToolCall { state: Running }`
 - `ToolCallArgsDelta { id, delta }` → find by id, append args
 - `ToolResult { id, name, output }` → find by id, set `Complete(output)`
+- `ConfirmShell { tool_call_id, command }` → push new `ShellConfirm { responded: false }`
 - `Done` → set `streaming = false`
 
-**Keybindings**: Enter (submit), Ctrl+C (cancel/exit), Esc (cancel), Ctrl+D (exit on empty), PgUp/PgDown (scroll), Up/Down (history), Left/Right/Home/End (cursor).
+**Keybindings**: Enter (submit), Ctrl+C (cancel/exit), Esc (cancel), Ctrl+D (exit on empty), PgUp/PgDown (scroll), Up/Down (history), Left/Right/Home/End (cursor), Y/n (approve/deny shell commands).
 
 **Slash commands** (handled locally): `/exit`, `/clear`, `/stats`, `/tools`, `/help`.
 
@@ -179,6 +182,7 @@ agent_rx ←────── AgentEvent ─────── agent_tx
 - **WorkspaceFs sandbox**: All file-editing tools hold `Arc<WorkspaceFs>` and delegate to it. `resolve()` canonicalizes every path and rejects anything outside `workspace_root`. `FsError` (I/O layer) is mapped to `ToolError` (LLM-visible) by each tool's `map_fs_err()`. The `normalize_partial()` helper handles non-existent paths by walking up to the first existing ancestor.
 - **Async bridge (TUI)**: TUI event loop runs synchronously on the main thread; agent runs in a `tokio::spawn` background task. `mpsc::unbounded_channel` bridges them. `try_recv` drains agent events after each render frame; a 50ms poll timeout allows the runtime to make progress. Agent events are collected into a `Vec` and applied after `terminal.draw()` releases its immutable borrow.
 - **Cancellation**: `agent_handler` tracks the current agent's `tokio::task::JoinHandle`. On `CancelGeneration`, it aborts the handle and sends a synthetic `[Cancelled]` token + `Done`. On `Exit`, it aborts and breaks the handler loop.
+- **Shell confirmation handshake**: When the agent detects a `"shell"` tool call, it pauses the async loop and awaits user approval via a oneshot channel. The agent inserts a `Sender<bool>` into the shared `PendingConfirmations` map (keyed by `tool_call_id`), emits `AgentEvent::ConfirmShell` to the TUI, then awaits the receiver. The TUI renders a yellow prompt; on Y/n, it sends `TuiCommand::ShellConfirmation` back. The `agent_handler` looks up the sender and completes it, unblocking the agent. Without confirmation (CLI mode), shell commands execute unconditionally.
 
 ### Roadmap (from README)
 
@@ -188,6 +192,7 @@ The project is in **Phase 1** (MVP). Completed and next:
 - [x] `memory/mod.rs` — conversation context with configurable compaction (`Arc<RwLock<Memory>>`), `MemoryBuilder`, two-phase `drain_for_compact`/`apply_compact`, `compact_with_deepseek` convenience fn
 - [x] `tools/` — `Tool` trait + `ToolRegistry` + `CalculatorTool` + `EchoTool`, split into `mod.rs` / `error.rs` / `tool.rs` / `registry.rs` / `calculator.rs` / `echo.rs`
 - [x] `tools/fs.rs` + file-editing tools — `WorkspaceFs` sandbox + `ReadTool` / `WriteTool` / `EditTool` / `GlobTool` / `GrepTool` / `LsTool`
+- [x] `tools/tool_shell.rs` — `ShellTool` for executing CLI commands with timeout; TUI confirmation via async oneshot handshake (`Y`/`n`)
 - [x] `core/agent.rs` — main loop with `run_loop()` (batch) and `run_with_events()` (streaming via `AgentEvent` channel), `max_steps` guard, tool-call dispatch via `ToolRegistry`
 - [x] `tui/` — ratatui chat interface: scrollable history, real-time token display, styled tool calls, input with cursor/history, slash commands, status bar. Default mode; `--no-tui` for legacy CLI.
 
