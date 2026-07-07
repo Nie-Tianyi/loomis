@@ -17,7 +17,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyEventKind};
+use crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
@@ -146,6 +146,19 @@ fn run_event_loop(
                     app.scroll_offset = 0;
                     app.auto_scroll = true;
                 }
+                Event::Mouse(mouse_event) => match mouse_event.kind {
+                    MouseEventKind::ScrollUp => {
+                        app.scroll_offset = app.scroll_offset.saturating_add(4);
+                        app.auto_scroll = false;
+                    }
+                    MouseEventKind::ScrollDown => {
+                        app.scroll_offset = app.scroll_offset.saturating_sub(4);
+                        if app.scroll_offset == 0 {
+                            app.auto_scroll = true;
+                        }
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }

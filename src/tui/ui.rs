@@ -684,7 +684,7 @@ fn build_status_content(app: &App) -> (String, String, String) {
     let (accent, right) = if app.streaming {
         let indicator = " ⚡ STREAMING ";
         let right = format!(
-            "PgUp/Dn scroll{}  ",
+            "PgUp/Dn/🖱 scroll{}  ",
             if app.scroll_offset > 0 {
                 format!(" ↑{}", app.scroll_offset)
             } else {

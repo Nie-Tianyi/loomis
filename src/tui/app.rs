@@ -581,7 +581,7 @@ impl App {
                     "Keys:",
                     "  Enter        — send message",
                     "  Shift+Enter  — newline",
-                    "  PgUp/PgDown  — scroll chat",
+                    "  PgUp/PgDown/🖱 — scroll chat",
                     "  Up/Down      — input history / multi-line nav",
                     "  Ctrl+C       — cancel generation / exit",
                     "  Esc          — cancel generation",
