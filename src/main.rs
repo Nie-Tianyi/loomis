@@ -29,7 +29,7 @@ use loomis::tools::{
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_MODEL: &str = "deepseek-chat";
-const MAX_STEPS: usize = 15;
+const MAX_STEPS: usize = 50;
 
 const SYSTEM_PROMPT: &str = "\
 You are Loomis, a helpful, accurate coding assistant. You have tools for file operations \
