@@ -31,5 +31,5 @@ mod event;
 mod markdown;
 mod ui;
 
-pub use app::{App, ChatMessage, ToolCallState, TuiCommand};
+pub use app::{App, ChatMessage, ShellOutputState, ToolCallState, TuiCommand};
 pub use event::run;

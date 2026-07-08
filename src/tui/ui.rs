@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::app::{App, ChatMessage, ToolCallState};
+use super::app::{App, ChatMessage, ShellOutputState, ToolCallState};
 use super::markdown::render_markdown;
 
 // ── Layout ───────────────────────────────────────────────────────────────────────
@@ -321,6 +321,53 @@ fn message_to_lines(msg: &ChatMessage, area_width: u16) -> Vec<Line<'_>> {
                     Line::from(spans)
                 })
                 .collect()
+        }
+
+        ChatMessage::ShellOutput {
+            command,
+            state,
+            timestamp,
+        } => {
+            let mut lines = Vec::new();
+            // Header: timestamp + "$ " + command (green/bold)
+            lines.push(Line::from(vec![
+                Span::styled(format!("{timestamp} "), ts_style),
+                Span::styled(
+                    "$ ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(command.as_str(), Style::default().fg(Color::Green)),
+            ]));
+            match state {
+                ShellOutputState::Running => {
+                    // Show a running indicator so the user knows the command
+                    // is in progress (not frozen).
+                    lines.push(Line::from(vec![
+                        Span::raw("       "),
+                        Span::styled(
+                            "Running…",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ]));
+                }
+                ShellOutputState::Complete(output) => {
+                    // Output lines (dim)
+                    for line in output.lines() {
+                        lines.push(Line::from(vec![
+                            Span::raw("       "),
+                            Span::styled(
+                                line,
+                                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                            ),
+                        ]));
+                    }
+                }
+            }
+            lines
         }
 
         ChatMessage::ShellConfirm {
@@ -777,6 +824,10 @@ fn estimate_lines(msg: &ChatMessage, width: u16) -> usize {
             }
         },
         ChatMessage::System { content, .. } => format!("  ℹ {content}"),
+        ChatMessage::ShellOutput { command, state, .. } => match state {
+            ShellOutputState::Running => format!("$ {command}\nRunning…"),
+            ShellOutputState::Complete(output) => format!("$ {command}\n{output}"),
+        },
         ChatMessage::ShellConfirm {
             command, responded, ..
         } => {

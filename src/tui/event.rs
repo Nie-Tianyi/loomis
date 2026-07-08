@@ -14,7 +14,10 @@
 //! ```
 
 use std::io;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyEventKind, MouseEventKind};
@@ -48,6 +51,7 @@ pub fn run(
     memory: SharedMemory,
     tool_names: Vec<String>,
     model: &str,
+    workspace_root: PathBuf,
 ) -> io::Result<()> {
     // ── Create channels ──────────────────────────────────────────────
     let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
@@ -59,6 +63,7 @@ pub fn run(
         memory.clone(),
         cmd_rx,
         agent_tx,
+        workspace_root.clone(),
     ));
 
     // ── Terminal setup ───────────────────────────────────────────────
@@ -82,7 +87,7 @@ pub fn run(
     }));
 
     // ── App state ────────────────────────────────────────────────────
-    let mut app = App::new(model, memory, tool_names);
+    let mut app = App::new(model, memory, tool_names, workspace_root);
 
     // ── Event loop ───────────────────────────────────────────────────
     let result = run_event_loop(&mut terminal, &mut app, agent_rx, &cmd_tx);
@@ -197,6 +202,7 @@ async fn agent_handler(
     memory: SharedMemory,
     mut cmd_rx: UnboundedReceiver<TuiCommand>,
     agent_tx: UnboundedSender<AgentEvent>,
+    workspace_root: PathBuf,
 ) {
     let mut current_run: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -277,6 +283,47 @@ async fn agent_handler(
                 }
             }
 
+            TuiCommand::RunShell(command) => {
+                // Execute the shell command asynchronously — do NOT block
+                // the agent handler or the TUI thread. The command runs
+                // in a blocking thread; when it completes, output is
+                // pushed to memory and sent to the TUI for display.
+                //
+                // Send an immediate "Running" event so the user knows
+                // the command is in progress (not frozen).
+                let _ = agent_tx.send(AgentEvent::ShellRunning {
+                    command: command.clone(),
+                });
+
+                let tx = agent_tx.clone();
+                let mem = memory.clone();
+                let ws = workspace_root.clone();
+                let cmd_for_blocking = command.clone();
+
+                tokio::spawn(async move {
+                    let output = tokio::task::spawn_blocking(move || {
+                        execute_shell_command(&cmd_for_blocking, &ws)
+                    })
+                    .await
+                    .unwrap_or_else(|e| format!("Task panicked: {e}"));
+
+                    // Push into shared memory so the LLM sees it
+                    {
+                        let mut mem = mem.write().unwrap();
+                        mem.push(Message::new(
+                            Role::User,
+                            format!(
+                                "User ran shell command: `{}`\n\nOutput:\n{}",
+                                command, output
+                            ),
+                        ));
+                    }
+
+                    // Send to TUI for display
+                    let _ = tx.send(AgentEvent::ShellOutput { command, output });
+                });
+            }
+
             TuiCommand::Exit => {
                 if let Some(h) = current_run.take() {
                     h.abort();
@@ -285,4 +332,189 @@ async fn agent_handler(
             }
         }
     }
+}
+
+// ── Shell Execution Helper ────────────────────────────────────────────────────────
+
+/// Executes a shell command in the workspace root, capturing stdout and stderr.
+///
+/// On Windows, uses `cmd /C` for near-instant startup (unlike PowerShell which
+/// loads .NET CLR on every invocation). Encoding is handled via
+/// [`decode_windows_stdout`], which tries UTF-8 first and falls back to the
+/// system ANSI code page.
+fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
+    #[cfg(target_os = "windows")]
+    let (shell, shell_arg) = ("cmd", "/C");
+    #[cfg(not(target_os = "windows"))]
+    let (shell, shell_arg) = ("sh", "-c");
+
+    let child = match Command::new(shell)
+        .arg(shell_arg)
+        .arg(command)
+        .current_dir(workspace_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return format!("Failed to spawn command: {e}"),
+    };
+
+    let pid = child.id();
+
+    // Watchdog: polls every 100ms, kills the process if it exceeds the
+    // timeout. An AtomicBool signal lets it exit early when the command
+    // completes quickly — without this, join() would block for the full
+    // timeout duration even for a 15ms `dir`.
+    let done = Arc::new(AtomicBool::new(false));
+    let done_signal = Arc::clone(&done);
+
+    let timeout = Duration::from_secs(30);
+    let watchdog = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if done_signal.load(Ordering::Relaxed) {
+                return; // command finished, no kill needed
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // Timeout reached — best-effort kill.
+        #[cfg(target_os = "windows")]
+        {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+        }
+    });
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => return format!("Failed to wait on command: {e}"),
+    };
+
+    // Signal the watchdog that the command is done, then join.
+    // The watchdog checks the flag every 100ms, so join returns
+    // within 100ms instead of blocking for the full 30s timeout.
+    done.store(true, Ordering::Relaxed);
+    let _ = watchdog.join();
+
+    let stdout = decode_stdout(&output.stdout);
+    let stderr = decode_stdout(&output.stderr);
+    let exit_code = output.status.code();
+
+    let stdout_clean = stdout.trim_end();
+    let stderr_clean = stderr.trim_end();
+
+    let mut result = String::new();
+    if !stdout_clean.is_empty() {
+        result.push_str(stdout_clean);
+    }
+    if !stderr_clean.is_empty() {
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result.push_str(stderr_clean);
+    }
+
+    // If nothing was produced, indicate the command ran
+    if result.is_empty() {
+        match exit_code {
+            Some(0) => result.push_str("(command completed with no output)"),
+            Some(code) => {
+                result.push_str(&format!("(exit code: {code}, no output)"));
+            }
+            None => result.push_str("(process terminated by signal, no output)"),
+        }
+    } else if let Some(code) = exit_code
+        && code != 0
+    {
+        result.push_str(&format!("\n\n[exit code: {code}]"));
+    }
+
+    result
+}
+
+/// Decodes child-process stdout/stderr bytes to a Rust string.
+///
+/// On Windows, many CLI tools (especially cmd built-ins like `dir`, `echo`,
+/// and older programs) output in the system ANSI code page (e.g. GBK/CP936 for
+/// Chinese-locale machines). Modern tools (git, cargo, rustc, python 3.7+)
+/// typically output UTF-8 when stdout is not a TTY.
+///
+/// Strategy: try UTF-8 first. If every byte is valid UTF-8, use it. Otherwise
+/// use the Windows [`GetACP`] code page via [`MultiByteToWideChar`]. On Unix
+/// this is just [`String::from_utf8_lossy`].
+#[cfg(target_os = "windows")]
+fn decode_stdout(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    // Try UTF-8 first — modern tools output valid UTF-8.
+    if let Ok(utf8) = std::str::from_utf8(bytes) {
+        return utf8.to_string();
+    }
+    // Fall back to the system ANSI code page (e.g. CP936 for zh-CN).
+    unsafe {
+        let acp = GetACP();
+        // CP 65001 IS UTF-8 — if the system already uses UTF-8, just
+        // replace invalid sequences (shouldn't happen if from_utf8 failed).
+        if acp == 65001 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        // Determine how many UTF-16 code units we need.
+        let wide_len = MultiByteToWideChar(
+            acp,
+            0,
+            bytes.as_ptr() as *const i8,
+            bytes.len() as i32,
+            std::ptr::null_mut(),
+            0,
+        );
+        if wide_len <= 0 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        let mut wide: Vec<u16> = vec![0; wide_len as usize];
+        let written = MultiByteToWideChar(
+            acp,
+            0,
+            bytes.as_ptr() as *const i8,
+            bytes.len() as i32,
+            wide.as_mut_ptr(),
+            wide_len,
+        );
+        if written <= 0 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        wide.truncate(written as usize);
+        String::from_utf16_lossy(&wide)
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" {
+    fn GetACP() -> u32;
+    fn MultiByteToWideChar(
+        CodePage: u32,
+        dwFlags: u32,
+        lpMultiByteStr: *const i8,
+        cbMultiByte: i32,
+        lpWideCharStr: *mut u16,
+        cchWideChar: i32,
+    ) -> i32;
+}
+
+#[cfg(not(target_os = "windows"))]
+fn decode_stdout(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
 }

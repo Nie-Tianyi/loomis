@@ -142,7 +142,7 @@ async fn main() {
 
     // ── Dispatch ────────────────────────────────────────────────────
     if use_tui {
-        match agent_oxide::tui::run(agent, memory, tool_names, &model) {
+        match agent_oxide::tui::run(agent, memory, tool_names, &model, cwd.clone()) {
             Ok(()) => {}
             Err(e) => eprintln!("TUI error: {e}"),
         }
@@ -325,6 +325,17 @@ async fn render_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>
                 // when pending_confirmations is None, but we handle it
                 // defensively.
                 println!("\n  ⚡ Shell: {command}");
+            }
+
+            AgentEvent::ShellRunning { command } => {
+                println!("\n  ⏳ $ {command}");
+            }
+
+            AgentEvent::ShellOutput { command, output } => {
+                println!("\n  $ {command}");
+                for line in output.lines() {
+                    println!("    {line}");
+                }
             }
 
             AgentEvent::Done => {

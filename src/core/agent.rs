@@ -219,6 +219,12 @@ pub enum AgentEvent {
         tool_call_id: String,
         command: String,
     },
+    /// A user `!` command has started executing — the TUI shows a "Running…"
+    /// indicator so the user knows the command is in progress.
+    ShellRunning { command: String },
+    /// Shell command output from user's `!` prefix (TUI-local, not an agent
+    /// tool call). The TUI renders it as a `ShellOutput` chat message.
+    ShellOutput { command: String, output: String },
     /// The agent loop completed — the model produced a final text response.
     /// The final content is returned by [`Agent::run_with_events`].
     Done,

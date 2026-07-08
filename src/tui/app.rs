@@ -3,6 +3,7 @@
 //! The mutable state machine for the TUI: chat messages, input buffer,
 //! scrolling, streaming status, and keyboard processing.
 
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -41,6 +42,14 @@ pub enum ChatMessage {
         responded: bool,
         timestamp: String,
     },
+    /// Shell command output from user's `!` prefix — green header, dim output.
+    /// `state` controls rendering: `Running` shows a "Running…" indicator,
+    /// `Complete(output)` shows the captured stdout/stderr.
+    ShellOutput {
+        command: String,
+        state: ShellOutputState,
+        timestamp: String,
+    },
     /// Error display — red, bold.
     Error { content: String, timestamp: String },
 }
@@ -70,6 +79,15 @@ pub enum ToolCallState {
     Complete(String),
 }
 
+/// Tracks whether a user `!` shell command is still running or has completed.
+#[derive(Debug, Clone)]
+pub enum ShellOutputState {
+    /// Command is executing — the TUI shows a "Running…" indicator.
+    Running,
+    /// Command finished — output is displayed.
+    Complete(String),
+}
+
 // ── TuiCommand ───────────────────────────────────────────────────────────────────
 
 /// Commands sent from the TUI thread to the agent background task.
@@ -77,6 +95,8 @@ pub enum ToolCallState {
 pub enum TuiCommand {
     /// User submitted a message — push to memory and run the agent loop.
     RunAgent(String),
+    /// User typed !command — execute shell command asynchronously.
+    RunShell(String),
     /// Cancel the currently-running generation.
     CancelGeneration,
     /// Reset conversation, preserving system prompt.
@@ -122,6 +142,8 @@ pub struct App {
     pub model: String,
     pub memory: SharedMemory,
     pub tool_names: Vec<String>,
+    /// Workspace root directory for `!` shell commands.
+    pub workspace_root: PathBuf,
 
     // ── Input history ──
     pub history: Vec<String>,
@@ -136,7 +158,12 @@ pub struct App {
 
 impl App {
     /// Creates a fresh app with a welcome system message.
-    pub fn new(model: impl Into<String>, memory: SharedMemory, tool_names: Vec<String>) -> Self {
+    pub fn new(
+        model: impl Into<String>,
+        memory: SharedMemory,
+        tool_names: Vec<String>,
+        workspace_root: PathBuf,
+    ) -> Self {
         let model = model.into();
         Self {
             messages: vec![ChatMessage::System {
@@ -152,6 +179,7 @@ impl App {
             model,
             memory,
             tool_names,
+            workspace_root,
             history: Vec::new(),
             history_index: None,
             draft_input: String::new(),
@@ -239,6 +267,38 @@ impl App {
                 });
             }
 
+            AgentEvent::ShellRunning { command } => {
+                self.messages.push(ChatMessage::ShellOutput {
+                    command,
+                    state: ShellOutputState::Running,
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+            }
+
+            AgentEvent::ShellOutput { command, output } => {
+                // Find the Running entry for this command and update it
+                // with the captured output. If not found (e.g. CLI mode
+                // didn't send ShellRunning), push a new message.
+                for msg in self.messages.iter_mut().rev() {
+                    if let ChatMessage::ShellOutput {
+                        command: cmd,
+                        state,
+                        ..
+                    } = msg
+                        && *cmd == command
+                        && matches!(state, ShellOutputState::Running)
+                    {
+                        *state = ShellOutputState::Complete(output);
+                        return;
+                    }
+                }
+                self.messages.push(ChatMessage::ShellOutput {
+                    command,
+                    state: ShellOutputState::Complete(output),
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+            }
+
             AgentEvent::Done => {
                 self.streaming = false;
             }
@@ -284,6 +344,23 @@ impl App {
                 self.history.push(input.clone());
                 self.history_index = None;
                 self.draft_input.clear();
+
+                // Check for bang commands (!command — execute asynchronously)
+                if input.starts_with('!') && !input.starts_with("!!") {
+                    let command = input[1..].trim().to_string();
+                    self.input.clear();
+                    self.input_cursor = 0;
+                    self.auto_scroll = true;
+                    if command.is_empty() {
+                        self.messages.push(ChatMessage::System {
+                            content: "Usage: !<command> — runs a shell command and shares output with the agent."
+                                .into(),
+                            timestamp: ChatMessage::now_timestamp(),
+                        });
+                        return None;
+                    }
+                    return Some(TuiCommand::RunShell(command));
+                }
 
                 // Check for slash commands
                 if let Some(cmd) = self.handle_slash_command(&input) {
@@ -691,7 +768,12 @@ mod tests {
 
     fn make_app() -> App {
         let memory = std::sync::Arc::new(std::sync::RwLock::new(crate::memory::Memory::new()));
-        App::new("test-model", memory, vec!["echo".into(), "ls".into()])
+        App::new(
+            "test-model",
+            memory,
+            vec!["echo".into(), "ls".into()],
+            PathBuf::from("."),
+        )
     }
 
     // ── apply_event ─────────────────────────────────────────────
@@ -986,6 +1068,93 @@ mod tests {
 
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         assert_eq!(app.input_cursor, 1);
+    }
+
+    // ── Bang command tests ──────────────────────────────────────
+
+    #[test]
+    fn test_bang_command_returns_run_shell() {
+        let mut app = make_app();
+        app.input = "!echo hello".into();
+        app.input_cursor = 11;
+
+        let result = submit_via_enter(&mut app);
+        assert!(
+            matches!(result, Some(TuiCommand::RunShell(ref cmd)) if cmd == "echo hello"),
+            "expected RunShell(\"echo hello\"), got {result:?}"
+        );
+        assert!(!app.streaming);
+        assert!(app.input.is_empty());
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn test_apply_shell_output_creates_message() {
+        let mut app = make_app();
+        app.messages.clear();
+        app.apply_event(AgentEvent::ShellOutput {
+            command: "echo test".into(),
+            output: "test".into(),
+        });
+        assert_eq!(app.messages.len(), 1);
+        match &app.messages[0] {
+            ChatMessage::ShellOutput { command, state, .. } => {
+                assert_eq!(command, "echo test");
+                let ShellOutputState::Complete(output) = state else {
+                    panic!("expected Complete, got {state:?}");
+                };
+                assert!(output.contains("test"), "output: {output}");
+            }
+            other => panic!("expected ShellOutput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_bang_empty_command_shows_help() {
+        let mut app = make_app();
+        app.messages.clear();
+        app.input = "!".into();
+        app.input_cursor = 1;
+
+        let result = submit_via_enter(&mut app);
+        assert!(result.is_none());
+        assert_eq!(app.messages.len(), 1);
+        match &app.messages[0] {
+            ChatMessage::System { content, .. } => {
+                assert!(content.contains("Usage"), "got: {content}");
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_double_bang_not_treated_as_command() {
+        let mut app = make_app();
+        app.messages.clear();
+        app.input = "!!echo".into();
+        app.input_cursor = 6;
+
+        let result = submit_via_enter(&mut app);
+        // !! should be treated as a normal message, triggering RunAgent
+        assert!(matches!(result, Some(TuiCommand::RunAgent(_))));
+    }
+
+    #[test]
+    fn test_bang_command_whitespace_only() {
+        let mut app = make_app();
+        app.messages.clear();
+        app.input = "!   ".into();
+        app.input_cursor = 4;
+
+        let result = submit_via_enter(&mut app);
+        assert!(result.is_none());
+        // Empty command after trimming should show usage hint
+        match &app.messages[0] {
+            ChatMessage::System { content, .. } => {
+                assert!(content.contains("Usage"), "got: {content}");
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
     }
 
     // ── Test Helpers ────────────────────────────────────────────

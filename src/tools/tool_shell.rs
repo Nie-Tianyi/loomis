@@ -27,8 +27,10 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -142,6 +144,10 @@ impl Tool for ShellTool {
             .max(1);
 
         // ── Platform shell selection ──────────────────────────────
+        // cmd /C on Windows — starts instantly (no .NET CLR overhead
+        // like PowerShell). Encoding is handled by decode_stdout()
+        // below, which tries UTF-8 first and falls back to the system
+        // ANSI code page (GetACP).
         #[cfg(target_os = "windows")]
         let (shell, shell_arg) = ("cmd", "/C");
         #[cfg(not(target_os = "windows"))]
@@ -161,12 +167,22 @@ impl Tool for ShellTool {
         let pid = child.id();
 
         // ── Watchdog thread ──────────────────────────────────────
-        // On timeout, kills the process. Sleeps in a separate OS
-        // thread so it doesn't block the caller or the tokio runtime.
+        // Polls every 100ms; kills the process on timeout. An AtomicBool
+        // signal lets it exit early when the command completes quickly —
+        // without this, join() blocks for the full timeout.
+        let done = Arc::new(AtomicBool::new(false));
+        let done_signal = Arc::clone(&done);
         let timeout = Duration::from_secs(timeout_secs);
+
         let watchdog = thread::spawn(move || {
-            thread::sleep(timeout);
-            // Best-effort kill — the process may have already exited.
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                if done_signal.load(Ordering::Relaxed) {
+                    return; // command finished before timeout
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            // Timeout reached — best-effort kill.
             #[cfg(target_os = "windows")]
             {
                 let _ = Command::new("taskkill")
@@ -190,12 +206,13 @@ impl Tool for ShellTool {
             .wait_with_output()
             .map_err(|e| ToolError::Execution(format!("Failed to wait on command: {e}")))?;
 
-        // Join the watchdog (no-op if process exited before timeout)
+        // Signal the watchdog to exit, then join (returns within 100ms).
+        done.store(true, Ordering::Relaxed);
         let _ = watchdog.join();
 
         // ── Build result ─────────────────────────────────────────
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = decode_stdout(&output.stdout);
+        let stderr = decode_stdout(&output.stderr);
         let exit_code = output.status.code();
 
         let mut result = String::new();
@@ -250,6 +267,82 @@ impl Tool for ShellTool {
     }
 }
 
+// ── Encoding Helpers ──────────────────────────────────────────────────────────
+
+/// Decodes child-process stdout/stderr bytes to a Rust string.
+///
+/// On Windows, many CLI tools (especially cmd built-ins like `dir`, `echo`,
+/// and older programs) output in the system ANSI code page (e.g. GBK/CP936 for
+/// Chinese-locale machines). Modern tools (git, cargo, rustc, python 3.7+)
+/// typically output UTF-8 when stdout is not a TTY.
+///
+/// Strategy: try UTF-8 first — if every byte is valid UTF-8, use it directly.
+/// Otherwise fall back to the Windows [`GetACP`] code page via
+/// [`MultiByteToWideChar`]. On Unix this is just [`String::from_utf8_lossy`].
+#[cfg(target_os = "windows")]
+fn decode_stdout(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    // Try UTF-8 first — modern tools output valid UTF-8.
+    if let Ok(utf8) = std::str::from_utf8(bytes) {
+        return utf8.to_string();
+    }
+    // Fall back to the system ANSI code page.
+    unsafe {
+        let acp = GetACP();
+        // CP 65001 IS UTF-8 — if the system already uses UTF-8, just
+        // replace invalid sequences (shouldn't happen since from_utf8 failed).
+        if acp == 65001 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        // Determine how many UTF-16 code units we need.
+        let wide_len = MultiByteToWideChar(
+            acp,
+            0,
+            bytes.as_ptr() as *const i8,
+            bytes.len() as i32,
+            std::ptr::null_mut(),
+            0,
+        );
+        if wide_len <= 0 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        let mut wide: Vec<u16> = vec![0; wide_len as usize];
+        let written = MultiByteToWideChar(
+            acp,
+            0,
+            bytes.as_ptr() as *const i8,
+            bytes.len() as i32,
+            wide.as_mut_ptr(),
+            wide_len,
+        );
+        if written <= 0 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        wide.truncate(written as usize);
+        String::from_utf16_lossy(&wide)
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" {
+    fn GetACP() -> u32;
+    fn MultiByteToWideChar(
+        Codepage: u32,
+        dwFlags: u32,
+        lpMultiByteStr: *const i8,
+        cbMultiByte: i32,
+        lpWideCharStr: *mut u16,
+        cchWideChar: i32,
+    ) -> i32;
+}
+
+#[cfg(not(target_os = "windows"))]
+fn decode_stdout(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -301,10 +394,11 @@ mod tests {
     #[test]
     fn test_execute_pwd() {
         let tool = make_tool();
-        let result = tool
-            .execute(r#"{"command": "echo %cd%"}"#)
-            .expect("cmd echo cd should succeed");
-        // On Windows cmd, %cd% prints the current directory
+        #[cfg(target_os = "windows")]
+        let cmd = r#"{"command": "echo %cd%"}"#;
+        #[cfg(not(target_os = "windows"))]
+        let cmd = r#"{"command": "pwd"}"#;
+        let result = tool.execute(cmd).expect("pwd/echo cd should succeed");
         assert!(!result.is_empty());
     }
 
