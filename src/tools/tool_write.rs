@@ -2,11 +2,32 @@
 //!
 //! 创建或覆写文件内容。自动创建缺失的父目录。
 
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
+use std::sync::Arc;
 
 use super::fs::WorkspaceFs;
-use super::tool::{Tool, extract_string_arg};
+use super::schema::generate_schema;
+use super::tool::Tool;
 use super::{FsError, ToolError};
+
+/// Write 工具的参数。
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WriteArgs {
+    /// Path to write to, relative to workspace root.
+    #[schemars(
+        description = "Path to write to, relative to workspace root. Parent directories are created automatically. Always use forward slashes."
+    )]
+    pub file_path: String,
+
+    /// The full content to write.
+    #[schemars(
+        description = "The full content to write. Multi-line text is supported via \\n newlines. CAUTION: existing content at this path is silently overwritten — read the file first."
+    )]
+    pub content: String,
+}
 
 /// 写入文件内容的工具。
 ///
@@ -16,12 +37,16 @@ use super::{FsError, ToolError};
 /// {"file_path": "output/result.md", "content": "# Hello\n\nWorld"}
 /// ```
 pub struct WriteTool {
-    fs: std::sync::Arc<WorkspaceFs>,
+    fs: Arc<WorkspaceFs>,
+    schema: Value,
 }
 
 impl WriteTool {
-    pub fn new(fs: std::sync::Arc<WorkspaceFs>) -> Self {
-        Self { fs }
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self {
+            fs,
+            schema: generate_schema::<WriteArgs>(),
+        }
     }
 }
 
@@ -44,30 +69,22 @@ impl Tool for WriteTool {
     }
 
     fn parameters(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to write to, relative to workspace root. Parent directories are created automatically. Always use forward slashes."
-                },
-                "content": {
-                    "type": "string",
-                    "description": "The full content to write. Multi-line text is supported via \\n newlines. CAUTION: existing content at this path is silently overwritten — read the file first."
-                }
-            },
-            "required": ["file_path", "content"],
-            "additionalProperties": false
-        })
+        self.schema.clone()
     }
 
     fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let file_path = extract_string_arg(args, "file_path")?;
-        let content = extract_string_arg(args, "content")?;
+        let args: WriteArgs = serde_json::from_str(args)
+            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
 
-        self.fs.write(&file_path, &content).map_err(map_fs_err)?;
+        self.fs
+            .write(&args.file_path, &args.content)
+            .map_err(map_fs_err)?;
 
-        Ok(format!("Wrote {} bytes to {}", content.len(), file_path))
+        Ok(format!(
+            "Wrote {} bytes to {}",
+            args.content.len(),
+            args.file_path
+        ))
     }
 }
 
@@ -85,7 +102,6 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn setup() -> (tempfile::TempDir, WriteTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -108,6 +124,14 @@ mod tests {
     fn test_description() {
         let (_dir, tool) = setup();
         assert!(tool.description().contains("workspace"));
+    }
+
+    #[test]
+    fn test_parameters_schema() {
+        let (_dir, tool) = setup();
+        let params = tool.parameters();
+        assert_eq!(params["type"], "object");
+        assert_eq!(params["additionalProperties"], false);
     }
 
     #[test]

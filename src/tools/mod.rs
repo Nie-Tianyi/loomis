@@ -35,6 +35,7 @@ mod calculator;
 mod echo;
 mod error;
 mod registry;
+mod schema;
 mod tool;
 
 // File-editing tools
@@ -51,7 +52,8 @@ pub use calculator::CalculatorTool;
 pub use echo::EchoTool;
 pub use error::{FsError, ToolError};
 pub use registry::{ToolRegistry, tool_to_def};
-pub use tool::{Tool, extract_string_arg};
+pub use schema::generate_schema;
+pub use tool::Tool;
 
 pub use fs::{DirEntry, EntryType, GrepMatch, WorkspaceFs};
 pub use tool_edit::EditTool;

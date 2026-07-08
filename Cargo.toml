@@ -11,6 +11,7 @@ tokio = { version = "1.0", features = ["full"] }
 dotenvy = "0.15"
 futures-util = "0.3.32"
 regex = "1"
+schemars = { version = "1", features = ["derive"] }
 glob = "0.3"
 ratatui = "0.29"
 crossterm = "0.28"

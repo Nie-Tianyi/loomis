@@ -106,7 +106,7 @@ async fn main() {
 
     // ── Tool registry ───────────────────────────────────────────────
     let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(CalculatorTool));
+    registry.register(Arc::new(CalculatorTool::new()));
     registry.register(Arc::new(ReadTool::new(workspace.clone())));
     registry.register(Arc::new(WriteTool::new(workspace.clone())));
     registry.register(Arc::new(GlobTool::new(workspace.clone())));

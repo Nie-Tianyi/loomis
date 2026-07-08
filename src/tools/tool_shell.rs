@@ -30,13 +30,34 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value;
+
 use crate::tools::error::ToolError;
+use crate::tools::schema::generate_schema;
 use crate::tools::tool::Tool;
-use serde_json::{Value, json};
 
 /// Maximum output bytes returned to the model. Prevents a single command
 /// from flooding the conversation context.
 const MAX_OUTPUT_BYTES: usize = 100_000;
+
+/// Shell 工具的参数。
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ShellArgs {
+    /// The shell command to execute.
+    #[schemars(
+        description = "The shell command to execute. Runs with the workspace root as working directory. On Windows: cmd /C. On Unix: sh -c. Examples: 'cargo build', 'git status', 'npm test'. Do NOT use for cat/ls/find/grep/echo — use the dedicated tools instead."
+    )]
+    pub command: String,
+
+    /// Max execution time in seconds.
+    #[schemars(
+        description = "Max execution time in seconds (range: 1-120). Default: 60. The process is killed if exceeded; partial output captured so far is returned. Set shorter for quick commands, longer for builds."
+    )]
+    pub timeout_secs: Option<u64>,
+}
 
 /// Executes arbitrary shell commands within the workspace.
 ///
@@ -51,6 +72,8 @@ pub struct ShellTool {
     workspace_root: PathBuf,
     /// Default timeout applied when the model omits `timeout_secs`.
     default_timeout: Duration,
+    /// Cached JSON Schema.
+    schema: Value,
 }
 
 impl ShellTool {
@@ -66,6 +89,7 @@ impl ShellTool {
         Self {
             workspace_root,
             default_timeout,
+            schema: generate_schema::<ShellArgs>(),
         }
     }
 }
@@ -96,36 +120,23 @@ impl Tool for ShellTool {
     }
 
     fn parameters(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The shell command to execute. Runs with the workspace root as working directory. On Windows: cmd /C. On Unix: sh -c. Examples: 'cargo build', 'git status', 'npm test'. Do NOT use for cat/ls/find/grep/echo — use the dedicated tools instead."
-                },
-                "timeout_secs": {
-                    "type": "integer",
-                    "description": "Max execution time in seconds (range: 1-120). Default: 60. The process is killed if exceeded; partial output captured so far is returned. Set shorter for quick commands, longer for builds."
-                }
-            },
-            "required": ["command"]
-        })
+        self.schema.clone()
     }
 
     fn execute(&self, args: &str) -> Result<String, ToolError> {
         // ── Parse arguments ───────────────────────────────────────
-        let parsed: Value = serde_json::from_str(args)
+        let args: ShellArgs = serde_json::from_str(args)
             .map_err(|e| ToolError::InvalidArgs(format!("Invalid JSON: {e}")))?;
 
-        let command = parsed
-            .get("command")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| ToolError::InvalidArgs("Missing required field: 'command'".into()))?;
+        let command = args.command;
+        if command.trim().is_empty() {
+            return Err(ToolError::InvalidArgs(
+                "Missing required field: 'command'".into(),
+            ));
+        }
 
-        let timeout_secs = parsed
-            .get("timeout_secs")
-            .and_then(|v| v.as_u64())
+        let timeout_secs = args
+            .timeout_secs
             .unwrap_or(self.default_timeout.as_secs())
             .min(self.default_timeout.as_secs())
             .max(1);
@@ -139,7 +150,7 @@ impl Tool for ShellTool {
         // ── Spawn child process ───────────────────────────────────
         let child = Command::new(shell)
             .arg(shell_arg)
-            .arg(command)
+            .arg(&command)
             .current_dir(&self.workspace_root)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -270,6 +281,10 @@ mod tests {
         assert_eq!(params["type"], "object");
         assert!(params["properties"]["command"]["type"] == "string");
         assert!(params["required"][0] == "command");
+        assert_eq!(
+            params["additionalProperties"], false,
+            "ShellTool must include additionalProperties: false"
+        );
     }
 
     // ── Execution ─────────────────────────────────────────────────

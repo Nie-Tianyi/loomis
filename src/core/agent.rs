@@ -1201,7 +1201,7 @@ mod tests {
         let client = DeepSeekClient::new("test-api-key");
         let memory = Arc::new(std::sync::RwLock::new(Memory::new()));
         let mut registry = ToolRegistry::new();
-        registry.register(Arc::new(EchoTool));
+        registry.register(Arc::new(EchoTool::new()));
         Agent::new(client, memory, Arc::new(registry))
     }
 

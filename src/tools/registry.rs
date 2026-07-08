@@ -34,7 +34,7 @@ use super::tool::Tool;
 /// use agent_oxide::tools::{ToolRegistry, EchoTool};
 ///
 /// let mut registry = ToolRegistry::new();
-/// registry.register(Arc::new(EchoTool));
+/// registry.register(Arc::new(EchoTool::new()));
 ///
 /// // 查找
 /// assert!(registry.has("echo"));
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn test_register_and_get() {
         let mut r = ToolRegistry::new();
-        r.register(Arc::new(EchoTool));
+        r.register(Arc::new(EchoTool::new()));
         assert!(r.has("echo"));
         assert!(r.get("echo").is_some());
     }
@@ -160,9 +160,9 @@ mod tests {
     fn test_len_tracks_registrations() {
         let mut r = ToolRegistry::new();
         assert_eq!(r.len(), 0);
-        r.register(Arc::new(EchoTool));
+        r.register(Arc::new(EchoTool::new()));
         assert_eq!(r.len(), 1);
-        r.register(Arc::new(CalculatorTool));
+        r.register(Arc::new(CalculatorTool::new()));
         assert_eq!(r.len(), 2);
     }
 
@@ -170,15 +170,15 @@ mod tests {
     fn test_is_empty_toggles() {
         let mut r = ToolRegistry::new();
         assert!(r.is_empty());
-        r.register(Arc::new(EchoTool));
+        r.register(Arc::new(EchoTool::new()));
         assert!(!r.is_empty());
     }
 
     #[test]
     fn test_iter_yields_all_entries() {
         let mut r = ToolRegistry::new();
-        r.register(Arc::new(EchoTool));
-        r.register(Arc::new(CalculatorTool));
+        r.register(Arc::new(EchoTool::new()));
+        r.register(Arc::new(CalculatorTool::new()));
         let names: Vec<&str> = r.iter().map(|(n, _)| n).collect();
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"echo"));
@@ -188,15 +188,15 @@ mod tests {
     #[test]
     fn test_register_replaces_existing() {
         let mut r = ToolRegistry::new();
-        r.register(Arc::new(EchoTool));
-        r.register(Arc::new(EchoTool)); // 同名替换
+        r.register(Arc::new(EchoTool::new()));
+        r.register(Arc::new(EchoTool::new())); // 同名替换
         assert_eq!(r.len(), 1);
     }
 
     #[test]
     fn test_execute_success() {
         let mut r = ToolRegistry::new();
-        r.register(Arc::new(EchoTool));
+        r.register(Arc::new(EchoTool::new()));
         let result = r.execute("echo", r#"{"text": "hi"}"#);
         let Some(Ok(output)) = result else {
             panic!("expected Some(Ok(_)), got {result:?}");
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn test_execute_tool_error() {
         let mut r = ToolRegistry::new();
-        r.register(Arc::new(CalculatorTool));
+        r.register(Arc::new(CalculatorTool::new()));
         let result = r.execute("calculator", r#"{"expression": "1/0"}"#);
         let Some(Err(_)) = result else {
             panic!("expected Some(Err(_)), got {result:?}");
@@ -223,8 +223,8 @@ mod tests {
     #[test]
     fn test_to_tool_defs_count_and_names() {
         let mut r = ToolRegistry::new();
-        r.register(Arc::new(EchoTool));
-        r.register(Arc::new(CalculatorTool));
+        r.register(Arc::new(EchoTool::new()));
+        r.register(Arc::new(CalculatorTool::new()));
         let defs = r.to_tool_defs();
         assert_eq!(defs.len(), 2);
         let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
@@ -234,20 +234,20 @@ mod tests {
 
     #[test]
     fn test_tool_to_def_free_function() {
-        let tool = EchoTool;
-        let def = tool_to_def(&tool);
+        let tool = EchoTool::new();
+        let def = tool_to_def(&tool as &dyn Tool);
         assert_eq!(def.function.name, "echo");
         assert_eq!(
             def.function.description.as_deref(),
-            Some(EchoTool.description())
+            Some(EchoTool::new().description())
         );
         assert!(def.function.parameters.is_some());
     }
 
     #[test]
     fn test_tool_to_def_equals_to_def_method() {
-        let tool = CalculatorTool;
-        let from_fn = tool_to_def(&tool);
+        let tool = CalculatorTool::new();
+        let from_fn = tool_to_def(&tool as &dyn Tool);
         let from_method = tool.to_def();
         assert_eq!(from_fn.function.name, from_method.function.name);
         assert_eq!(

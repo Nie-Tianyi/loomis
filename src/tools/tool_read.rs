@@ -3,11 +3,36 @@
 //! 读取文件内容并以 `cat -n` 风格的行号格式返回。
 //! 支持可选的行偏移和行数限制。
 
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
+use std::sync::Arc;
 
 use super::fs::WorkspaceFs;
-use super::tool::{Tool, extract_string_arg};
+use super::schema::generate_schema;
+use super::tool::Tool;
 use super::{FsError, ToolError};
+
+/// Read 工具的参数。
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReadArgs {
+    /// Path to the file, relative to workspace root.
+    #[schemars(
+        description = "Path to the file, relative to workspace root. Must be a file (not a directory). Always use forward slashes."
+    )]
+    pub file_path: String,
+
+    /// Line to start reading from (1-indexed).
+    #[schemars(description = "Line to start reading from (1-indexed). Omit to start at line 1.")]
+    pub offset: Option<u64>,
+
+    /// Maximum lines to return.
+    #[schemars(
+        description = "Maximum lines to return. Omit for the full file. For large files, set to 100-200 to avoid flooding context."
+    )]
+    pub limit: Option<u64>,
+}
 
 /// 读取文件内容的工具。
 ///
@@ -19,12 +44,16 @@ use super::{FsError, ToolError};
 ///
 /// `offset` 和 `limit` 为可选的整数。
 pub struct ReadTool {
-    fs: std::sync::Arc<WorkspaceFs>,
+    fs: Arc<WorkspaceFs>,
+    schema: Value,
 }
 
 impl ReadTool {
-    pub fn new(fs: std::sync::Arc<WorkspaceFs>) -> Self {
-        Self { fs }
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self {
+            fs,
+            schema: generate_schema::<ReadArgs>(),
+        }
     }
 }
 
@@ -51,38 +80,20 @@ impl Tool for ReadTool {
     }
 
     fn parameters(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the file, relative to workspace root. Must be a file (not a directory). Always use forward slashes."
-                },
-                "offset": {
-                    "type": "integer",
-                    "description": "Line to start reading from (1-indexed). Omit to start at line 1."
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum lines to return. Omit for the full file. For large files, set to 100-200 to avoid flooding context."
-                }
-            },
-            "required": ["file_path"],
-            "additionalProperties": false
-        })
+        self.schema.clone()
     }
 
     fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let file_path = extract_string_arg(args, "file_path")?;
+        let args: ReadArgs = serde_json::from_str(args)
+            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
 
-        let v: Value = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("invalid JSON: {e}")))?;
-
-        let offset = v.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
-
-        let limit = v.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
-
-        self.fs.read(&file_path, offset, limit).map_err(map_fs_err)
+        self.fs
+            .read(
+                &args.file_path,
+                args.offset.map(|n| n as usize),
+                args.limit.map(|n| n as usize),
+            )
+            .map_err(map_fs_err)
     }
 }
 
@@ -101,7 +112,6 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn setup() -> (tempfile::TempDir, ReadTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -135,6 +145,7 @@ mod tests {
         let (_dir, tool) = setup();
         let params = tool.parameters();
         assert_eq!(params["type"], "object");
+        assert_eq!(params["additionalProperties"], false);
         assert!(
             params["required"]
                 .as_array()

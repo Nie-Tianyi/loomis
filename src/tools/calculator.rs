@@ -26,12 +26,26 @@
 //! - 展示递归下降解析器的经典实现模式（教学目的）
 //! - 对于教学项目来说，~100 行的解析器比一个黑盒 crate 更有价值
 
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
 
 use super::ToolError;
-use super::tool::{Tool, extract_string_arg};
+use super::schema::generate_schema;
+use super::tool::Tool;
 
 // ── CalculatorTool ────────────────────────────────────────────────────────────
+
+/// Calculator 工具的参数。
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CalculatorArgs {
+    /// A mathematical expression using +, -, *, /, parentheses, and decimal numbers.
+    #[schemars(
+        description = "A mathematical expression using +, -, *, /, parentheses, and decimal numbers. Examples: '2 + 3 * 4', '(100 - 20) / 4', '-5 + 3.14 * 2'. No functions, no variables, no exponentiation."
+    )]
+    pub expression: String,
+}
 
 /// 安全地求值数学表达式。
 ///
@@ -46,7 +60,23 @@ use super::tool::{Tool, extract_string_arg};
 /// - 除零 → [`ToolError::Execution`]
 /// - 非法字符（如 `^`）→ [`ToolError::Execution`]
 /// - 缺少 `expression` 字段 → [`ToolError::InvalidArgs`]
-pub struct CalculatorTool;
+pub struct CalculatorTool {
+    schema: Value,
+}
+
+impl CalculatorTool {
+    pub fn new() -> Self {
+        Self {
+            schema: generate_schema::<CalculatorArgs>(),
+        }
+    }
+}
+
+impl Default for CalculatorTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Tool for CalculatorTool {
     fn name(&self) -> &str {
@@ -70,23 +100,14 @@ impl Tool for CalculatorTool {
     }
 
     fn parameters(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "expression": {
-                    "type": "string",
-                    "description": "A mathematical expression using +, -, *, /, parentheses, and decimal numbers. Examples: '2 + 3 * 4', '(100 - 20) / 4', '-5 + 3.14 * 2'. No functions, no variables, no exponentiation."
-                }
-            },
-            "required": ["expression"],
-            "additionalProperties": false
-        })
+        self.schema.clone()
     }
 
     fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let expression = extract_string_arg(args, "expression")?;
+        let args: CalculatorArgs = serde_json::from_str(args)
+            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
 
-        let result = ExprEvaluator::evaluate(&expression).map_err(|e| {
+        let result = ExprEvaluator::evaluate(&args.expression).map_err(|e| {
             ToolError::Execution(format!("at position {}: {e}", e.position.unwrap_or(0)))
         })?;
 
@@ -398,13 +419,13 @@ mod tests {
 
     #[test]
     fn test_name() {
-        assert_eq!(CalculatorTool.name(), "calculator");
+        assert_eq!(CalculatorTool::new().name(), "calculator");
     }
 
     #[test]
     fn test_description() {
         assert!(
-            CalculatorTool
+            CalculatorTool::new()
                 .description()
                 .contains("mathematical expression")
         );
@@ -412,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_parameters_schema() {
-        let params = CalculatorTool.parameters();
+        let params = CalculatorTool::new().parameters();
         assert_eq!(params["type"], "object");
         assert!(params["properties"]["expression"]["type"] == "string");
         assert!(
@@ -421,6 +442,7 @@ mod tests {
                 .unwrap()
                 .contains(&serde_json::json!("expression"))
         );
+        assert_eq!(params["additionalProperties"], false);
     }
 
     #[test]
@@ -480,7 +502,7 @@ mod tests {
 
     #[test]
     fn test_division_by_zero() {
-        let err = CalculatorTool
+        let err = CalculatorTool::new()
             .execute(r#"{"expression": "1 / 0"}"#)
             .unwrap_err();
         assert!(matches!(err, ToolError::Execution(_)));
@@ -489,13 +511,15 @@ mod tests {
 
     #[test]
     fn test_invalid_json() {
-        let err = CalculatorTool.execute("garbage").unwrap_err();
+        let err = CalculatorTool::new().execute("garbage").unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
     #[test]
     fn test_missing_expression_field() {
-        let err = CalculatorTool.execute(r#"{"wrong": "field"}"#).unwrap_err();
+        let err = CalculatorTool::new()
+            .execute(r#"{"wrong": "field"}"#)
+            .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
@@ -556,14 +580,14 @@ mod tests {
 
     /// 用 CalculatorTool 执行表达式，返回成功结果。
     fn calc(expr: &str) -> String {
-        CalculatorTool
+        CalculatorTool::new()
             .execute(&format!(r#"{{"expression": "{}"}}"#, expr))
             .unwrap()
     }
 
     /// 用 CalculatorTool 执行表达式，返回错误。
     fn calc_err(expr: &str) -> ToolError {
-        CalculatorTool
+        CalculatorTool::new()
             .execute(&format!(r#"{{"expression": "{}"}}"#, expr))
             .unwrap_err()
     }

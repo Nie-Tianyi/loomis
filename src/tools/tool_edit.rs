@@ -2,11 +2,44 @@
 //!
 //! 替换文件中指定行范围的内容。支持删除行（传入空字符串）。
 
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
+use std::sync::Arc;
 
 use super::fs::WorkspaceFs;
-use super::tool::{Tool, extract_string_arg};
+use super::schema::generate_schema;
+use super::tool::Tool;
 use super::{FsError, ToolError};
+
+/// Edit 工具的参数。
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EditArgs {
+    /// Path to the file to edit, relative to workspace root.
+    #[schemars(
+        description = "Path to the file to edit, relative to workspace root. Must be an existing file. Always use forward slashes."
+    )]
+    pub file_path: String,
+
+    /// First line to replace (1-indexed, inclusive).
+    #[schemars(
+        description = "First line to replace (1-indexed, inclusive). MUST match the file's current state — always read the file first to get accurate line numbers."
+    )]
+    pub start_line: u64,
+
+    /// Last line to replace (1-indexed, inclusive).
+    #[schemars(
+        description = "Last line to replace (1-indexed, inclusive). Must be >= start_line. Same line number as start_line to replace a single line."
+    )]
+    pub end_line: u64,
+
+    /// Replacement text to insert in place of the selected lines.
+    #[schemars(
+        description = "Replacement text to insert in place of the selected lines. Pass empty string to delete the line range. Use \\n for multiple lines."
+    )]
+    pub new_content: String,
+}
 
 /// 用行号替换文件内容的工具。
 ///
@@ -23,12 +56,16 @@ use super::{FsError, ToolError};
 ///
 /// 行号是 1-indexed，`start_line` 和 `end_line` 都是包含的。
 pub struct EditTool {
-    fs: std::sync::Arc<WorkspaceFs>,
+    fs: Arc<WorkspaceFs>,
+    schema: Value,
 }
 
 impl EditTool {
-    pub fn new(fs: std::sync::Arc<WorkspaceFs>) -> Self {
-        Self { fs }
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self {
+            fs,
+            schema: generate_schema::<EditArgs>(),
+        }
     }
 }
 
@@ -53,52 +90,20 @@ impl Tool for EditTool {
     }
 
     fn parameters(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the file to edit, relative to workspace root. Must be an existing file. Always use forward slashes."
-                },
-                "start_line": {
-                    "type": "integer",
-                    "description": "First line to replace (1-indexed, inclusive). MUST match the file's current state — always read the file first to get accurate line numbers."
-                },
-                "end_line": {
-                    "type": "integer",
-                    "description": "Last line to replace (1-indexed, inclusive). Must be >= start_line. Same line number as start_line to replace a single line."
-                },
-                "new_content": {
-                    "type": "string",
-                    "description": "Replacement text to insert in place of the selected lines. Pass empty string to delete the line range. Use \\n for multiple lines."
-                }
-            },
-            "required": ["file_path", "start_line", "end_line", "new_content"],
-            "additionalProperties": false
-        })
+        self.schema.clone()
     }
 
     fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let file_path = extract_string_arg(args, "file_path")?;
-        let new_content = extract_string_arg(args, "new_content")?;
-
-        let v: Value = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("invalid JSON: {e}")))?;
-
-        let start_line = v
-            .get("start_line")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| ToolError::InvalidArgs("missing 'start_line' field".into()))?
-            as usize;
-
-        let end_line = v
-            .get("end_line")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| ToolError::InvalidArgs("missing 'end_line' field".into()))?
-            as usize;
+        let args: EditArgs = serde_json::from_str(args)
+            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
 
         self.fs
-            .edit_lines(&file_path, start_line, end_line, &new_content)
+            .edit_lines(
+                &args.file_path,
+                args.start_line as usize,
+                args.end_line as usize,
+                &args.new_content,
+            )
             .map_err(map_fs_err)
     }
 }
@@ -117,7 +122,6 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn setup() -> (tempfile::TempDir, EditTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -142,6 +146,14 @@ mod tests {
     fn test_name() {
         let (_dir, tool) = setup();
         assert_eq!(tool.name(), "edit");
+    }
+
+    #[test]
+    fn test_parameters_schema() {
+        let (_dir, tool) = setup();
+        let params = tool.parameters();
+        assert_eq!(params["type"], "object");
+        assert_eq!(params["additionalProperties"], false);
     }
 
     #[test]

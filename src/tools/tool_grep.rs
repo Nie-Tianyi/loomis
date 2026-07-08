@@ -2,11 +2,32 @@
 //!
 //! 使用正则表达式在文件内容中搜索，返回匹配的文件路径、行号和行内容。
 
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
+use std::sync::Arc;
 
 use super::fs::WorkspaceFs;
-use super::tool::{Tool, extract_string_arg};
+use super::schema::generate_schema;
+use super::tool::Tool;
 use super::{FsError, ToolError};
+
+/// Grep 工具的参数。
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GrepArgs {
+    /// Regular expression to search for.
+    #[schemars(
+        description = "Regular expression to search for. Rust regex syntax. Examples: 'fn main', 'pub struct \\w+', 'TODO|FIXME', '(?i)error' for case-insensitive."
+    )]
+    pub pattern: String,
+
+    /// Optional glob to limit which files to search.
+    #[schemars(
+        description = "Optional glob to limit which files to search. Default: all text files. Example: 'src/**/*.rs' to search only Rust sources. Use when searching broadly returns too much noise."
+    )]
+    pub path_glob: Option<String>,
+}
 
 /// 使用正则表达式搜索文件内容的工具。
 ///
@@ -18,12 +39,16 @@ use super::{FsError, ToolError};
 ///
 /// `path_glob` 是可选的；默认搜索所有文件。
 pub struct GrepTool {
-    fs: std::sync::Arc<WorkspaceFs>,
+    fs: Arc<WorkspaceFs>,
+    schema: Value,
 }
 
 impl GrepTool {
-    pub fn new(fs: std::sync::Arc<WorkspaceFs>) -> Self {
-        Self { fs }
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self {
+            fs,
+            schema: generate_schema::<GrepArgs>(),
+        }
     }
 }
 
@@ -51,37 +76,16 @@ impl Tool for GrepTool {
     }
 
     fn parameters(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Regular expression to search for. Rust regex syntax. Examples: 'fn main', 'pub struct \\w+', 'TODO|FIXME', '(?i)error' for case-insensitive."
-                },
-                "path_glob": {
-                    "type": "string",
-                    "description": "Optional glob to limit which files to search. Default: all text files. Example: 'src/**/*.rs' to search only Rust sources. Use when searching broadly returns too much noise."
-                }
-            },
-            "required": ["pattern"],
-            "additionalProperties": false
-        })
+        self.schema.clone()
     }
 
     fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let pattern = extract_string_arg(args, "pattern")?;
-
-        let v: Value = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("invalid JSON: {e}")))?;
-
-        let path_glob = v
-            .get("path_glob")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
+        let args: GrepArgs = serde_json::from_str(args)
+            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
 
         let matches = self
             .fs
-            .grep(&pattern, path_glob.as_deref())
+            .grep(&args.pattern, args.path_glob.as_deref())
             .map_err(map_fs_err)?;
 
         if matches.is_empty() {
@@ -110,7 +114,6 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn setup() -> (tempfile::TempDir, GrepTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -131,6 +134,14 @@ mod tests {
     fn test_name() {
         let (_dir, tool) = setup();
         assert_eq!(tool.name(), "grep");
+    }
+
+    #[test]
+    fn test_parameters_schema() {
+        let (_dir, tool) = setup();
+        let params = tool.parameters();
+        assert_eq!(params["type"], "object");
+        assert_eq!(params["additionalProperties"], false);
     }
 
     #[test]

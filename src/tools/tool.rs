@@ -75,26 +75,3 @@ pub trait Tool: Send + Sync {
         }
     }
 }
-
-/// 从 JSON 参数字符串中提取指定名称的字符串字段。
-///
-/// 这是工具实现中最常见的模式 — 解析 JSON → 取字段 → 校验类型。
-/// 提取此辅助函数可以减少模板代码。
-///
-/// # 示例
-///
-/// ```
-/// use agent_oxide::tools::extract_string_arg;
-///
-/// let text = extract_string_arg(r#"{"text": "hello"}"#, "text").unwrap();
-/// assert_eq!(text, "hello");
-/// ```
-pub fn extract_string_arg(args: &str, field: &str) -> Result<String, ToolError> {
-    let v: Value = serde_json::from_str(args)
-        .map_err(|e| ToolError::InvalidArgs(format!("invalid JSON: {e}")))?;
-
-    v.get(field)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_owned())
-        .ok_or_else(|| ToolError::InvalidArgs(format!("missing '{field}' field")))
-}

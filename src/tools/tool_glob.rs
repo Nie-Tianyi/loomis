@@ -2,11 +2,26 @@
 //!
 //! 使用 glob 模式查找匹配的文件，返回排序后的相对路径列表。
 
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
+use std::sync::Arc;
 
 use super::fs::WorkspaceFs;
-use super::tool::{Tool, extract_string_arg};
+use super::schema::generate_schema;
+use super::tool::Tool;
 use super::{FsError, ToolError};
+
+/// Glob 工具的参数。
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GlobArgs {
+    /// Glob pattern relative to workspace root.
+    #[schemars(
+        description = "Glob pattern relative to workspace root. Use ** for recursive matching, * for any name segment, ? for single character. Examples: '**/*.rs', 'src/**/*.rs', '*.toml'. Always use forward slashes; backslashes are not valid."
+    )]
+    pub pattern: String,
+}
 
 /// 使用 glob 模式查找文件的工具。
 ///
@@ -16,12 +31,16 @@ use super::{FsError, ToolError};
 /// {"pattern": "**/*.rs"}
 /// ```
 pub struct GlobTool {
-    fs: std::sync::Arc<WorkspaceFs>,
+    fs: Arc<WorkspaceFs>,
+    schema: Value,
 }
 
 impl GlobTool {
-    pub fn new(fs: std::sync::Arc<WorkspaceFs>) -> Self {
-        Self { fs }
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self {
+            fs,
+            schema: generate_schema::<GlobArgs>(),
+        }
     }
 }
 
@@ -49,23 +68,14 @@ impl Tool for GlobTool {
     }
 
     fn parameters(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Glob pattern relative to workspace root. Use ** for recursive matching, * for any name segment, ? for single character. Examples: '**/*.rs', 'src/**/*.rs', '*.toml'. Always use forward slashes; backslashes are not valid."
-                }
-            },
-            "required": ["pattern"],
-            "additionalProperties": false
-        })
+        self.schema.clone()
     }
 
     fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let pattern = extract_string_arg(args, "pattern")?;
+        let args: GlobArgs = serde_json::from_str(args)
+            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
 
-        let files = self.fs.glob(&pattern).map_err(map_fs_err)?;
+        let files = self.fs.glob(&args.pattern).map_err(map_fs_err)?;
 
         if files.is_empty() {
             Ok("No files matched.".to_string())
@@ -87,7 +97,6 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn setup() -> (tempfile::TempDir, GlobTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -108,6 +117,14 @@ mod tests {
     fn test_name() {
         let (_dir, tool) = setup();
         assert_eq!(tool.name(), "glob");
+    }
+
+    #[test]
+    fn test_parameters_schema() {
+        let (_dir, tool) = setup();
+        let params = tool.parameters();
+        assert_eq!(params["type"], "object");
+        assert_eq!(params["additionalProperties"], false);
     }
 
     #[test]

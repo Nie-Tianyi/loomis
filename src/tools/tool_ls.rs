@@ -2,11 +2,26 @@
 //!
 //! 列出目录内容，显示名称、类型和大小。目录优先排序。
 
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
+use std::sync::Arc;
 
 use super::fs::WorkspaceFs;
+use super::schema::generate_schema;
 use super::tool::Tool;
 use super::{EntryType, FsError, ToolError};
+
+/// Ls 工具的参数。
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LsArgs {
+    /// Directory to list, relative to workspace root.
+    #[schemars(
+        description = "Directory to list, relative to workspace root. Omit, pass empty string, or pass '.' to list the workspace root. Must be a directory — passing a file path returns an error."
+    )]
+    pub path: Option<String>,
+}
 
 /// 列出目录内容的工具。
 ///
@@ -18,12 +33,16 @@ use super::{EntryType, FsError, ToolError};
 ///
 /// `path` 是可选的；省略时列出工作空间根目录。
 pub struct LsTool {
-    fs: std::sync::Arc<WorkspaceFs>,
+    fs: Arc<WorkspaceFs>,
+    schema: Value,
 }
 
 impl LsTool {
-    pub fn new(fs: std::sync::Arc<WorkspaceFs>) -> Self {
-        Self { fs }
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self {
+            fs,
+            schema: generate_schema::<LsArgs>(),
+        }
     }
 }
 
@@ -53,27 +72,14 @@ impl Tool for LsTool {
     }
 
     fn parameters(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Directory to list, relative to workspace root. Omit, pass empty string, or pass '.' to list the workspace root. Must be a directory — passing a file path returns an error."
-                }
-            },
-            "required": [],
-            "additionalProperties": false
-        })
+        self.schema.clone()
     }
 
     fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let v: Value = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("invalid JSON: {e}")))?;
+        let args: LsArgs = serde_json::from_str(args)
+            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
 
-        let path = v
-            .get("path")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
+        let path = args.path.as_deref().filter(|s| !s.is_empty());
 
         let entries = self.fs.ls(path).map_err(map_fs_err)?;
 
@@ -128,7 +134,6 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn setup() -> (tempfile::TempDir, LsTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -149,6 +154,14 @@ mod tests {
     fn test_name() {
         let (_dir, tool) = setup();
         assert_eq!(tool.name(), "ls");
+    }
+
+    #[test]
+    fn test_parameters_schema() {
+        let (_dir, tool) = setup();
+        let params = tool.parameters();
+        assert_eq!(params["type"], "object");
+        assert_eq!(params["additionalProperties"], false);
     }
 
     #[test]
