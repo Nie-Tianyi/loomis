@@ -9,7 +9,7 @@ cargo build              # debug build
 cargo build --release    # release build
 cargo test               # run all tests
 cargo test tui           # run TUI module tests only
-cargo test -p agent_oxide -- test_find_event_end  # run a single test
+cargo test -p loomis -- test_find_event_end  # run a single test
 cargo clippy             # lint
 ```
 
@@ -176,7 +176,7 @@ agent_rx ←────── AgentEvent ─────── agent_tx
 
 **UTF-8 safety**: `floor_char_boundary()` used in `truncate_args()` and `truncate_output()` to avoid panics on multi-byte character boundaries.
 
-**Entry point**: `agent_oxide::tui::run(agent, memory, tool_names, &model)` — synchronous, blocks until exit.
+**Entry point**: `loomis::tui::run(agent, memory, tool_names, &model)` — synchronous, blocks until exit.
 
 ### Key patterns
 

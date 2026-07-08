@@ -31,7 +31,7 @@ use super::tool::Tool;
 ///
 /// ```
 /// use std::sync::Arc;
-/// use agent_oxide::tools::{ToolRegistry, EchoTool};
+/// use loomis::tools::{ToolRegistry, EchoTool};
 ///
 /// let mut registry = ToolRegistry::new();
 /// registry.register(Arc::new(EchoTool::new()));

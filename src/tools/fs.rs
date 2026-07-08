@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn test_new_nonexistent() {
-        let result = WorkspaceFs::new("/tmp/__agent_oxide_nonexistent_dir__");
+        let result = WorkspaceFs::new("/tmp/__loomis_nonexistent_dir__");
         assert!(matches!(result, Err(FsError::NotFound(_))));
     }
 

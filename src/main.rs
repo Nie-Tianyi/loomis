@@ -1,4 +1,4 @@
-//! # Agent Oxide — Interactive CLI & TUI
+//! # Loomis — Interactive CLI & TUI
 //!
 //! By default, launches a ratatui-based chat interface similar to
 //! Claude Code's terminal UX. Pass `--no-tui` for the legacy
@@ -18,10 +18,10 @@ use std::io::{self, BufRead, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agent_oxide::core::agent::{Agent, AgentEvent, PendingConfirmations};
-use agent_oxide::core::client::{DeepSeekClient, Message, Role};
-use agent_oxide::memory::Memory;
-use agent_oxide::tools::{
+use loomis::core::agent::{Agent, AgentEvent, PendingConfirmations};
+use loomis::core::client::{DeepSeekClient, Message, Role};
+use loomis::memory::Memory;
+use loomis::tools::{
     CalculatorTool, GlobTool, GrepTool, LsTool, ReadTool, ShellTool, ToolRegistry, WorkspaceFs,
     WriteTool,
 };
@@ -32,7 +32,7 @@ const DEFAULT_MODEL: &str = "deepseek-chat";
 const MAX_STEPS: usize = 15;
 
 const SYSTEM_PROMPT: &str = "\
-You are a helpful, accurate coding assistant. You have tools for file operations \
+You are Loomis, a helpful, accurate coding assistant. You have tools for file operations \
 (read, write, edit, glob, grep, ls) and calculations.
 
 ## Core rules — follow strictly
@@ -142,7 +142,7 @@ async fn main() {
 
     // ── Dispatch ────────────────────────────────────────────────────
     if use_tui {
-        match agent_oxide::tui::run(agent, memory, tool_names, &model, cwd.clone()) {
+        match loomis::tui::run(agent, memory, tool_names, &model, cwd.clone()) {
             Ok(()) => {}
             Err(e) => eprintln!("TUI error: {e}"),
         }
@@ -226,7 +226,7 @@ fn print_welcome(model: &str, cwd: &std::path::Path, agent: &Agent) {
     };
     println!();
     println!("╔══════════════════════════════════════════════╗");
-    println!("║       Agent Oxide — Interactive CLI          ║");
+    println!("║       Loomis — Interactive CLI          ║");
     println!("╠══════════════════════════════════════════════╣");
     println!("║  Model  : {model:<33}║");
     println!("║  Mode   : {streaming_label:<33}║");

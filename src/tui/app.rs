@@ -167,7 +167,7 @@ impl App {
         let model = model.into();
         Self {
             messages: vec![ChatMessage::System {
-                content: format!("Agent Oxide — Model: {model} | /help for commands"),
+                content: format!("Loomis — Model: {model} | /help for commands"),
                 timestamp: ChatMessage::now_timestamp(),
             }],
             line_counts: vec![1],

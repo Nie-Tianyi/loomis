@@ -48,10 +48,10 @@
 //!
 //! ```ignore
 //! use std::sync::Arc;
-//! use agent_oxide::core::agent::Agent;
-//! use agent_oxide::core::client::{DeepSeekClient, Message, Role};
-//! use agent_oxide::memory::Memory;
-//! use agent_oxide::tools::{ToolRegistry, CalculatorTool};
+//! use loomis::core::agent::Agent;
+//! use loomis::core::client::{DeepSeekClient, Message, Role};
+//! use loomis::memory::Memory;
+//! use loomis::tools::{ToolRegistry, CalculatorTool};
 //!
 //! // 1. Wire up dependencies
 //! let client = DeepSeekClient::new("sk-...");

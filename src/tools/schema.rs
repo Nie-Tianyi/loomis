@@ -22,7 +22,7 @@ use serde_json::Value;
 /// ```rust
 /// use schemars::JsonSchema;
 /// use serde::Deserialize;
-/// use agent_oxide::tools::generate_schema;
+/// use loomis::tools::generate_schema;
 ///
 /// #[derive(JsonSchema)]
 /// struct MyArgs {

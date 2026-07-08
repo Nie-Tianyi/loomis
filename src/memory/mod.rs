@@ -116,8 +116,8 @@ pub enum CompactSignal {
 /// # Examples
 ///
 /// ```
-/// use agent_oxide::core::client::{Message, Role};
-/// use agent_oxide::memory::Memory;
+/// use loomis::core::client::{Message, Role};
+/// use loomis::memory::Memory;
 ///
 /// let mut mem = Memory::new();
 /// mem.push(Message::new(Role::System, "You are a helpful assistant."));
@@ -151,7 +151,7 @@ pub type SharedMemory = Arc<RwLock<Memory>>;
 /// # Example
 ///
 /// ```
-/// use agent_oxide::memory::Memory;
+/// use loomis::memory::Memory;
 ///
 /// let mem = Memory::builder()
 ///     .threshold(500_000)
@@ -203,7 +203,7 @@ impl Memory {
     /// Creates an empty memory with default threshold and keep-last values.
     ///
     /// ```
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::memory::Memory;
     ///
     /// let mem = Memory::new();
     /// assert!(mem.messages().is_empty());
@@ -220,7 +220,7 @@ impl Memory {
     /// messages (reduces reallocations during growth).
     ///
     /// ```
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::memory::Memory;
     ///
     /// let mem = Memory::with_capacity(100);
     /// assert!(mem.messages().is_empty());
@@ -238,7 +238,7 @@ impl Memory {
     /// (in characters, not tokens).
     ///
     /// ```
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::memory::Memory;
     ///
     /// let mem = Memory::with_threshold(42_000);
     /// assert_eq!(mem.compact_threshold(), 42_000);
@@ -254,7 +254,7 @@ impl Memory {
     /// Returns a [`MemoryBuilder`] for fluent construction.
     ///
     /// ```
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::memory::Memory;
     ///
     /// let mem = Memory::builder()
     ///     .threshold(100_000)
@@ -298,8 +298,8 @@ impl Memory {
     /// convenient point before the next LLM round-trip.
     ///
     /// ```
-    /// use agent_oxide::core::client::{Message, Role};
-    /// use agent_oxide::memory::{CompactSignal, Memory};
+    /// use loomis::core::client::{Message, Role};
+    /// use loomis::memory::{CompactSignal, Memory};
     ///
     /// let mut mem = Memory::new();
     /// let signal = mem.push(Message::new(Role::User, "Hello"));
@@ -317,8 +317,8 @@ impl Memory {
     /// Returns a reference to all stored messages.
     ///
     /// ```
-    /// use agent_oxide::core::client::{Message, Role};
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::core::client::{Message, Role};
+    /// use loomis::memory::Memory;
     ///
     /// let mut mem = Memory::new();
     /// mem.push(Message::new(Role::User, "Hi"));
@@ -332,8 +332,8 @@ impl Memory {
     /// building a [`DeepSeekRequest`].
     ///
     /// ```
-    /// use agent_oxide::core::client::{Message, Role};
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::core::client::{Message, Role};
+    /// use loomis::memory::Memory;
     ///
     /// let mut mem = Memory::new();
     /// mem.push(Message::new(Role::User, "Hello"));
@@ -349,8 +349,8 @@ impl Memory {
     /// Idiomatic alias for `self.messages().len()`.
     ///
     /// ```
-    /// use agent_oxide::core::client::{Message, Role};
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::core::client::{Message, Role};
+    /// use loomis::memory::Memory;
     ///
     /// let mut mem = Memory::new();
     /// mem.push(Message::new(Role::User, "a"));
@@ -379,8 +379,8 @@ impl Memory {
     /// to decide when to drain.
     ///
     /// ```
-    /// use agent_oxide::core::client::{Message, Role};
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::core::client::{Message, Role};
+    /// use loomis::memory::Memory;
     ///
     /// let mut mem = Memory::new();
     /// mem.push(Message::new(Role::User, "abc"));   // 3 chars
@@ -400,8 +400,8 @@ impl Memory {
     /// threshold.
     ///
     /// ```
-    /// use agent_oxide::core::client::{Message, Role};
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::core::client::{Message, Role};
+    /// use loomis::memory::Memory;
     ///
     /// let mut mem = Memory::with_threshold(5);
     /// assert!(!mem.needs_compact());
@@ -454,8 +454,8 @@ impl Memory {
     ///      non-System messages) stays.
     ///
     /// ```
-    /// use agent_oxide::core::client::{Message, Role};
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::core::client::{Message, Role};
+    /// use loomis::memory::Memory;
     ///
     /// let mut mem = Memory::builder().keep_last(3).build();
     /// mem.push(Message::new(Role::System, "Be helpful."));
@@ -508,8 +508,8 @@ impl Memory {
     /// drained messages to a summariser (LLM), then feed the result here.
     ///
     /// ```
-    /// use agent_oxide::core::client::{Message, Role};
-    /// use agent_oxide::memory::Memory;
+    /// use loomis::core::client::{Message, Role};
+    /// use loomis::memory::Memory;
     ///
     /// let mut mem = Memory::builder().keep_last(3).build();
     /// mem.push(Message::new(Role::System, "Be helpful."));

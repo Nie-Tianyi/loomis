@@ -43,8 +43,8 @@ pub(crate) struct EchoArgs {
 /// # 示例
 ///
 /// ```
-/// use agent_oxide::tools::EchoTool;
-/// use agent_oxide::tools::Tool;
+/// use loomis::tools::EchoTool;
+/// use loomis::tools::Tool;
 ///
 /// let tool = EchoTool::new();
 /// assert_eq!(tool.name(), "echo");
