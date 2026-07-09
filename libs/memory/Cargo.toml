@@ -1,0 +1,13 @@
+[package]
+name = "memory"
+version = "0.1.0"
+edition = "2024"
+description = "Conversation memory management — in-memory buffer + persistence"
+
+[dependencies]
+provider = { path = "../provider" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

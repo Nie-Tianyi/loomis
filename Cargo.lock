@@ -18,6 +18,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -227,6 +238,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepseek"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "provider",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -268,6 +292,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "engine"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "memory",
+ "provider",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tools",
 ]
 
 [[package]]
@@ -844,10 +882,15 @@ checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 name = "loomis"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "crossterm",
+ "deepseek",
  "dotenvy",
+ "engine",
  "futures-util",
  "glob",
+ "memory",
+ "provider",
  "pulldown-cmark",
  "ratatui",
  "regex",
@@ -857,6 +900,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tools",
  "unicode-width 0.2.0",
 ]
 
@@ -880,6 +924,16 @@ name = "memchr"
 version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
+
+[[package]]
+name = "memory"
+version = "0.1.0"
+dependencies = [
+ "provider",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "mime"
@@ -977,6 +1031,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "provider"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1774,6 +1838,19 @@ dependencies = [
  "futures-sink",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "tools"
+version = "0.1.0"
+dependencies = [
+ "glob",
+ "provider",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

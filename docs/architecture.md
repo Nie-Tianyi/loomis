@@ -1,4 +1,5 @@
-Rust 模块化 Agent 框架架构设计 (极简实用版)基于“务实工程”与“胖模型，瘦框架”的设计理念，拒绝过早优化与过度设计。本架构采用极简的 ReAct (Reason + Act) 主循环，且在初期直接提供专为 Coding 场景优化的具体 Memory 实现，确保项目能以最快速度落地且具备实战能力。flowchart TD
+Rust 模块化 Agent 框架架构设计 (极简实用版)基于“务实工程”与“胖模型，瘦框架”的设计理念，拒绝过早优化与过度设计。本架构采用极简的 ReAct (Reason + Act) 主循环，且在初期直接提供专为 Coding 场景优化的具体 Memory 实现，确保项目能以最快速度落地且具备实战能力。
+flowchart TD
     %% 样式定义
     classDef layer fill:#f9f9f9,stroke:#333,stroke-width:2px,color:#333, rx:5px, ry:5px;
     classDef core fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#000;

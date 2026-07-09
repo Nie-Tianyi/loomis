@@ -1,0 +1,16 @@
+[package]
+name = "tools"
+version = "0.1.0"
+edition = "2024"
+description = "Tool abstraction — Tool trait, ToolRegistry, WorkspaceFs sandbox"
+
+[dependencies]
+provider = { path = "../provider" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+regex = { workspace = true }
+glob = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

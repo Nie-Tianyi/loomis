@@ -1,0 +1,37 @@
+[package]
+name = "loomis"
+version = "0.1.0"
+edition = "2024"
+description = "Loomis — modular agent with TUI, concrete tools, and DeepSeek backend"
+
+[[bin]]
+name = "loomis"
+path = "src/main.rs"
+
+[lib]
+name = "loomis"
+path = "src/lib.rs"
+
+[dependencies]
+provider = { path = "../../libs/provider" }
+deepseek = { path = "../../libs/deepseek" }
+tools = { path = "../../libs/tools" }
+memory = { path = "../../libs/memory" }
+engine = { path = "../../libs/engine" }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dotenvy = { workspace = true }
+futures-util = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+unicode-width = { workspace = true }
+pulldown-cmark = { workspace = true }
+regex = { workspace = true }
+schemars = { workspace = true }
+glob = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

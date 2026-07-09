@@ -1,0 +1,14 @@
+[package]
+name = "deepseek"
+version = "0.1.0"
+edition = "2024"
+description = "DeepSeek API client — implements provider::LLMClient"
+
+[dependencies]
+provider = { path = "../provider" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+futures-util = { workspace = true }
+async-trait = { workspace = true }

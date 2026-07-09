@@ -1,0 +1,11 @@
+[package]
+name = "provider"
+version = "0.1.0"
+edition = "2024"
+description = "LLM provider abstraction — LLMClient trait and shared types (Message, ToolCall, ToolDef)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures-util = { workspace = true }
+async-trait = { workspace = true }
