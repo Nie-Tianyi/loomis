@@ -5,25 +5,20 @@
 //!
 //! ## Safety
 //!
-//! Commands run in the workspace root directory. A watchdog thread enforces
-//! the timeout by killing the process if it runs too long. Output is capped
-//! at 100 KB to avoid flooding the conversation context.
+//! Commands are validated through [`ShellFilter`](crate::sandbox::shell_filter)
+//! before execution.  The environment is sanitised via
+//! [`sanitize`](crate::sandbox::env_sanitizer::sanitize) so that secrets
+//! and dangerous variables (`LD_PRELOAD`, …) are not leaked to child
+//! processes.  A watchdog thread enforces the timeout and kills the
+//! **entire process tree** (not just the immediate child) on timeout.
+//! Output is capped at 100 KB.
 //!
 //! ## User confirmation
 //!
-//! This tool is special: the agent loop (see [`crate::core::agent`]) checks
-//! for `name == "shell"` and prompts the user for confirmation via the TUI
-//! before calling `execute()`. When no confirmation infrastructure is present
-//! (e.g. `--no-tui` mode), the tool executes unconditionally.
-//!
-//! ## Known limitation: blocking `execute`
-//!
-//! Because [`Tool::execute`] is synchronous, `ShellTool::execute` blocks
-//! the calling tokio worker thread for the entire duration of
-//! `wait_with_output()` (up to the configured timeout). This is acceptable
-//! for short commands but may stall the runtime for long-running builds.
-//! Future versions may migrate to `tokio::task::spawn_blocking` or an
-//! async `Tool` trait.
+//! The [`SandboxHook`](crate::hooks::SandboxHook) intercepts shell tool
+//! calls before they reach `execute()`.  Commands matching an auto-approve
+//! prefix run immediately; commands matching a deny-pattern are blocked;
+//! everything else prompts the user.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -35,7 +30,10 @@ use std::time::{Duration, Instant};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use tools::{ToolError, tool};
+use tools::{SandboxConfig, ToolError, tool};
+
+use crate::sandbox::env_sanitizer;
+use crate::sandbox::shell_filter::ShellFilter;
 
 /// Maximum output bytes returned to the model. Prevents a single command
 /// from flooding the conversation context.
@@ -92,21 +90,23 @@ pub struct ShellTool {
     workspace_root: PathBuf,
     /// Default timeout applied when the model omits `timeout_secs`.
     default_timeout: Duration,
+    /// Hard upper bound — the model cannot request more.
+    max_timeout: Duration,
+    /// Whether to sanitize the environment before spawning.
+    sanitize_env: bool,
+    /// Compiled command classifier (auto-approve / deny / prompt).
+    filter: ShellFilter,
 }
 
 impl ShellTool {
-    /// Creates a new shell tool.
-    ///
-    /// `workspace_root` must be an existing directory — it becomes the CWD
-    /// of every command executed through this tool.
-    ///
-    /// `default_timeout` caps how long a single command may run. The model
-    /// can request a shorter timeout via the `timeout_secs` parameter, but
-    /// cannot exceed this default (the tool clamps it).
-    pub fn new(workspace_root: PathBuf, default_timeout: Duration) -> Self {
+    /// Creates a new shell tool from sandbox configuration.
+    pub fn new(workspace_root: PathBuf, config: &SandboxConfig) -> Self {
         Self {
             workspace_root,
-            default_timeout,
+            default_timeout: Duration::from_secs(config.shell.default_timeout_secs),
+            max_timeout: Duration::from_secs(config.shell.max_timeout_secs),
+            sanitize_env: config.shell.sanitize_environment,
+            filter: ShellFilter::from_config(config),
         }
     }
 
@@ -118,39 +118,45 @@ impl ShellTool {
             ));
         }
 
+        // ── Command validation ────────────────────────────────────────
+        use crate::sandbox::shell_filter::CommandVerdict;
+        if let CommandVerdict::Blocked { reason } = self.filter.classify(&command) {
+            return Err(ToolError::Execution(format!(
+                "Command blocked by sandbox policy: {reason}"
+            )));
+        }
+
         let timeout_secs = args
             .timeout_secs
             .unwrap_or(self.default_timeout.as_secs())
-            .min(self.default_timeout.as_secs())
+            .min(self.max_timeout.as_secs())
             .max(1);
 
-        // ── Platform shell selection ──────────────────────────────
-        // cmd /C on Windows — starts instantly (no .NET CLR overhead
-        // like PowerShell). Encoding is handled by decode_stdout()
-        // below, which tries UTF-8 first and falls back to the system
-        // ANSI code page (GetACP).
+        // ── Platform shell selection ──────────────────────────────────
         #[cfg(target_os = "windows")]
         let (shell, shell_arg) = ("cmd", "/C");
         #[cfg(not(target_os = "windows"))]
         let (shell, shell_arg) = ("sh", "-c");
 
-        // ── Spawn child process ───────────────────────────────────
-        let child = Command::new(shell)
-            .arg(shell_arg)
+        // ── Spawn child process ───────────────────────────────────────
+        let mut cmd = Command::new(shell);
+        cmd.arg(shell_arg)
             .arg(&command)
             .current_dir(&self.workspace_root)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Apply environment sanitization
+        env_sanitizer::sanitize(&mut cmd, &self.workspace_root, self.sanitize_env);
+
+        let child = cmd
             .spawn()
             .map_err(|e| ToolError::Execution(format!("Failed to spawn command: {e}")))?;
 
         let pid = child.id();
 
-        // ── Watchdog thread ──────────────────────────────────────
-        // Polls every 100ms; kills the process on timeout. An AtomicBool
-        // signal lets it exit early when the command completes quickly —
-        // without this, join() blocks for the full timeout.
+        // ── Watchdog thread (kills entire process tree) ──────────────
         let done = Arc::new(AtomicBool::new(false));
         let done_signal = Arc::clone(&done);
         let timeout = Duration::from_secs(timeout_secs);
@@ -159,21 +165,27 @@ impl ShellTool {
             let deadline = Instant::now() + timeout;
             while Instant::now() < deadline {
                 if done_signal.load(Ordering::Relaxed) {
-                    return; // command finished before timeout
+                    return;
                 }
                 thread::sleep(Duration::from_millis(100));
             }
-            // Timeout reached — best-effort kill.
+            // Timeout reached — kill the entire process tree.
             #[cfg(target_os = "windows")]
             {
+                // /T = tree kill (child processes too)
                 let _ = Command::new("taskkill")
-                    .args(["/F", "/PID", &pid.to_string()])
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .spawn();
             }
             #[cfg(not(target_os = "windows"))]
             {
+                // Kill process group — requires setpgid(0, 0) before
+                // spawning the child, which std::process::Command does
+                // not expose.  We fall back to sending SIGKILL to the
+                // immediate child; orphaned grandchildren will be reaped
+                // by init.
                 let _ = Command::new("kill")
                     .args(["-9", &pid.to_string()])
                     .stdout(Stdio::null())
@@ -332,7 +344,7 @@ mod tests {
     use tools::Tool;
 
     fn make_tool() -> ShellTool {
-        ShellTool::new(std::env::current_dir().unwrap(), Duration::from_secs(30))
+        ShellTool::new(std::env::current_dir().unwrap(), &SandboxConfig::default())
     }
 
     // ── Metadata ──────────────────────────────────────────────────

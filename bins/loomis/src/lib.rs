@@ -3,6 +3,7 @@
 pub mod app;
 pub mod compact;
 pub mod hooks;
+pub mod sandbox;
 pub mod tools;
 pub mod tui;
 

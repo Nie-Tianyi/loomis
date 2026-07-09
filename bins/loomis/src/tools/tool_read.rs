@@ -7,6 +7,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use std::sync::Arc;
 
+#[cfg(test)]
+use tools::SandboxConfig;
 use tools::WorkspaceFs;
 use tools::{FsError, ToolError, tool};
 
@@ -97,7 +99,7 @@ mod tests {
 
     fn setup() -> (tempfile::TempDir, ReadTool) {
         let dir = tempfile::tempdir().unwrap();
-        let fs = WorkspaceFs::new(dir.path()).unwrap();
+        let fs = WorkspaceFs::new(dir.path(), &SandboxConfig::default()).unwrap();
         let tool = ReadTool::new(Arc::new(fs));
         (dir, tool)
     }

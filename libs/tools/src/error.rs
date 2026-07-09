@@ -26,6 +26,10 @@ impl std::error::Error for ToolError {}
 #[derive(Debug)]
 pub enum FsError {
     PathEscapesWorkspace(String),
+    FileTooLarge { path: String, size: u64, max: u64 },
+    BinaryContentDetected(String),
+    HiddenFileBlocked(String),
+    ExtensionBlocked(String),
     NotFound(String),
     NotAFile(String),
     NotADirectory(String),
@@ -39,6 +43,21 @@ impl fmt::Display for FsError {
         match self {
             Self::PathEscapesWorkspace(path) => {
                 write!(f, "path escapes workspace: {path}")
+            }
+            Self::FileTooLarge { path, size, max } => {
+                write!(
+                    f,
+                    "file too large for operation: {path} ({size} bytes, max {max})"
+                )
+            }
+            Self::BinaryContentDetected(path) => {
+                write!(f, "binary content detected, write blocked: {path}")
+            }
+            Self::HiddenFileBlocked(path) => {
+                write!(f, "hidden file write blocked: {path}")
+            }
+            Self::ExtensionBlocked(path) => {
+                write!(f, "file extension blocked: {path}")
             }
             Self::NotFound(path) => write!(f, "not found: {path}"),
             Self::NotAFile(path) => write!(f, "not a file: {path}"),

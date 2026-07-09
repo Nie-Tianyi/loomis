@@ -2,7 +2,6 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use deepseek::DeepSeekClient;
 use engine::{Agent, AgentEvent, EngineContext};
@@ -11,7 +10,12 @@ use provider::{Message, Role};
 use tokio::sync::mpsc;
 use tools::ToolRegistry;
 
-use crate::hooks::DangerousCommandApprovalHook;
+use tools::SandboxConfig;
+
+use crate::hooks::SandboxHook;
+use crate::sandbox::audit_logger::AuditLogger;
+use crate::sandbox::resource_tracker::ResourceTracker;
+use crate::sandbox::shell_filter::ShellFilter;
 use crate::tools::{CalculatorTool, GlobTool, GrepTool, LsTool, ReadTool, ShellTool, WriteTool};
 
 /// System prompt used as the initial seed for every conversation.
@@ -79,14 +83,19 @@ pub struct AgentKit {
 }
 
 /// Build a fully-wired coding agent with all channels and hooks.
-pub fn build_coding_agent(api_key: &str, workspace_root: &Path, model: &str) -> AgentKit {
+pub fn build_coding_agent(
+    api_key: &str,
+    workspace_root: &Path,
+    model: &str,
+    sandbox_config: &SandboxConfig,
+) -> AgentKit {
     // ── Channels ──────────────────────────────────────────────
     // Created here (not in the TUI event loop) so the shell-approval
     // hook can receive a clone of agent_tx.
     let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
 
     // ── Workspace filesystem ─────────────────────────────────
-    let workspace = tools::WorkspaceFs::new(workspace_root).unwrap_or_else(|e| {
+    let workspace = tools::WorkspaceFs::new(workspace_root, sandbox_config).unwrap_or_else(|e| {
         eprintln!(
             "ERROR: Cannot create workspace at {}: {e}",
             workspace_root.display()
@@ -105,7 +114,7 @@ pub fn build_coding_agent(api_key: &str, workspace_root: &Path, model: &str) -> 
     registry.register(Arc::new(LsTool::new(workspace.clone())));
     registry.register(Arc::new(ShellTool::new(
         workspace_root.to_path_buf(),
-        Duration::from_secs(30),
+        sandbox_config,
     )));
 
     let tool_names: Vec<String> = registry.iter().map(|(n, _)| n.to_string()).collect();
@@ -117,8 +126,14 @@ pub fn build_coding_agent(api_key: &str, workspace_root: &Path, model: &str) -> 
     // ── LLM Client ───────────────────────────────────────────
     let client = DeepSeekClient::new(api_key);
 
+    // ── Sandbox components ────────────────────────────────────
+    let shell_filter = ShellFilter::from_config(sandbox_config);
+    let resource_tracker = Arc::new(ResourceTracker::new(sandbox_config));
+    let audit_logger = Arc::new(AuditLogger::new(sandbox_config, workspace_root));
+
     // ── Hooks ─────────────────────────────────────────────────
-    let (approval_hook, approval_tx) = DangerousCommandApprovalHook::new();
+    let (approval_hook, approval_tx) =
+        SandboxHook::new(shell_filter, resource_tracker, audit_logger);
     approval_hook.set_agent_tx(agent_tx.clone());
 
     let hooks: Vec<Box<dyn engine::AgentHook>> = vec![Box::new(approval_hook)];

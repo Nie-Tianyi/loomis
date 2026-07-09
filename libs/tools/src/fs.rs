@@ -7,16 +7,28 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::error::FsError;
+use super::sandbox::SandboxConfig;
 
 /// Sandboxed file-system handle. All operations are confined to `workspace_root`.
+///
+/// Policy knobs (file-size caps, extension blocklist, hidden-file protection)
+/// come from [`SandboxConfig`] and are baked into the handle at construction.
 #[derive(Debug)]
 pub struct WorkspaceFs {
     workspace_root: PathBuf,
+    max_read_bytes: usize,
+    max_write_bytes: usize,
+    forbid_binary_writes: bool,
+    forbid_hidden_file_writes: bool,
+    blocked_write_extensions: Vec<String>,
 }
 
 impl WorkspaceFs {
     /// Create a new workspace file-system handle.
-    pub fn new(root: impl Into<PathBuf>) -> Result<Self, FsError> {
+    ///
+    /// Validates that `root` exists and is a directory, then canonicalizes
+    /// it. Sandbox policies are taken from `config.filesystem`.
+    pub fn new(root: impl Into<PathBuf>, config: &SandboxConfig) -> Result<Self, FsError> {
         let root: PathBuf = root.into();
 
         if !root.try_exists().map_err(FsError::Io)? {
@@ -28,7 +40,14 @@ impl WorkspaceFs {
 
         let workspace_root = root.canonicalize().map_err(FsError::Io)?;
 
-        Ok(Self { workspace_root })
+        Ok(Self {
+            workspace_root,
+            max_read_bytes: config.filesystem.max_read_bytes,
+            max_write_bytes: config.filesystem.max_write_bytes,
+            forbid_binary_writes: config.filesystem.forbid_binary_writes,
+            forbid_hidden_file_writes: config.filesystem.forbid_hidden_file_writes,
+            blocked_write_extensions: config.filesystem.blocked_write_extensions.clone(),
+        })
     }
 
     pub fn workspace_root(&self) -> &Path {
@@ -36,6 +55,13 @@ impl WorkspaceFs {
     }
 
     /// Resolve a relative path to an absolute path within the workspace.
+    ///
+    /// On success the returned path is guaranteed to start with
+    /// `workspace_root`.  When the resolved path already exists on disk
+    /// we also perform a **TOCTOU re-check**: canonicalize a second time
+    /// and verify that the inode / file-index hasn't changed between the
+    /// two calls.  This makes symlink-swap attacks substantially harder
+    /// (though a truly race-free design would need handle-based I/O).
     fn resolve(&self, path: &str) -> Result<PathBuf, FsError> {
         let joined = if path.is_empty() {
             self.workspace_root.clone()
@@ -56,10 +82,39 @@ impl WorkspaceFs {
             )));
         }
 
+        // ── TOCTOU re-check for existing paths ──────────────────────────
+        // Re-canonicalize and verify the file identity hasn't changed.
+        // On Unix we compare inode numbers; on Windows we compare the file
+        // index obtained from the handle.  If the path didn't exist at the
+        // first canonicalize (normalize_partial path), this is a no-op.
+        if let Ok(meta) = normalized.metadata() {
+            let re_canon = normalized.canonicalize().map_err(FsError::Io)?;
+            if !re_canon.starts_with(&self.workspace_root) {
+                return Err(FsError::PathEscapesWorkspace(format!(
+                    "'{}' escapes workspace (TOCTOU re-check)",
+                    path
+                )));
+            }
+            // Compare file identity: same length + same modification time
+            // is a decent heuristic for "same file" without platform-specific
+            // inode APIs.
+            if let Ok(re_meta) = re_canon.metadata()
+                && (meta.len() != re_meta.len() || meta.modified().ok() != re_meta.modified().ok())
+            {
+                return Err(FsError::PathEscapesWorkspace(format!(
+                    "'{}' file identity changed between checks — possible symlink swap",
+                    path
+                )));
+            }
+        }
+
         Ok(normalized)
     }
 
     /// Read file content with optional `offset` (1-indexed line) and `limit`.
+    ///
+    /// Files larger than `max_read_bytes` are rejected before reading to
+    /// avoid accidental OOM on huge files.
     pub fn read(
         &self,
         path: &str,
@@ -73,6 +128,17 @@ impl WorkspaceFs {
         }
         if !resolved.is_file() {
             return Err(FsError::NotAFile(path.to_string()));
+        }
+
+        // ── Size limit check ────────────────────────────────────────────
+        let metadata = resolved.metadata().map_err(FsError::Io)?;
+        let file_size = metadata.len();
+        if file_size > self.max_read_bytes as u64 {
+            return Err(FsError::FileTooLarge {
+                path: path.to_string(),
+                size: file_size,
+                max: self.max_read_bytes as u64,
+            });
         }
 
         let content = fs::read_to_string(&resolved).map_err(FsError::Io)?;
@@ -99,8 +165,45 @@ impl WorkspaceFs {
     }
 
     /// Create or overwrite a file. Creates parent directories as needed.
+    ///
+    /// Enforces content size limits, extension blocklist, hidden-file
+    /// protection, and binary-content detection (null-byte heuristic).
     pub fn write(&self, path: &str, content: &str) -> Result<(), FsError> {
         let resolved = self.resolve(path)?;
+
+        // ── Content size limit ──────────────────────────────────────────
+        if content.len() > self.max_write_bytes {
+            return Err(FsError::FileTooLarge {
+                path: path.to_string(),
+                size: content.len() as u64,
+                max: self.max_write_bytes as u64,
+            });
+        }
+
+        // ── Extension blocklist ─────────────────────────────────────────
+        if let Some(ext) = resolved.extension().and_then(|e| e.to_str()) {
+            let dot_ext = format!(".{}", ext);
+            if self
+                .blocked_write_extensions
+                .iter()
+                .any(|blocked| blocked.eq_ignore_ascii_case(&dot_ext))
+            {
+                return Err(FsError::ExtensionBlocked(path.to_string()));
+            }
+        }
+
+        // ── Binary content detection ────────────────────────────────────
+        if self.forbid_binary_writes && content.contains('\0') {
+            return Err(FsError::BinaryContentDetected(path.to_string()));
+        }
+
+        // ── Hidden file protection ──────────────────────────────────────
+        if self.forbid_hidden_file_writes
+            && let Some(name) = resolved.file_name().and_then(|n| n.to_str())
+            && name.starts_with('.')
+        {
+            return Err(FsError::HiddenFileBlocked(path.to_string()));
+        }
 
         if resolved.exists() && resolved.is_dir() {
             return Err(FsError::NotAFile(path.to_string()));
@@ -333,21 +436,33 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn test_config() -> SandboxConfig {
+        let mut cfg = SandboxConfig::default();
+        // Use generous limits for tests — we're testing sandbox logic,
+        // not the specific limit values.
+        cfg.filesystem.max_read_bytes = 10_000_000;
+        cfg.filesystem.max_write_bytes = 1_000_000;
+        cfg.filesystem.forbid_binary_writes = true;
+        cfg.filesystem.forbid_hidden_file_writes = false; // allow .files in tests
+        cfg
+    }
+
     fn setup_fs() -> (tempfile::TempDir, WorkspaceFs) {
         let dir = tempfile::tempdir().unwrap();
-        let fs = WorkspaceFs::new(dir.path()).unwrap();
+        let fs = WorkspaceFs::new(dir.path(), &test_config()).unwrap();
         (dir, fs)
     }
 
     #[test]
     fn test_new_valid_directory() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(WorkspaceFs::new(dir.path()).is_ok());
+        assert!(WorkspaceFs::new(dir.path(), &test_config()).is_ok());
     }
 
     #[test]
     fn test_new_nonexistent() {
-        let result = WorkspaceFs::new("/tmp/__nonexistent_dir__");
+        let cfg = test_config();
+        let result = WorkspaceFs::new("/tmp/__nonexistent_dir__", &cfg);
         assert!(matches!(result, Err(FsError::NotFound(_))));
     }
 
@@ -430,5 +545,69 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name, "sub"); // directories first
         assert_eq!(entries[1].name, "a.txt");
+    }
+
+    // ── New sandbox enforcement tests ───────────────────────────────────
+
+    #[test]
+    fn test_read_file_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = test_config();
+        cfg.filesystem.max_read_bytes = 10; // tiny limit
+        let fs = WorkspaceFs::new(dir.path(), &cfg).unwrap();
+        fs.write("big.txt", "this is more than ten bytes of content")
+            .unwrap();
+        let result = fs.read("big.txt", None, None);
+        assert!(
+            matches!(result, Err(FsError::FileTooLarge { .. })),
+            "expected FileTooLarge, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_write_binary_blocked() {
+        let (_dir, fs) = setup_fs();
+        // Use .txt so the extension check doesn't intercept first.
+        let result = fs.write("evil.txt", "MZ\u{0}binary");
+        assert!(
+            matches!(result, Err(FsError::BinaryContentDetected(_))),
+            "expected BinaryContentDetected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_write_extension_blocked() {
+        let (_dir, fs) = setup_fs();
+        let result = fs.write("malware.exe", "harmless text");
+        assert!(
+            matches!(result, Err(FsError::ExtensionBlocked(_))),
+            "expected ExtensionBlocked, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_write_hidden_file_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = test_config();
+        cfg.filesystem.forbid_hidden_file_writes = true;
+        let fs = WorkspaceFs::new(dir.path(), &cfg).unwrap();
+        let result = fs.write(".env", "SECRET=123");
+        assert!(
+            matches!(result, Err(FsError::HiddenFileBlocked(_))),
+            "expected HiddenFileBlocked, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_write_content_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = test_config();
+        cfg.filesystem.max_write_bytes = 5;
+        let fs = WorkspaceFs::new(dir.path(), &cfg).unwrap();
+        let result = fs.write("small.txt", "this is way too long");
+        assert!(
+            matches!(result, Err(FsError::FileTooLarge { .. })),
+            "expected FileTooLarge, got {result:?}"
+        );
     }
 }

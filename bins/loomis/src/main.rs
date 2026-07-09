@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 
+use tools::SandboxConfig;
+
 const DEFAULT_MODEL: &str = "deepseek-chat";
 
 #[tokio::main]
@@ -21,7 +23,17 @@ async fn main() {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let model = std::env::var("DEFAULT_PRO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
-    let kit = loomis::build_coding_agent(&api_key, &cwd, &model);
+    // Load sandbox config from .loomis/config.toml (falls back to safe defaults).
+    let sandbox_config = match SandboxConfig::load(&cwd) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("WARNING: Failed to load sandbox config: {e}");
+            eprintln!("Using safe defaults.");
+            SandboxConfig::default()
+        }
+    };
+
+    let kit = loomis::build_coding_agent(&api_key, &cwd, &model, &sandbox_config);
 
     if use_tui {
         match loomis::tui::run(
