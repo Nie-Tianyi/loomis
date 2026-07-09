@@ -22,19 +22,12 @@ use crate::context::EngineContext;
 
 #[derive(Debug)]
 pub enum AgentError {
-    /// Provider-level error.
     Provider(ProviderError),
-    /// Tool execution failed.
     Tool { name: String, error: ToolError },
-    /// Safety cap reached.
     MaxStepsReached(usize),
-    /// Empty response from model.
     NoOutput,
-    /// No choices in response.
     NoChoices,
-    /// Memory compaction failed.
     Memory(String),
-    /// Tool call was rejected by a hook.
     ToolRejected { name: String, reason: String },
 }
 
@@ -47,9 +40,7 @@ impl fmt::Display for AgentError {
             Self::NoOutput => write!(f, "model returned empty output"),
             Self::NoChoices => write!(f, "response has no choices"),
             Self::Memory(msg) => write!(f, "memory error: {msg}"),
-            Self::ToolRejected { name, reason } => {
-                write!(f, "tool '{name}' rejected: {reason}")
-            }
+            Self::ToolRejected { name, reason } => write!(f, "tool '{name}' rejected: {reason}"),
         }
     }
 }
@@ -64,45 +55,44 @@ impl From<ProviderError> for AgentError {
 
 // ── AgentEvent ────────────────────────────────────────────────────────────────
 
-/// Real-time events emitted during [`Agent::run_with_events`].
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
-    /// A text token from the model's response.
     Token(String),
-    /// A chain-of-thought reasoning token.
     ReasoningToken(String),
-    /// A tool call has started (name + id).
-    ToolCallStart { id: String, name: String },
-    /// Incremental arguments for an in-progress tool call.
-    ToolCallArgsDelta { id: String, delta: String },
-    /// Tool execution completed.
+    ToolCallStart {
+        id: String,
+        name: String,
+    },
+    ToolCallArgsDelta {
+        id: String,
+        delta: String,
+    },
     ToolResult {
         id: String,
         name: String,
         output: String,
     },
-    /// Shell command is running (from user `!` prefix).
-    ShellRunning { command: String },
-    /// Shell command output.
-    ShellOutput { command: String, output: String },
-    /// Agent loop completed.
+    ShellRunning {
+        command: String,
+    },
+    ShellOutput {
+        command: String,
+        output: String,
+    },
     Done,
 }
 
 // ── Agent ─────────────────────────────────────────────────────────────────────
 
-/// Autonomous agent that runs the ReAct (Reason + Act) loop.
-pub struct Agent {
-    ctx: EngineContext,
+pub struct Agent<C: LLMClient> {
+    ctx: EngineContext<C>,
 }
 
-impl Agent {
-    /// Create an agent from an [`EngineContext`].
-    pub fn new(ctx: EngineContext) -> Self {
+impl<C: LLMClient> Agent<C> {
+    pub fn new(ctx: EngineContext<C>) -> Self {
         Self { ctx }
     }
 
-    /// Run the agent loop (fire-and-forget).
     pub async fn run_loop(&self, user_input: &str) -> Result<String, AgentError> {
         if self.ctx.streaming {
             self.run_streaming_loop(user_input, None).await
@@ -111,7 +101,6 @@ impl Agent {
         }
     }
 
-    /// Run the agent loop with real-time event streaming.
     pub async fn run_with_events(
         &self,
         user_input: &str,
@@ -123,8 +112,6 @@ impl Agent {
             self.run_non_streaming_loop(user_input, Some(tx)).await
         }
     }
-
-    // ── Configuration accessors ─────────────────────────────────────────
 
     pub fn streaming(&self) -> bool {
         self.ctx.streaming
@@ -145,15 +132,14 @@ impl Agent {
 
 // ── Streaming Loop ────────────────────────────────────────────────────────────
 
-impl Agent {
+impl<C: LLMClient> Agent<C> {
     async fn run_streaming_loop(
         &self,
         user_input: &str,
         tx: Option<mpsc::UnboundedSender<AgentEvent>>,
     ) -> Result<String, AgentError> {
-        // Fire on_run_start hooks.
         for hook in &self.ctx.hooks {
-            hook.on_run_start("default", user_input).await;
+            hook.on_run_start("default", user_input);
         }
 
         let mut steps = 0;
@@ -163,7 +149,6 @@ impl Agent {
             }
             steps += 1;
 
-            // ── Build request ──────────────────────────────────────
             let messages = {
                 let mem = self.ctx.memory.read().unwrap();
                 mem.to_context_vec()
@@ -174,16 +159,13 @@ impl Agent {
                 .with_stream(true)
                 .with_tools(tools);
 
-            // Fire on_llm_start hooks.
             for hook in &self.ctx.hooks {
-                hook.on_llm_start("default").await;
+                hook.on_llm_start("default");
             }
 
-            // ── Stream with retry ──────────────────────────────────
             let mut stream =
-                stream_with_retry(&*self.ctx.llm, request.clone(), self.ctx.max_retries).await?;
+                stream_with_retry(&self.ctx.llm, request.clone(), self.ctx.max_retries).await?;
 
-            // ── Accumulate streaming response ─────────────────────
             let mut acc = StreamAccumulator::new();
 
             while let Some(chunk_result) = stream.next().await {
@@ -198,12 +180,10 @@ impl Agent {
 
             let assistant_msg = acc.into_assistant_message();
 
-            // Fire on_llm_end hooks.
             for hook in &self.ctx.hooks {
-                hook.on_llm_end("default", &assistant_msg).await;
+                hook.on_llm_end("default", &assistant_msg);
             }
 
-            // ── Handle tool calls ──────────────────────────────────
             if let Some(tool_calls) = &assistant_msg.tool_calls {
                 if tool_calls.is_empty() {
                     if let Some(ref tx) = tx {
@@ -212,18 +192,15 @@ impl Agent {
                     return Ok(assistant_msg.content);
                 }
 
-                // Push assistant message to memory.
                 {
                     let mut mem = self.ctx.memory.write().unwrap();
                     mem.push(assistant_msg.clone());
                 }
 
-                // Execute tool calls.
                 for tc in tool_calls {
-                    // Fire before_tool_call hooks.
                     let mut blocked = false;
                     for hook in &self.ctx.hooks {
-                        if let Err(e) = hook.before_tool_call("default", tc).await {
+                        if let Err(e) = hook.before_tool_call("default", tc) {
                             let msg = Message::tool_result(&tc.id, format!("Tool rejected: {e}"));
                             {
                                 let mut mem = self.ctx.memory.write().unwrap();
@@ -245,7 +222,6 @@ impl Agent {
                         continue;
                     }
 
-                    // Execute the tool.
                     let result = self
                         .ctx
                         .tools
@@ -257,12 +233,10 @@ impl Agent {
                         None => format!("Tool not found: {}", tc.function.name),
                     };
 
-                    // Fire after_tool_call hooks.
                     for hook in &self.ctx.hooks {
-                        hook.after_tool_call("default", tc, &observation).await;
+                        hook.after_tool_call("default", tc, &observation);
                     }
 
-                    // Push tool result to memory.
                     {
                         let mut mem = self.ctx.memory.write().unwrap();
                         mem.push(Message::tool_result(&tc.id, &observation));
@@ -276,9 +250,7 @@ impl Agent {
                         });
                     }
                 }
-                // Continue loop — model will process tool results.
             } else {
-                // Final text response.
                 {
                     let mut mem = self.ctx.memory.write().unwrap();
                     mem.push(assistant_msg.clone());
@@ -291,14 +263,13 @@ impl Agent {
         }
     }
 
-    /// Non-streaming agent loop.
     async fn run_non_streaming_loop(
         &self,
         user_input: &str,
         tx: Option<mpsc::UnboundedSender<AgentEvent>>,
     ) -> Result<String, AgentError> {
         for hook in &self.ctx.hooks {
-            hook.on_run_start("default", user_input).await;
+            hook.on_run_start("default", user_input);
         }
 
         let mut steps = 0;
@@ -319,27 +290,23 @@ impl Agent {
                 .with_tools(tools);
 
             for hook in &self.ctx.hooks {
-                hook.on_llm_start("default").await;
+                hook.on_llm_start("default");
             }
 
             let response =
-                generate_with_retry(&*self.ctx.llm, request, self.ctx.max_retries).await?;
+                generate_with_retry(&self.ctx.llm, request, self.ctx.max_retries).await?;
 
             let choice = response
                 .choices
                 .into_iter()
                 .next()
                 .ok_or(AgentError::NoChoices)?;
-            let role = choice.message.role;
             let content = choice.message.content.unwrap_or_default();
             let tool_calls = choice.message.tool_calls;
             let reasoning = choice.message.reasoning_content;
 
             let msg = Message {
-                role: match role.as_str() {
-                    "assistant" => Role::Assistant,
-                    _ => Role::Assistant,
-                },
+                role: Role::Assistant,
                 content: content.clone(),
                 tool_calls: tool_calls.clone(),
                 tool_call_id: None,
@@ -347,7 +314,7 @@ impl Agent {
             };
 
             for hook in &self.ctx.hooks {
-                hook.on_llm_end("default", &msg).await;
+                hook.on_llm_end("default", &msg);
             }
 
             if let Some(ref tx) = tx {
@@ -379,7 +346,7 @@ impl Agent {
                 for tc in &tool_calls {
                     let mut blocked = false;
                     for hook in &self.ctx.hooks {
-                        if let Err(e) = hook.before_tool_call("default", tc).await {
+                        if let Err(e) = hook.before_tool_call("default", tc) {
                             let tool_msg =
                                 Message::tool_result(&tc.id, format!("Tool rejected: {e}"));
                             {
@@ -405,7 +372,7 @@ impl Agent {
                     };
 
                     for hook in &self.ctx.hooks {
-                        hook.after_tool_call("default", tc, &observation).await;
+                        hook.after_tool_call("default", tc, &observation);
                     }
 
                     {
@@ -429,7 +396,6 @@ impl Agent {
 
 // ── StreamAccumulator ─────────────────────────────────────────────────────────
 
-/// Reassembles streaming tool-call fragments into complete messages.
 struct StreamAccumulator {
     content: String,
     reasoning: String,
@@ -528,14 +494,12 @@ fn emit_chunk_events(
         }
         if let Some(ref tool_calls) = choice.delta.tool_calls {
             for tc in tool_calls {
-                // On first chunk for a tool call, emit ToolCallStart.
                 if !tc.id.is_empty() && !tc.function.name.is_empty() {
                     let _ = tx.send(AgentEvent::ToolCallStart {
                         id: tc.id.clone(),
                         name: tc.function.name.clone(),
                     });
                 }
-                // Emit argument deltas.
                 if !tc.function.arguments.is_empty() {
                     let _ = tx.send(AgentEvent::ToolCallArgsDelta {
                         id: tc.id.clone(),
@@ -551,7 +515,7 @@ fn emit_chunk_events(
 // ── Retry helpers ─────────────────────────────────────────────────────────────
 
 async fn generate_with_retry(
-    client: &dyn LLMClient,
+    client: &impl LLMClient,
     request: CompletionRequest,
     max_retries: usize,
 ) -> Result<CompletionResponse, AgentError> {
@@ -575,7 +539,7 @@ async fn generate_with_retry(
 }
 
 async fn stream_with_retry(
-    client: &dyn LLMClient,
+    client: &impl LLMClient,
     request: CompletionRequest,
     max_retries: usize,
 ) -> Result<futures_util::stream::BoxStream<'static, Result<StreamChunk, ProviderError>>, AgentError>

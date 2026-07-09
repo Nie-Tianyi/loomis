@@ -31,7 +31,6 @@ pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 schemars = { workspace = true }
 glob = { workspace = true }
-async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

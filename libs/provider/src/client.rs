@@ -1,4 +1,5 @@
-use async_trait::async_trait;
+use std::future::Future;
+
 use futures_util::stream::BoxStream;
 
 use crate::error::ProviderError;
@@ -11,18 +12,23 @@ use crate::stream::StreamChunk;
 /// Implementations handle provider-specific HTTP details, authentication,
 /// and wire-protocol parsing. The rest of the agent framework only depends
 /// on this trait — never on a concrete provider type.
-#[async_trait]
+///
+/// Uses Rust 2024 native async traits with explicit `Send` bounds so
+/// the futures can be spawned across tokio tasks.
 pub trait LLMClient: Send + Sync {
     /// Send a non-streaming completion request.
-    async fn generate(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError>;
+    fn generate(
+        &self,
+        req: CompletionRequest,
+    ) -> impl Future<Output = Result<CompletionResponse, ProviderError>> + Send;
 
     /// Send a streaming completion request.
     ///
     /// Returns a [`BoxStream`] that yields chunks as they arrive.
-    /// The `'static` lifetime means the stream owns all its data
-    /// and does not borrow from `&self`.
-    async fn stream(
+    fn stream(
         &self,
         req: CompletionRequest,
-    ) -> Result<BoxStream<'static, Result<StreamChunk, ProviderError>>, ProviderError>;
+    ) -> impl Future<
+        Output = Result<BoxStream<'static, Result<StreamChunk, ProviderError>>, ProviderError>,
+    > + Send;
 }

@@ -7,9 +7,9 @@ use tools::ToolRegistry;
 use crate::hooks::AgentHook;
 
 /// Configuration and dependencies for an [`Agent`](crate::Agent).
-pub struct EngineContext {
+pub struct EngineContext<C: LLMClient> {
     /// LLM provider implementation.
-    pub llm: Box<dyn LLMClient>,
+    pub llm: C,
     /// Shared conversation memory.
     pub memory: SharedMemory,
     /// Tool registry (shared ownership).

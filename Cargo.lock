@@ -18,17 +18,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "async-trait"
-version = "0.1.89"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -241,7 +230,6 @@ dependencies = [
 name = "deepseek"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "futures-util",
  "provider",
  "reqwest",
@@ -298,7 +286,6 @@ dependencies = [
 name = "engine"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "futures-util",
  "memory",
  "provider",
@@ -882,7 +869,6 @@ checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 name = "loomis"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "crossterm",
  "deepseek",
  "dotenvy",
@@ -1037,7 +1023,6 @@ dependencies = [
 name = "provider"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "futures-util",
  "serde",
  "serde_json",

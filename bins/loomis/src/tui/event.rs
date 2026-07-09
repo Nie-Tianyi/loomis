@@ -28,6 +28,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use engine::{Agent, AgentEvent};
 use memory::{Memory, SharedMemory};
+use provider::LLMClient;
 use provider::{Message, Role};
 
 use super::app::{App, TuiCommand};
@@ -46,8 +47,8 @@ use super::app::{App, TuiCommand};
 /// - `memory` — shared conversation history.
 /// - `tool_names` — cached list of tool names for the `/tools` command.
 /// - `model` — model name for the status bar.
-pub fn run(
-    agent: Agent,
+pub fn run<C: LLMClient + 'static>(
+    agent: Agent<C>,
     memory: SharedMemory,
     tool_names: Vec<String>,
     model: &str,
@@ -197,8 +198,8 @@ fn run_event_loop(
 /// Cancellation is handled via `JoinHandle::abort()`. Since the agent's
 /// own `run_streaming_loop` periodically `.await`s (network I/O), abort
 /// takes effect quickly.
-async fn agent_handler(
-    agent: Arc<Agent>,
+async fn agent_handler<C: LLMClient + 'static>(
+    agent: Arc<Agent<C>>,
     memory: SharedMemory,
     mut cmd_rx: UnboundedReceiver<TuiCommand>,
     agent_tx: UnboundedSender<AgentEvent>,

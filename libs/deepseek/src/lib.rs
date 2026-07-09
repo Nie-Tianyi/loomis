@@ -3,8 +3,6 @@
 //! Concrete implementation of [`provider::LLMClient`] for the DeepSeek API.
 //! Includes SSE streaming support and DeepSeek-specific request/response types.
 
-#![allow(async_fn_in_trait)]
-
 mod client;
 mod error;
 mod request;

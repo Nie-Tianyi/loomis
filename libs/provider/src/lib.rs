@@ -7,8 +7,6 @@
 //! Concrete provider implementations (e.g. [`deepseek`]) live in sibling
 //! crates and implement [`LLMClient`].
 
-#![allow(async_fn_in_trait)]
-
 mod client;
 mod error;
 mod message;

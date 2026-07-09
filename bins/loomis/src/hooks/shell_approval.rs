@@ -1,17 +1,14 @@
-use async_trait::async_trait;
 use engine::{AgentError, AgentHook};
 use provider::ToolCall;
 
-/// Hook that prompts the user before executing shell commands.
+/// Hook that prompts the user before executing dangerous shell commands.
 ///
 /// Blocks the agent loop until the user approves (Y) or denies (n).
 pub struct DangerousCommandApprovalHook;
 
-#[async_trait]
 impl AgentHook for DangerousCommandApprovalHook {
-    async fn before_tool_call(&self, _session_id: &str, tool: &ToolCall) -> Result<(), AgentError> {
+    fn before_tool_call(&self, _session_id: &str, tool: &ToolCall) -> Result<(), AgentError> {
         if tool.function.name == "shell" {
-            // Parse the command from arguments.
             let cmd = if let Ok(v) =
                 serde_json::from_str::<serde_json::Value>(&tool.function.arguments)
             {
@@ -23,7 +20,6 @@ impl AgentHook for DangerousCommandApprovalHook {
                 tool.function.arguments.clone()
             };
 
-            // Check for dangerous patterns.
             let dangerous =
                 cmd.contains("rm -rf") || cmd.contains("drop table") || cmd.contains("format C:");
 

@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use engine::{AgentError, AgentHook};
 use provider::ToolCall;
 use tokio::sync::mpsc;
@@ -16,17 +15,15 @@ pub struct UiStreamHook {
     pub tx: mpsc::Sender<UiEvent>,
 }
 
-#[async_trait]
 impl AgentHook for UiStreamHook {
-    async fn on_llm_start(&self, _session_id: &str) {
-        let _ = self.tx.send(UiEvent::Thinking).await;
+    fn on_llm_start(&self, _session_id: &str) {
+        let _ = self.tx.try_send(UiEvent::Thinking);
     }
 
-    async fn before_tool_call(&self, _session_id: &str, tool: &ToolCall) -> Result<(), AgentError> {
+    fn before_tool_call(&self, _session_id: &str, tool: &ToolCall) -> Result<(), AgentError> {
         let _ = self
             .tx
-            .send(UiEvent::ToolCalled(tool.function.name.clone()))
-            .await;
+            .try_send(UiEvent::ToolCalled(tool.function.name.clone()));
         Ok(())
     }
 }

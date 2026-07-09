@@ -97,7 +97,6 @@ impl DeepSeekClient {
     }
 }
 
-#[async_trait::async_trait]
 impl LLMClient for DeepSeekClient {
     async fn generate(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
         let ds_req = DeepSeekRequest::from(req);
