@@ -110,10 +110,10 @@ provider (无内部依赖)
 |-------|------|------|----------|
 | `provider` | `libs/` | 抽象 | `LLMClient` trait, `Message`, `Role`, `ToolCall`, `ToolDef`, `CompletionRequest`, `CompletionResponse`, `ProviderError`, `StreamChunk`, `Delta` |
 | `deepseek` | `libs/` | 具体实现 | `DeepSeekClient` (impl `LLMClient`), `DeepSeekStream` (SSE 解析管道), `DeepSeekRequest`, `DeepSeekError` |
-| `tools` | `libs/` | 抽象 | `Tool` trait (sync, `Send+Sync`), `ToolRegistry`, `WorkspaceFs`, `ToolError`, `FsError`, `generate_schema` |
+| `tools` | `libs/` | 抽象 | `Tool` trait (sync, `Send+Sync`), `ToolRegistry`, `WorkspaceFs`, `SandboxConfig`, `ToolError`, `FsError`, `generate_schema` |
 | `memory` | `libs/` | 抽象 | `Memory` (内存缓冲区), `SharedMemory` (`Arc<RwLock<Memory>>`), `MemoryBuilder`, 两阶段压缩, `save_conversation`/`load_conversation`/`list_threads` |
 | `engine` | `libs/` | 抽象 | `Agent`, `AgentEvent` (Token, ToolCallStart, ToolResult 等), `AgentError`, `AgentHook` trait, `EngineContext` |
-| `loomis` | `bins/` | 二进制 + 库 | 具体工具 (CalculatorTool, ReadTool, ShellTool 等), 具体 Hook (CliLoggerHook, DangerousCommandApprovalHook), TUI (ratatui), `build_coding_agent()`, `compact_with_deepseek()`, `main.rs` |
+| `loomis` | `bins/` | 二进制 + 库 | 具体工具 (CalculatorTool, ReadTool, ShellTool 等), 沙箱系统 (SandboxHook, ShellFilter, AuditLogger, ResourceTracker, EnvSanitizer), TUI (ratatui), `build_coding_agent()`, `compact_with_deepseek()`, `main.rs` |
 
 ### Agent 主循环 (`libs/engine/`)
 
@@ -178,7 +178,28 @@ pub trait Tool: Send + Sync {
 }
 ```
 
-**WorkspaceFs 沙箱** — 所有文件工具共享 `Arc<WorkspaceFs>`，路径规范化后验证不超出 `workspace_root`。
+**WorkspaceFs 沙箱** — 所有文件工具共享 `Arc<WorkspaceFs>`，路径规范化后验证不超出 `workspace_root`。同时强制执行文件大小限制、扩展名黑名单、隐藏文件保护和二进制内容检测（NULL 字节启发式）。具备 TOCTOU 二次规范化防 symlink 交换攻击。策略由 [`SandboxConfig`](libs/tools/src/sandbox/config.rs) 驱动（从 `.loomis/config.toml` 加载）。
+
+### 沙箱系统 (`bins/loomis/src/sandbox/`)
+
+多层纵深防御的沙箱架构：
+
+| 层 | 组件 | 职责 |
+| :-- | :--- | :--- |
+| 1 | `WorkspaceFs` | 路径沙箱 — 路径规范化 + 大小/类型限制 + TOCTOU 防护 |
+| 2 | `ShellFilter` | 命令分类 — auto_approve → deny_patterns → 弹出确认 |
+| 3 | `SandboxHook` | 统一 AgentHook — 配额检查 → 命令分类 → 自动/拒绝/提示 |
+| 4 | `EnvSanitizer` | 环境清洗 — 清空后仅恢复安全白名单变量 |
+| 5 | `ResourceTracker` | 会话配额 — 操作计数 + 并发 Shell 限制 |
+| 6 | `AuditLogger` | 审计追踪 — JSONL 文件记录所有操作决策 |
+
+**配置驱动**：`.loomis/config.toml` 控制所有策略。不存文件时使用内置安全默认值。
+
+**混合审批模式**：
+
+- `auto_approve.prefixes` 中的命令（`git`, `cargo`, `npm`, `python` 等）→ 自动放行
+- 匹配 `deny_patterns` 的命令（`rm -rf /`, `sudo`, `shutdown` 等）→ 直接拒绝
+- 其他命令 → 弹出 Y/n 确认（以 TUI 内联提示呈现）
 
 ### 记忆与持久化 (`libs/memory/`)
 
@@ -261,7 +282,7 @@ agent.run_loop("Hello!").await?;
 ### 第二阶段 — 进阶
 
 - [x] `schemars` 驱动的自动 JSON Schema 生成
-- [x] Shell 命令危险操作拦截（`DangerousCommandApprovalHook`）
+- [x] 多层沙箱系统（ShellFilter + SandboxHook + AuditLogger + ResourceTracker）
 - [ ] 其他 LLM 提供者实现（`libs/openai/`, `libs/anthropic/`）
 - [ ] Jinja 风格提示词模板引擎
 - [ ] 结构化输出
