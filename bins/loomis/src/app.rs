@@ -5,12 +5,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use deepseek::DeepSeekClient;
-use engine::{Agent, EngineContext};
+use engine::{Agent, AgentEvent, EngineContext};
 use memory::{Memory, SharedMemory};
 use provider::{Message, Role};
+use tokio::sync::mpsc;
 use tools::ToolRegistry;
 
-use crate::hooks::{CliLoggerHook, DangerousCommandApprovalHook};
+use crate::hooks::DangerousCommandApprovalHook;
 use crate::tools::{CalculatorTool, GlobTool, GrepTool, LsTool, ReadTool, ShellTool, WriteTool};
 
 /// System prompt used as the initial seed for every conversation.
@@ -62,14 +63,28 @@ principles, etc. When necessary, educate your users—do not assume they have an
 background of the field.
 ";
 
-/// Build a fully-wired coding agent.
-///
-/// Returns the agent and the shared memory handle (for TUI access).
-pub fn build_coding_agent(
-    api_key: &str,
-    workspace_root: &Path,
-    model: &str,
-) -> (Agent<DeepSeekClient>, SharedMemory, Vec<String>, String) {
+/// Product of [`build_coding_agent`] — everything needed to launch the TUI.
+pub struct AgentKit {
+    pub agent: Agent<DeepSeekClient>,
+    pub memory: SharedMemory,
+    pub tool_names: Vec<String>,
+    pub model: String,
+    /// Receiving half of the agent-event channel — consumed by the TUI event loop.
+    pub agent_rx: mpsc::UnboundedReceiver<AgentEvent>,
+    /// Clone of the sending half — for the agent handler background task.
+    pub agent_tx: mpsc::UnboundedSender<AgentEvent>,
+    /// The sender that unblocks [`DangerousCommandApprovalHook`] when the user
+    /// answers a shell confirmation prompt.
+    pub approval_tx: std::sync::mpsc::SyncSender<bool>,
+}
+
+/// Build a fully-wired coding agent with all channels and hooks.
+pub fn build_coding_agent(api_key: &str, workspace_root: &Path, model: &str) -> AgentKit {
+    // ── Channels ──────────────────────────────────────────────
+    // Created here (not in the TUI event loop) so the shell-approval
+    // hook can receive a clone of agent_tx.
+    let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
+
     // ── Workspace filesystem ─────────────────────────────────
     let workspace = tools::WorkspaceFs::new(workspace_root).unwrap_or_else(|e| {
         eprintln!(
@@ -103,10 +118,10 @@ pub fn build_coding_agent(
     let client = DeepSeekClient::new(api_key);
 
     // ── Hooks ─────────────────────────────────────────────────
-    let hooks: Vec<Box<dyn engine::AgentHook>> = vec![
-        Box::new(CliLoggerHook),
-        Box::new(DangerousCommandApprovalHook),
-    ];
+    let (approval_hook, approval_tx) = DangerousCommandApprovalHook::new();
+    approval_hook.set_agent_tx(agent_tx.clone());
+
+    let hooks: Vec<Box<dyn engine::AgentHook>> = vec![Box::new(approval_hook)];
 
     // ── Engine context ────────────────────────────────────────
     let ctx = EngineContext {
@@ -128,5 +143,13 @@ pub fn build_coding_agent(
         mem.push(Message::new(Role::System, SYSTEM_PROMPT));
     }
 
-    (agent, memory, tool_names, model.to_string())
+    AgentKit {
+        agent,
+        memory,
+        tool_names,
+        model: model.to_string(),
+        agent_rx,
+        agent_tx,
+        approval_tx,
+    }
 }

@@ -312,6 +312,18 @@ impl App {
                 });
             }
 
+            AgentEvent::ShellApprovalRequested {
+                tool_call_id,
+                command,
+            } => {
+                self.messages.push(ChatMessage::ShellConfirm {
+                    tool_call_id,
+                    command,
+                    responded: false,
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+            }
+
             AgentEvent::Done => {
                 self.streaming = false;
             }

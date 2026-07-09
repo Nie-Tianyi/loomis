@@ -47,15 +47,20 @@ use super::app::{App, TuiCommand};
 /// - `memory` — shared conversation history.
 /// - `tool_names` — cached list of tool names for the `/tools` command.
 /// - `model` — model name for the status bar.
+/// - `agent_rx` — receiving half of the agent→TUI event channel.
+/// - `agent_tx` — sending half (clone) for the agent handler task.
+/// - `approval_tx` — sender that unblocks the shell-approval hook.
 pub fn run<C: LLMClient + 'static>(
     agent: Agent<C>,
     memory: SharedMemory,
     tool_names: Vec<String>,
     model: &str,
     workspace_root: PathBuf,
+    agent_rx: UnboundedReceiver<AgentEvent>,
+    agent_tx: UnboundedSender<AgentEvent>,
+    approval_tx: std::sync::mpsc::SyncSender<bool>,
 ) -> io::Result<()> {
-    // ── Create channels ──────────────────────────────────────────────
-    let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
+    // ── Create command channel ────────────────────────────────────
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<TuiCommand>();
 
     // ── Spawn agent handler ─────────────────────────────────────────
@@ -65,6 +70,7 @@ pub fn run<C: LLMClient + 'static>(
         cmd_rx,
         agent_tx,
         workspace_root.clone(),
+        approval_tx,
     ));
 
     // ── Terminal setup ───────────────────────────────────────────────
@@ -204,6 +210,7 @@ async fn agent_handler<C: LLMClient + 'static>(
     mut cmd_rx: UnboundedReceiver<TuiCommand>,
     agent_tx: UnboundedSender<AgentEvent>,
     workspace_root: PathBuf,
+    approval_tx: std::sync::mpsc::SyncSender<bool>,
 ) {
     let mut current_run: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -292,10 +299,11 @@ async fn agent_handler<C: LLMClient + 'static>(
 
             TuiCommand::ShellConfirmation {
                 tool_call_id: _,
-                approved: _,
+                approved,
             } => {
-                // Shell confirmation is now handled by hooks
-                // (DangerousCommandApprovalHook) at the engine level.
+                // Unblock the synchronous approval hook waiting in
+                // DangerousCommandApprovalHook::before_tool_call.
+                let _ = approval_tx.send(approved);
             }
 
             TuiCommand::RunShell(command) => {

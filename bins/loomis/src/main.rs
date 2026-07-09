@@ -21,10 +21,19 @@ async fn main() {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let model = std::env::var("DEFAULT_PRO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
-    let (agent, memory, tool_names, model) = loomis::build_coding_agent(&api_key, &cwd, &model);
+    let kit = loomis::build_coding_agent(&api_key, &cwd, &model);
 
     if use_tui {
-        match loomis::tui::run(agent, memory, tool_names, &model, cwd) {
+        match loomis::tui::run(
+            kit.agent,
+            kit.memory,
+            kit.tool_names,
+            &kit.model,
+            cwd,
+            kit.agent_rx,
+            kit.agent_tx,
+            kit.approval_tx,
+        ) {
             Ok(()) => {}
             Err(e) => eprintln!("TUI error: {e}"),
         }

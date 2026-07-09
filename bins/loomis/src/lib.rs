@@ -6,5 +6,5 @@ pub mod hooks;
 pub mod tools;
 pub mod tui;
 
-pub use app::build_coding_agent;
+pub use app::{AgentKit, build_coding_agent};
 pub use compact::compact_with_deepseek;

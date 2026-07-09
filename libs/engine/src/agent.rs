@@ -79,6 +79,13 @@ pub enum AgentEvent {
         command: String,
         output: String,
     },
+    /// A shell command requires user approval before execution.
+    /// Sent by [`DangerousCommandApprovalHook`](crate::hooks::DangerousCommandApprovalHook)
+    /// to the TUI so it can render a confirmation prompt.
+    ShellApprovalRequested {
+        tool_call_id: String,
+        command: String,
+    },
     Done,
 }
 
