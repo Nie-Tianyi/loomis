@@ -45,11 +45,13 @@ pub fn build_coding_agent(
     model: &str,
 ) -> (Agent, SharedMemory, Vec<String>, String) {
     // ── Workspace filesystem ─────────────────────────────────
-    let workspace = tools::WorkspaceFs::new(workspace_root)
-        .unwrap_or_else(|e| {
-            eprintln!("ERROR: Cannot create workspace at {}: {e}", workspace_root.display());
-            std::process::exit(1);
-        });
+    let workspace = tools::WorkspaceFs::new(workspace_root).unwrap_or_else(|e| {
+        eprintln!(
+            "ERROR: Cannot create workspace at {}: {e}",
+            workspace_root.display()
+        );
+        std::process::exit(1);
+    });
     let workspace = Arc::new(workspace);
 
     // ── Tool registry ────────────────────────────────────────

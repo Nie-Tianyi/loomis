@@ -58,10 +58,7 @@ mod tests {
 
     #[test]
     fn test_completion_request_new() {
-        let req = CompletionRequest::new(
-            "test-model",
-            vec![Message::new(Role::User, "Hi")],
-        );
+        let req = CompletionRequest::new("test-model", vec![Message::new(Role::User, "Hi")]);
         assert_eq!(req.model, "test-model");
         assert_eq!(req.messages.len(), 1);
         assert!(!req.stream);

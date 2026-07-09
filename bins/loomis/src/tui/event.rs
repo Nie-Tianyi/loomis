@@ -27,9 +27,8 @@ use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use engine::{Agent, AgentEvent};
-use provider::{Message, Role};
 use memory::{Memory, SharedMemory};
-
+use provider::{Message, Role};
 
 use super::app::{App, TuiCommand};
 

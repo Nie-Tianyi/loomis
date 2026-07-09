@@ -30,9 +30,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
+use tools::Tool;
 use tools::ToolError;
 use tools::generate_schema;
-use tools::Tool;
 
 // ── CalculatorTool ────────────────────────────────────────────────────────────
 

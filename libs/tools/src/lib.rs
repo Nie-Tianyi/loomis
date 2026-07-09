@@ -13,6 +13,6 @@ mod tool;
 
 pub use error::{FsError, ToolError};
 pub use fs::{DirEntry, EntryType, GrepMatch, WorkspaceFs};
-pub use registry::{tool_to_def, ToolRegistry};
+pub use registry::{ToolRegistry, tool_to_def};
 pub use schema::generate_schema;
 pub use tool::Tool;

@@ -9,9 +9,8 @@ use std::time::SystemTime;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use engine::AgentEvent;
-use provider::Role;
 use memory::SharedMemory;
-
+use provider::Role;
 
 // ── ChatMessage ──────────────────────────────────────────────────────────────────
 

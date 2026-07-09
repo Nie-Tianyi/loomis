@@ -35,11 +35,5 @@ pub trait AgentHook: Send + Sync {
     }
 
     /// Called after a tool has been executed, with its observation.
-    async fn after_tool_call(
-        &self,
-        session_id: &str,
-        tool_call: &ToolCall,
-        observation: &str,
-    ) {
-    }
+    async fn after_tool_call(&self, session_id: &str, tool_call: &ToolCall, observation: &str) {}
 }

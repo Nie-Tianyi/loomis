@@ -17,9 +17,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
+use tools::Tool;
 use tools::ToolError;
 use tools::generate_schema;
-use tools::Tool;
 
 /// Echo 工具的参数。
 #[derive(JsonSchema, Deserialize)]

@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 
 use memory::SharedMemory;
 use provider::{
-    CompletionRequest, CompletionResponse, LLMClient, Message, ProviderError, Role,
-    StreamChunk, ToolCall, ToolCallFunction, ToolCallType,
+    CompletionRequest, CompletionResponse, LLMClient, Message, ProviderError, Role, StreamChunk,
+    ToolCall, ToolCallFunction, ToolCallType,
 };
 use tools::ToolError;
 
@@ -180,12 +180,8 @@ impl Agent {
             }
 
             // ── Stream with retry ──────────────────────────────────
-            let mut stream = stream_with_retry(
-                &*self.ctx.llm,
-                request.clone(),
-                self.ctx.max_retries,
-            )
-            .await?;
+            let mut stream =
+                stream_with_retry(&*self.ctx.llm, request.clone(), self.ctx.max_retries).await?;
 
             // ── Accumulate streaming response ─────────────────────
             let mut acc = StreamAccumulator::new();
@@ -228,10 +224,7 @@ impl Agent {
                     let mut blocked = false;
                     for hook in &self.ctx.hooks {
                         if let Err(e) = hook.before_tool_call("default", tc).await {
-                            let msg = Message::tool_result(
-                                &tc.id,
-                                format!("Tool rejected: {e}"),
-                            );
+                            let msg = Message::tool_result(&tc.id, format!("Tool rejected: {e}"));
                             {
                                 let mut mem = self.ctx.memory.write().unwrap();
                                 mem.push(msg);
@@ -253,10 +246,10 @@ impl Agent {
                     }
 
                     // Execute the tool.
-                    let result = self.ctx.tools.execute(
-                        &tc.function.name,
-                        &tc.function.arguments,
-                    );
+                    let result = self
+                        .ctx
+                        .tools
+                        .execute(&tc.function.name, &tc.function.arguments);
 
                     let observation = match result {
                         Some(Ok(output)) => output,
@@ -329,14 +322,14 @@ impl Agent {
                 hook.on_llm_start("default").await;
             }
 
-            let response = generate_with_retry(
-                &*self.ctx.llm,
-                request,
-                self.ctx.max_retries,
-            )
-            .await?;
+            let response =
+                generate_with_retry(&*self.ctx.llm, request, self.ctx.max_retries).await?;
 
-            let choice = response.choices.into_iter().next().ok_or(AgentError::NoChoices)?;
+            let choice = response
+                .choices
+                .into_iter()
+                .next()
+                .ok_or(AgentError::NoChoices)?;
             let role = choice.message.role;
             let content = choice.message.content.unwrap_or_default();
             let tool_calls = choice.message.tool_calls;
@@ -387,7 +380,8 @@ impl Agent {
                     let mut blocked = false;
                     for hook in &self.ctx.hooks {
                         if let Err(e) = hook.before_tool_call("default", tc).await {
-                            let tool_msg = Message::tool_result(&tc.id, format!("Tool rejected: {e}"));
+                            let tool_msg =
+                                Message::tool_result(&tc.id, format!("Tool rejected: {e}"));
                             {
                                 let mut mem = self.ctx.memory.write().unwrap();
                                 mem.push(tool_msg);
@@ -396,9 +390,14 @@ impl Agent {
                             break;
                         }
                     }
-                    if blocked { continue; }
+                    if blocked {
+                        continue;
+                    }
 
-                    let result = self.ctx.tools.execute(&tc.function.name, &tc.function.arguments);
+                    let result = self
+                        .ctx
+                        .tools
+                        .execute(&tc.function.name, &tc.function.arguments);
                     let observation = match result {
                         Some(Ok(output)) => output,
                         Some(Err(e)) => e.to_string(),
@@ -462,13 +461,14 @@ impl StreamAccumulator {
             }
             if let Some(ref tool_calls) = choice.delta.tool_calls {
                 for tc in tool_calls {
-                    let entry = self.tool_calls.entry(tc.index).or_insert_with(|| {
-                        ToolCallAccumulator {
-                            id: tc.id.clone(),
-                            name: String::new(),
-                            arguments: String::new(),
-                        }
-                    });
+                    let entry =
+                        self.tool_calls
+                            .entry(tc.index)
+                            .or_insert_with(|| ToolCallAccumulator {
+                                id: tc.id.clone(),
+                                name: String::new(),
+                                arguments: String::new(),
+                            });
                     if !tc.id.is_empty() {
                         entry.id = tc.id.clone();
                     }
@@ -578,10 +578,8 @@ async fn stream_with_retry(
     client: &dyn LLMClient,
     request: CompletionRequest,
     max_retries: usize,
-) -> Result<
-    futures_util::stream::BoxStream<'static, Result<StreamChunk, ProviderError>>,
-    AgentError,
-> {
+) -> Result<futures_util::stream::BoxStream<'static, Result<StreamChunk, ProviderError>>, AgentError>
+{
     let mut last_err = None;
     for attempt in 0..=max_retries {
         if attempt > 0 {
@@ -631,16 +629,8 @@ mod tests {
 
     #[test]
     fn test_agent_error_display() {
-        assert!(
-            AgentError::MaxStepsReached(10)
-                .to_string()
-                .contains("10")
-        );
-        assert!(
-            AgentError::NoOutput
-                .to_string()
-                .contains("empty")
-        );
+        assert!(AgentError::MaxStepsReached(10).to_string().contains("10"));
+        assert!(AgentError::NoOutput.to_string().contains("empty"));
     }
 
     #[test]

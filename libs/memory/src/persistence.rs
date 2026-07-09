@@ -66,7 +66,9 @@ pub fn save_conversation(name: &str, workspace_root: &Path, memory: &Memory) -> 
 }
 
 pub fn load_conversation(name: &str, workspace_root: &Path) -> io::Result<Memory> {
-    let path = workspace_root.join(THREADS_DIR).join(format!("{name}.json"));
+    let path = workspace_root
+        .join(THREADS_DIR)
+        .join(format!("{name}.json"));
     let json = fs::read_to_string(&path)?;
     let cf: ConversationFile =
         serde_json::from_str(&json).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -161,7 +163,9 @@ pub fn generate_thread_name(first_message: &str) -> String {
     let mut last_was_hyphen = false;
     for ch in slug.chars() {
         if ch == '-' {
-            if !last_was_hyphen { collapsed.push('-'); }
+            if !last_was_hyphen {
+                collapsed.push('-');
+            }
             last_was_hyphen = true;
         } else {
             collapsed.push(ch);
@@ -191,7 +195,9 @@ fn iso_now() -> String {
     let mut remaining = days as i64;
     loop {
         let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining < days_in_year { break; }
+        if remaining < days_in_year {
+            break;
+        }
         remaining -= days_in_year;
         year += 1;
     }
@@ -199,8 +205,14 @@ fn iso_now() -> String {
     const MONTH_DAYS: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let mut month = 1usize;
     for &md in &MONTH_DAYS {
-        let dim = if month == 2 && is_leap_year(year) { 29 } else { md };
-        if remaining < dim { break; }
+        let dim = if month == 2 && is_leap_year(year) {
+            29
+        } else {
+            md
+        };
+        if remaining < dim {
+            break;
+        }
         remaining -= dim;
         month += 1;
     }
@@ -224,7 +236,10 @@ fn format_conversation_md(cf: &ConversationFile) -> String {
     md.push_str(&format!("- **Messages**: {}\n", cf.messages.len()));
     let total_chars: usize = cf.messages.iter().map(|m| m.content.len()).sum();
     md.push_str(&format!("- **Total chars**: {total_chars}\n"));
-    md.push_str(&format!("- **Compact threshold**: {}\n", cf.compact_threshold));
+    md.push_str(&format!(
+        "- **Compact threshold**: {}\n",
+        cf.compact_threshold
+    ));
     md.push_str(&format!("- **Keep last N**: {}\n\n", cf.keep_last_n));
     md.push_str("---\n\n");
 
@@ -247,7 +262,10 @@ fn format_conversation_md(cf: &ConversationFile) -> String {
         md.push_str(&format!("## [{role_str}]\n\n"));
         if let Some(ref tool_calls) = msg.tool_calls {
             for tc in tool_calls {
-                md.push_str(&format!("🔧 **{}** (id: `{}`)\n\n", tc.function.name, tc.id));
+                md.push_str(&format!(
+                    "🔧 **{}** (id: `{}`)\n\n",
+                    tc.function.name, tc.id
+                ));
                 md.push_str("```json\n");
                 md.push_str(&tc.function.arguments);
                 md.push_str("\n```\n\n");

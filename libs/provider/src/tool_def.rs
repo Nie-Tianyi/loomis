@@ -85,9 +85,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&ToolChoice::Specific {
                 r#type: ToolDefType::Function,
-                function: ToolChoiceFunction {
-                    name: "f".into()
-                },
+                function: ToolChoiceFunction { name: "f".into() },
             })
             .unwrap(),
             json!({"type": "function", "function": {"name": "f"}})

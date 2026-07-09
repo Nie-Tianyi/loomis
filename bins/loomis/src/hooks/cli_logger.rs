@@ -11,12 +11,11 @@ impl AgentHook for CliLoggerHook {
         eprintln!("\u{23f3} Agent thinking...");
     }
 
-    async fn before_tool_call(
-        &self,
-        _session_id: &str,
-        tool: &ToolCall,
-    ) -> Result<(), AgentError> {
-        eprintln!("\u{1f527} Executing tool: {} | args: {}", tool.function.name, tool.function.arguments);
+    async fn before_tool_call(&self, _session_id: &str, tool: &ToolCall) -> Result<(), AgentError> {
+        eprintln!(
+            "\u{1f527} Executing tool: {} | args: {}",
+            tool.function.name, tool.function.arguments
+        );
         Ok(())
     }
 }

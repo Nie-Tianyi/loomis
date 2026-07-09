@@ -7,9 +7,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
 
+use tools::Tool;
 use tools::WorkspaceFs;
 use tools::generate_schema;
-use tools::Tool;
 use tools::{EntryType, FsError, ToolError};
 
 /// Ls 工具的参数。

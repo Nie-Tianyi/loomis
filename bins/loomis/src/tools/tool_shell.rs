@@ -36,9 +36,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
+use tools::Tool;
 use tools::ToolError;
 use tools::generate_schema;
-use tools::Tool;
 
 /// Maximum output bytes returned to the model. Prevents a single command
 /// from flooding the conversation context.

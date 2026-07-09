@@ -169,9 +169,6 @@ mod tests {
             "usage": null
         }"#;
         let chunk: StreamChunk = serde_json::from_str(raw).unwrap();
-        assert_eq!(
-            chunk.choices[0].delta.content.as_deref(),
-            Some("Hello!")
-        );
+        assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hello!"));
     }
 }

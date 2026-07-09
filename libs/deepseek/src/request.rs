@@ -128,10 +128,7 @@ mod tests {
 
     #[test]
     fn test_request_serialization() {
-        let req = DeepSeekRequest::new(
-            "deepseek-chat",
-            vec![Message::new(Role::User, "Hi")],
-        );
+        let req = DeepSeekRequest::new("deepseek-chat", vec![Message::new(Role::User, "Hi")]);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""model":"deepseek-chat""#));
         assert!(json.contains(r#""stream":false"#));

@@ -9,23 +9,23 @@ pub struct DangerousCommandApprovalHook;
 
 #[async_trait]
 impl AgentHook for DangerousCommandApprovalHook {
-    async fn before_tool_call(
-        &self,
-        _session_id: &str,
-        tool: &ToolCall,
-    ) -> Result<(), AgentError> {
+    async fn before_tool_call(&self, _session_id: &str, tool: &ToolCall) -> Result<(), AgentError> {
         if tool.function.name == "shell" {
             // Parse the command from arguments.
-            let cmd = if let Ok(v) = serde_json::from_str::<serde_json::Value>(&tool.function.arguments) {
-                v.get("command").and_then(|c| c.as_str()).unwrap_or("").to_string()
+            let cmd = if let Ok(v) =
+                serde_json::from_str::<serde_json::Value>(&tool.function.arguments)
+            {
+                v.get("command")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string()
             } else {
                 tool.function.arguments.clone()
             };
 
             // Check for dangerous patterns.
-            let dangerous = cmd.contains("rm -rf")
-                || cmd.contains("drop table")
-                || cmd.contains("format C:");
+            let dangerous =
+                cmd.contains("rm -rf") || cmd.contains("drop table") || cmd.contains("format C:");
 
             if dangerous {
                 eprintln!("\u{26a0}\u{fe0f}  Warning: Agent wants to run a dangerous command:");

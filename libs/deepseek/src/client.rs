@@ -19,8 +19,7 @@ pub struct DeepSeekClient {
 
 impl DeepSeekClient {
     pub fn new(api_key: impl Into<String>) -> Self {
-        let base_url =
-            std::env::var("BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned());
+        let base_url = std::env::var("BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned());
         Self {
             api_key: api_key.into(),
             base_url,
@@ -34,10 +33,7 @@ impl DeepSeekClient {
     }
 
     /// Send a non-streaming request (DeepSeek-specific API).
-    pub async fn send(
-        &self,
-        request: DeepSeekRequest,
-    ) -> Result<DeepSeekResponse, DeepSeekError> {
+    pub async fn send(&self, request: DeepSeekRequest) -> Result<DeepSeekResponse, DeepSeekError> {
         if request.stream {
             return Err(DeepSeekError::StreamingNotSupported);
         }
@@ -103,10 +99,7 @@ impl DeepSeekClient {
 
 #[async_trait::async_trait]
 impl LLMClient for DeepSeekClient {
-    async fn generate(
-        &self,
-        req: CompletionRequest,
-    ) -> Result<CompletionResponse, ProviderError> {
+    async fn generate(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
         let ds_req = DeepSeekRequest::from(req);
         let ds_resp = self.send(ds_req).await?;
         Ok(CompletionResponse::from(ds_resp))
@@ -115,8 +108,7 @@ impl LLMClient for DeepSeekClient {
     async fn stream(
         &self,
         req: CompletionRequest,
-    ) -> Result<BoxStream<'static, Result<StreamChunk, ProviderError>>, ProviderError>
-    {
+    ) -> Result<BoxStream<'static, Result<StreamChunk, ProviderError>>, ProviderError> {
         let ds_req = DeepSeekRequest::from(req);
         let ds_stream = self.stream_raw(ds_req).await?;
 

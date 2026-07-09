@@ -45,9 +45,7 @@ impl WorkspaceFs {
 
         let normalized = match joined.canonicalize() {
             Ok(p) => p,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                normalize_partial(&joined)?
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => normalize_partial(&joined)?,
             Err(e) => return Err(FsError::Io(e)),
         };
 
@@ -372,7 +370,8 @@ mod tests {
     #[test]
     fn test_read_with_offset_and_limit() {
         let (_dir, fs) = setup_fs();
-        fs.write("test.txt", "line1\nline2\nline3\nline4\n").unwrap();
+        fs.write("test.txt", "line1\nline2\nline3\nline4\n")
+            .unwrap();
         let result = fs.read("test.txt", Some(2), Some(2)).unwrap();
         assert!(!result.contains("line1"));
         assert!(result.contains("line2"));

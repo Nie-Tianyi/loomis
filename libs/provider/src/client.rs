@@ -14,10 +14,7 @@ use crate::stream::StreamChunk;
 #[async_trait]
 pub trait LLMClient: Send + Sync {
     /// Send a non-streaming completion request.
-    async fn generate(
-        &self,
-        req: CompletionRequest,
-    ) -> Result<CompletionResponse, ProviderError>;
+    async fn generate(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError>;
 
     /// Send a streaming completion request.
     ///

@@ -34,7 +34,9 @@ impl fmt::Display for MemoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SummariserFailed(reason) => write!(f, "summariser failed: {reason}"),
-            Self::NothingToCompact => write!(f, "nothing to compact — conversation is within budget"),
+            Self::NothingToCompact => {
+                write!(f, "nothing to compact — conversation is within budget")
+            }
         }
     }
 }
@@ -243,8 +245,7 @@ impl Memory {
         if summary.is_empty() {
             return;
         }
-        self.messages
-            .insert(0, Message::new(Role::System, summary));
+        self.messages.insert(0, Message::new(Role::System, summary));
     }
 }
 
@@ -266,6 +267,7 @@ const fn role_label(role: Role) -> &'static str {
 mod tests {
     use super::*;
 
+    #[allow(unused)]
     fn make_msg(role: Role, content: &str) -> Message {
         Message::new(role, content)
     }

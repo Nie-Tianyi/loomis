@@ -22,12 +22,11 @@ impl AgentHook for UiStreamHook {
         let _ = self.tx.send(UiEvent::Thinking).await;
     }
 
-    async fn before_tool_call(
-        &self,
-        _session_id: &str,
-        tool: &ToolCall,
-    ) -> Result<(), AgentError> {
-        let _ = self.tx.send(UiEvent::ToolCalled(tool.function.name.clone())).await;
+    async fn before_tool_call(&self, _session_id: &str, tool: &ToolCall) -> Result<(), AgentError> {
+        let _ = self
+            .tx
+            .send(UiEvent::ToolCalled(tool.function.name.clone()))
+            .await;
         Ok(())
     }
 }
