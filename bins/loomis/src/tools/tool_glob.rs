@@ -4,13 +4,10 @@
 
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::Value;
 use std::sync::Arc;
 
-use tools::Tool;
 use tools::WorkspaceFs;
-use tools::generate_schema;
-use tools::{FsError, ToolError};
+use tools::{FsError, ToolError, tool};
 
 /// Glob 工具的参数。
 #[derive(JsonSchema, Deserialize)]
@@ -30,27 +27,9 @@ pub(crate) struct GlobArgs {
 /// ```json
 /// {"pattern": "**/*.rs"}
 /// ```
-pub struct GlobTool {
-    fs: Arc<WorkspaceFs>,
-    schema: Value,
-}
-
-impl GlobTool {
-    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
-        Self {
-            fs,
-            schema: generate_schema::<GlobArgs>(),
-        }
-    }
-}
-
-impl Tool for GlobTool {
-    fn name(&self) -> &str {
-        "glob"
-    }
-
-    fn description(&self) -> &str {
-        "Find files matching a glob pattern. Returns a sorted list of relative file \
+#[tool(
+    name = "glob",
+    description = "Find files matching a glob pattern. Returns a sorted list of relative file \
          paths, one per line. Supports `**` for recursive directory matching.\n\n\
          When to use: finding files by name pattern (e.g. all .rs files), discovering \
          project structure before reading, checking if a file exists without knowing \
@@ -64,17 +43,19 @@ impl Tool for GlobTool {
          - `*.toml` — files in workspace root only (no recursion)\n\
          - `src/tui/*.rs` — files directly in src/tui/, non-recursive\n\n\
          Returns 'No files matched.' when nothing matches. Always use forward \
-         slashes; backslashes are not valid glob separators."
+         slashes; backslashes are not valid glob separators.",
+    args = GlobArgs
+)]
+pub struct GlobTool {
+    fs: Arc<WorkspaceFs>,
+}
+
+impl GlobTool {
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self { fs }
     }
 
-    fn parameters(&self) -> Value {
-        self.schema.clone()
-    }
-
-    fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let args: GlobArgs = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
-
+    fn execute(&self, args: GlobArgs) -> Result<String, ToolError> {
         let files = self.fs.glob(&args.pattern).map_err(map_fs_err)?;
 
         if files.is_empty() {
@@ -97,6 +78,7 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tools::Tool;
 
     fn setup() -> (tempfile::TempDir, GlobTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -134,7 +116,7 @@ mod tests {
         write_file(&dir, "lib.rs", "");
         write_file(&dir, "Cargo.toml", "");
 
-        let result = tool.execute(r#"{"pattern": "*.rs"}"#).unwrap();
+        let result = Tool::execute(&tool, r#"{"pattern": "*.rs"}"#).unwrap();
         assert!(result.contains("lib.rs"));
         assert!(result.contains("main.rs"));
         assert!(!result.contains("Cargo.toml"));
@@ -147,7 +129,7 @@ mod tests {
         write_file(&dir, "src/deep/b.rs", "");
         write_file(&dir, "tests/c.rs", "");
 
-        let result = tool.execute(r#"{"pattern": "**/*.rs"}"#).unwrap();
+        let result = Tool::execute(&tool, r#"{"pattern": "**/*.rs"}"#).unwrap();
         let normalized = result.replace('\\', "/");
         assert!(normalized.contains("src/a.rs"));
         assert!(normalized.contains("src/deep/b.rs"));
@@ -157,14 +139,14 @@ mod tests {
     #[test]
     fn test_glob_no_match() {
         let (_dir, tool) = setup();
-        let result = tool.execute(r#"{"pattern": "*.nonexistent"}"#).unwrap();
+        let result = Tool::execute(&tool, r#"{"pattern": "*.nonexistent"}"#).unwrap();
         assert_eq!(result, "No files matched.");
     }
 
     #[test]
     fn test_missing_pattern() {
         let (_dir, tool) = setup();
-        let err = tool.execute(r#"{}"#).unwrap_err();
+        let err = Tool::execute(&tool, r#"{}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 }

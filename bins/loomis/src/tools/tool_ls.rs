@@ -4,13 +4,10 @@
 
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::Value;
 use std::sync::Arc;
 
-use tools::Tool;
 use tools::WorkspaceFs;
-use tools::generate_schema;
-use tools::{EntryType, FsError, ToolError};
+use tools::{EntryType, FsError, ToolError, tool};
 
 /// Ls 工具的参数。
 #[derive(JsonSchema, Deserialize)]
@@ -32,27 +29,9 @@ pub(crate) struct LsArgs {
 /// ```
 ///
 /// `path` 是可选的；省略时列出工作空间根目录。
-pub struct LsTool {
-    fs: Arc<WorkspaceFs>,
-    schema: Value,
-}
-
-impl LsTool {
-    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
-        Self {
-            fs,
-            schema: generate_schema::<LsArgs>(),
-        }
-    }
-}
-
-impl Tool for LsTool {
-    fn name(&self) -> &str {
-        "ls"
-    }
-
-    fn description(&self) -> &str {
-        "List the contents of a directory in the workspace. Entries are shown with \
+#[tool(
+    name = "ls",
+    description = "List the contents of a directory in the workspace. Entries are shown with \
          type, size, and name. Directories are listed first, then files. Sizes use \
          human-readable format (B, K, M, G).\n\n\
          Output format:\n\
@@ -68,17 +47,19 @@ impl Tool for LsTool {
          cleaner for pattern-based search), searching content (use grep), reading a \
          file (use read).\n\n\
          Omit the path argument to list the workspace root. Returns '(empty \
-         directory)' when the directory has no entries."
+         directory)' when the directory has no entries.",
+    args = LsArgs
+)]
+pub struct LsTool {
+    fs: Arc<WorkspaceFs>,
+}
+
+impl LsTool {
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self { fs }
     }
 
-    fn parameters(&self) -> Value {
-        self.schema.clone()
-    }
-
-    fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let args: LsArgs = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
-
+    fn execute(&self, args: LsArgs) -> Result<String, ToolError> {
         let path = args.path.as_deref().filter(|s| !s.is_empty());
 
         let entries = self.fs.ls(path).map_err(map_fs_err)?;
@@ -134,6 +115,7 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tools::Tool;
 
     fn setup() -> (tempfile::TempDir, LsTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -167,7 +149,7 @@ mod tests {
     #[test]
     fn test_ls_root_empty() {
         let (_dir, tool) = setup();
-        let result = tool.execute(r#"{}"#).unwrap();
+        let result = Tool::execute(&tool, r#"{}"#).unwrap();
         assert!(result.contains("(empty directory)"));
     }
 
@@ -177,7 +159,7 @@ mod tests {
         write_file(&dir, "foo.txt", "hello");
         std::fs::create_dir(dir.path().join("bar")).unwrap();
 
-        let result = tool.execute(r#"{}"#).unwrap();
+        let result = Tool::execute(&tool, r#"{}"#).unwrap();
         // 目录优先
         let lines: Vec<&str> = result.lines().collect();
         assert_eq!(lines.len(), 2);
@@ -193,7 +175,7 @@ mod tests {
         write_file(&dir, "sub/a.txt", "");
         write_file(&dir, "sub/b.txt", "");
 
-        let result = tool.execute(r#"{"path": "sub"}"#).unwrap();
+        let result = Tool::execute(&tool, r#"{"path": "sub"}"#).unwrap();
         assert!(result.contains("a.txt"));
         assert!(result.contains("b.txt"));
     }
@@ -203,7 +185,7 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "file.txt", "");
 
-        let err = tool.execute(r#"{"path": "file.txt"}"#).unwrap_err();
+        let err = Tool::execute(&tool, r#"{"path": "file.txt"}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
@@ -211,7 +193,7 @@ mod tests {
     fn test_ls_without_path_param() {
         let (_dir, tool) = setup();
         // 不传 path 参数应列出根目录
-        let result = tool.execute("{}").unwrap();
+        let result = Tool::execute(&tool, "{}").unwrap();
         assert!(result.contains("(empty directory)"));
     }
 }

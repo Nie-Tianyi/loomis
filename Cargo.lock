@@ -1851,6 +1851,16 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tools-macros",
+]
+
+[[package]]
+name = "tools-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

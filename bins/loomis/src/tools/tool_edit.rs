@@ -4,13 +4,10 @@
 
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::Value;
 use std::sync::Arc;
 
-use tools::Tool;
 use tools::WorkspaceFs;
-use tools::generate_schema;
-use tools::{FsError, ToolError};
+use tools::{FsError, ToolError, tool};
 
 /// Edit 工具的参数。
 #[derive(JsonSchema, Deserialize)]
@@ -55,27 +52,9 @@ pub(crate) struct EditArgs {
 /// ```
 ///
 /// 行号是 1-indexed，`start_line` 和 `end_line` 都是包含的。
-pub struct EditTool {
-    fs: Arc<WorkspaceFs>,
-    schema: Value,
-}
-
-impl EditTool {
-    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
-        Self {
-            fs,
-            schema: generate_schema::<EditArgs>(),
-        }
-    }
-}
-
-impl Tool for EditTool {
-    fn name(&self) -> &str {
-        "edit"
-    }
-
-    fn description(&self) -> &str {
-        "Replace a specific range of lines in a file by line number. \
+#[tool(
+    name = "edit",
+    description = "Replace a specific range of lines in a file by line number. \
          start_line and end_line are 1-indexed and inclusive (e.g. start=3, end=5 \
          replaces lines 3, 4, and 5). Pass empty new_content to delete the range.\n\n\
          IMPORTANT: Always read the file first to get accurate line numbers. The \
@@ -86,17 +65,19 @@ impl Tool for EditTool {
          When NOT to use: creating a new file (use write), replacing the entire file \
          (use write — simpler and less error-prone).\n\n\
          Return format: 'Edited {file_path}: replaced lines {start}-{end} with {N} \
-         new lines'."
+         new lines'.",
+    args = EditArgs
+)]
+pub struct EditTool {
+    fs: Arc<WorkspaceFs>,
+}
+
+impl EditTool {
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self { fs }
     }
 
-    fn parameters(&self) -> Value {
-        self.schema.clone()
-    }
-
-    fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let args: EditArgs = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
-
+    fn execute(&self, args: EditArgs) -> Result<String, ToolError> {
         self.fs
             .edit_lines(
                 &args.file_path,
@@ -122,6 +103,7 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tools::Tool;
 
     fn setup() -> (tempfile::TempDir, EditTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -161,9 +143,11 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "line1\nline2\nline3\n");
 
-        let result = tool
-            .execute(r#"{"file_path": "f.txt", "start_line": 2, "end_line": 2, "new_content": "REPLACED"}"#)
-            .unwrap();
+        let result = Tool::execute(
+            &tool,
+            r#"{"file_path": "f.txt", "start_line": 2, "end_line": 2, "new_content": "REPLACED"}"#,
+        )
+        .unwrap();
         assert!(result.contains("Replaced"));
         assert_eq!(read_file(&dir, "f.txt"), "line1\nREPLACED\nline3\n");
     }
@@ -173,7 +157,8 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "a\nb\nc\nd\ne\n");
 
-        tool.execute(
+        Tool::execute(
+            &tool,
             r#"{"file_path": "f.txt", "start_line": 2, "end_line": 4, "new_content": "X\nY"}"#,
         )
         .unwrap();
@@ -185,7 +170,8 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "a\nb\nc\n");
 
-        tool.execute(
+        Tool::execute(
+            &tool,
             r#"{"file_path": "f.txt", "start_line": 2, "end_line": 2, "new_content": ""}"#,
         )
         .unwrap();
@@ -198,7 +184,8 @@ mod tests {
         write_file(&dir, "f.txt", "a\nb\n");
 
         // 替换超出行范围的"append"行为（替换不存在的行就变成 append）
-        tool.execute(
+        Tool::execute(
+            &tool,
             r#"{"file_path": "f.txt", "start_line": 3, "end_line": 3, "new_content": "c"}"#,
         )
         .unwrap();
@@ -208,20 +195,22 @@ mod tests {
     #[test]
     fn test_missing_start_line() {
         let (_dir, tool) = setup();
-        let err = tool
-            .execute(r#"{"file_path": "f.txt", "end_line": 1, "new_content": "x"}"#)
-            .unwrap_err();
+        let err = Tool::execute(
+            &tool,
+            r#"{"file_path": "f.txt", "end_line": 1, "new_content": "x"}"#,
+        )
+        .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
     #[test]
     fn test_nonexistent_file() {
         let (_dir, tool) = setup();
-        let err = tool
-            .execute(
-                r#"{"file_path": "nope.txt", "start_line": 1, "end_line": 1, "new_content": "x"}"#,
-            )
-            .unwrap_err();
+        let err = Tool::execute(
+            &tool,
+            r#"{"file_path": "nope.txt", "start_line": 1, "end_line": 1, "new_content": "x"}"#,
+        )
+        .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 }

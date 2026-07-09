@@ -5,13 +5,10 @@
 
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::Value;
 use std::sync::Arc;
 
-use tools::Tool;
 use tools::WorkspaceFs;
-use tools::generate_schema;
-use tools::{FsError, ToolError};
+use tools::{FsError, ToolError, tool};
 
 /// Read 工具的参数。
 #[derive(JsonSchema, Deserialize)]
@@ -43,27 +40,9 @@ pub(crate) struct ReadArgs {
 /// ```
 ///
 /// `offset` 和 `limit` 为可选的整数。
-pub struct ReadTool {
-    fs: Arc<WorkspaceFs>,
-    schema: Value,
-}
-
-impl ReadTool {
-    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
-        Self {
-            fs,
-            schema: generate_schema::<ReadArgs>(),
-        }
-    }
-}
-
-impl Tool for ReadTool {
-    fn name(&self) -> &str {
-        "read"
-    }
-
-    fn description(&self) -> &str {
-        "Read a file from the workspace and return its contents with line numbers \
+#[tool(
+    name = "read",
+    description = "Read a file from the workspace and return its contents with line numbers \
          (like `cat -n`). Each output line is prefixed with a 6-digit right-aligned \
          number followed by a tab.\n\n\
          IMPORTANT: Read a file BEFORE editing or writing to it — accurate edits \
@@ -76,17 +55,19 @@ impl Tool for ReadTool {
          files (use grep), listing directory contents (use ls), verifying a completed \
          write/edit (trust the tool result).\n\n\
          For large files, start with limit=100 and increase if needed to avoid \
-         flooding the conversation with irrelevant content."
+         flooding the conversation with irrelevant content.",
+    args = ReadArgs
+)]
+pub struct ReadTool {
+    fs: Arc<WorkspaceFs>,
+}
+
+impl ReadTool {
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self { fs }
     }
 
-    fn parameters(&self) -> Value {
-        self.schema.clone()
-    }
-
-    fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let args: ReadArgs = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
-
+    fn execute(&self, args: ReadArgs) -> Result<String, ToolError> {
         self.fs
             .read(
                 &args.file_path,
@@ -112,6 +93,7 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tools::Tool;
 
     fn setup() -> (tempfile::TempDir, ReadTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -159,7 +141,7 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "test.txt", "hello\nworld\n");
 
-        let result = tool.execute(r#"{"file_path": "test.txt"}"#).unwrap();
+        let result = Tool::execute(&tool, r#"{"file_path": "test.txt"}"#).unwrap();
         assert!(result.contains("hello"));
         assert!(result.contains("world"));
     }
@@ -169,9 +151,11 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "test.txt", "1\n2\n3\n4\n5\n");
 
-        let result = tool
-            .execute(r#"{"file_path": "test.txt", "offset": 2, "limit": 2}"#)
-            .unwrap();
+        let result = Tool::execute(
+            &tool,
+            r#"{"file_path": "test.txt", "offset": 2, "limit": 2}"#,
+        )
+        .unwrap();
         assert!(!result.contains("     1\t"));
         assert!(result.contains("     2\t"));
         assert!(result.contains("     3\t"));
@@ -181,21 +165,21 @@ mod tests {
     #[test]
     fn test_read_not_found() {
         let (_dir, tool) = setup();
-        let err = tool.execute(r#"{"file_path": "nope.txt"}"#).unwrap_err();
+        let err = Tool::execute(&tool, r#"{"file_path": "nope.txt"}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
     #[test]
     fn test_read_missing_field() {
         let (_dir, tool) = setup();
-        let err = tool.execute(r#"{}"#).unwrap_err();
+        let err = Tool::execute(&tool, r#"{}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
     #[test]
     fn test_read_bad_json() {
         let (_dir, tool) = setup();
-        let err = tool.execute("garbage").unwrap_err();
+        let err = Tool::execute(&tool, "garbage").unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 }

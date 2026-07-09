@@ -4,13 +4,10 @@
 
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::Value;
 use std::sync::Arc;
 
-use tools::Tool;
 use tools::WorkspaceFs;
-use tools::generate_schema;
-use tools::{FsError, ToolError};
+use tools::{FsError, ToolError, tool};
 
 /// Grep 工具的参数。
 #[derive(JsonSchema, Deserialize)]
@@ -38,27 +35,9 @@ pub(crate) struct GrepArgs {
 /// ```
 ///
 /// `path_glob` 是可选的；默认搜索所有文件。
-pub struct GrepTool {
-    fs: Arc<WorkspaceFs>,
-    schema: Value,
-}
-
-impl GrepTool {
-    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
-        Self {
-            fs,
-            schema: generate_schema::<GrepArgs>(),
-        }
-    }
-}
-
-impl Tool for GrepTool {
-    fn name(&self) -> &str {
-        "grep"
-    }
-
-    fn description(&self) -> &str {
-        "Search file contents using a regular expression. Returns every matching \
+#[tool(
+    name = "grep",
+    description = "Search file contents using a regular expression. Returns every matching \
          line with its file path and line number: `{path}:{line}: {content}`. Use \
          `path_glob` to limit the search to specific files.\n\n\
          When to use: finding where a function, type, or variable is defined or used; \
@@ -72,17 +51,19 @@ impl Tool for GrepTool {
          - `pub struct \\w+` — regex for struct definitions\n\
          - `TODO|FIXME` — alternation\n\
          - `(?i)error` — case-insensitive (use (?i) prefix)\n\n\
-         Returns 'No matches found.' when nothing matches."
+         Returns 'No matches found.' when nothing matches.",
+    args = GrepArgs
+)]
+pub struct GrepTool {
+    fs: Arc<WorkspaceFs>,
+}
+
+impl GrepTool {
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self { fs }
     }
 
-    fn parameters(&self) -> Value {
-        self.schema.clone()
-    }
-
-    fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let args: GrepArgs = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
-
+    fn execute(&self, args: GrepArgs) -> Result<String, ToolError> {
         let matches = self
             .fs
             .grep(&args.pattern, args.path_glob.as_deref())
@@ -114,6 +95,7 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tools::Tool;
 
     fn setup() -> (tempfile::TempDir, GrepTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -153,7 +135,7 @@ mod tests {
             "fn main() {\n    let x = 1;\n}\nfn test() {}\n",
         );
 
-        let result = tool.execute(r#"{"pattern": "fn "}"#).unwrap();
+        let result = Tool::execute(&tool, r#"{"pattern": "fn "}"#).unwrap();
         assert!(result.contains("fn main()"));
         assert!(result.contains("fn test()"));
         assert!(!result.contains("let x"));
@@ -165,9 +147,8 @@ mod tests {
         write_file(&dir, "src/lib.rs", "pub fn add() {}");
         write_file(&dir, "tests/test.rs", "fn it_works() {}");
 
-        let result = tool
-            .execute(r#"{"pattern": "fn", "path_glob": "src/**/*.rs"}"#)
-            .unwrap();
+        let result =
+            Tool::execute(&tool, r#"{"pattern": "fn", "path_glob": "src/**/*.rs"}"#).unwrap();
         let normalized = result.replace('\\', "/");
         assert!(normalized.contains("src/lib.rs"));
         assert!(!normalized.contains("tests/"));
@@ -178,21 +159,21 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "hello world\n");
 
-        let result = tool.execute(r#"{"pattern": "NOMATCH"}"#).unwrap();
+        let result = Tool::execute(&tool, r#"{"pattern": "NOMATCH"}"#).unwrap();
         assert!(result.contains("No matches"));
     }
 
     #[test]
     fn test_grep_invalid_regex() {
         let (_dir, tool) = setup();
-        let err = tool.execute(r#"{"pattern": "[unclosed"}"#).unwrap_err();
+        let err = Tool::execute(&tool, r#"{"pattern": "[unclosed"}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
     #[test]
     fn test_missing_pattern() {
         let (_dir, tool) = setup();
-        let err = tool.execute(r#"{}"#).unwrap_err();
+        let err = Tool::execute(&tool, r#"{}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
@@ -201,7 +182,7 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "test.rs", "fn hello() {\n    println!();\n}\n");
 
-        let result = tool.execute(r#"{"pattern": "fn"}"#).unwrap();
+        let result = Tool::execute(&tool, r#"{"pattern": "fn"}"#).unwrap();
         // 格式: file_path:line_number: line_content
         assert!(result.contains("test.rs:1: fn hello()"));
     }

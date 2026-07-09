@@ -34,11 +34,8 @@ use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::Value;
 
-use tools::Tool;
-use tools::ToolError;
-use tools::generate_schema;
+use tools::{ToolError, tool};
 
 /// Maximum output bytes returned to the model. Prevents a single command
 /// from flooding the conversation context.
@@ -69,40 +66,9 @@ pub(crate) struct ShellArgs {
 /// |----|-------|-----------|
 /// | Windows | `cmd.exe` | `cmd /C <command>` |
 /// | Unix | `sh` | `sh -c <command>` |
-pub struct ShellTool {
-    /// All commands run with this as the working directory.
-    workspace_root: PathBuf,
-    /// Default timeout applied when the model omits `timeout_secs`.
-    default_timeout: Duration,
-    /// Cached JSON Schema.
-    schema: Value,
-}
-
-impl ShellTool {
-    /// Creates a new shell tool.
-    ///
-    /// `workspace_root` must be an existing directory — it becomes the CWD
-    /// of every command executed through this tool.
-    ///
-    /// `default_timeout` caps how long a single command may run. The model
-    /// can request a shorter timeout via the `timeout_secs` parameter, but
-    /// cannot exceed this default (the tool clamps it).
-    pub fn new(workspace_root: PathBuf, default_timeout: Duration) -> Self {
-        Self {
-            workspace_root,
-            default_timeout,
-            schema: generate_schema::<ShellArgs>(),
-        }
-    }
-}
-
-impl Tool for ShellTool {
-    fn name(&self) -> &str {
-        "shell"
-    }
-
-    fn description(&self) -> &str {
-        "Execute a shell command in the workspace directory. The command runs inside \
+#[tool(
+    name = "shell",
+    description = "Execute a shell command in the workspace directory. The command runs inside \
          the workspace root as the working directory.\n\n\
          Output is capped at 100 KB to avoid flooding context. If the command \
          exceeds the timeout it is killed and partial output is returned. Exit code \
@@ -118,18 +84,33 @@ impl Tool for ShellTool {
          Do NOT use shell to run `cat`, `ls`, `find`, `grep`, `echo`, or `sed` \
          unless you have verified that the dedicated tool cannot accomplish the task.\n\n\
          Timed out or killed commands return partial output — do not assume success \
-         when output is incomplete."
+         when output is incomplete.",
+    args = ShellArgs
+)]
+pub struct ShellTool {
+    /// All commands run with this as the working directory.
+    workspace_root: PathBuf,
+    /// Default timeout applied when the model omits `timeout_secs`.
+    default_timeout: Duration,
+}
+
+impl ShellTool {
+    /// Creates a new shell tool.
+    ///
+    /// `workspace_root` must be an existing directory — it becomes the CWD
+    /// of every command executed through this tool.
+    ///
+    /// `default_timeout` caps how long a single command may run. The model
+    /// can request a shorter timeout via the `timeout_secs` parameter, but
+    /// cannot exceed this default (the tool clamps it).
+    pub fn new(workspace_root: PathBuf, default_timeout: Duration) -> Self {
+        Self {
+            workspace_root,
+            default_timeout,
+        }
     }
 
-    fn parameters(&self) -> Value {
-        self.schema.clone()
-    }
-
-    fn execute(&self, args: &str) -> Result<String, ToolError> {
-        // ── Parse arguments ───────────────────────────────────────
-        let args: ShellArgs = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("Invalid JSON: {e}")))?;
-
+    fn execute(&self, args: ShellArgs) -> Result<String, ToolError> {
         let command = args.command;
         if command.trim().is_empty() {
             return Err(ToolError::InvalidArgs(
@@ -348,6 +329,7 @@ fn decode_stdout(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tools::Tool;
 
     fn make_tool() -> ShellTool {
         ShellTool::new(std::env::current_dir().unwrap(), Duration::from_secs(30))
@@ -385,9 +367,8 @@ mod tests {
     #[test]
     fn test_execute_echo() {
         let tool = make_tool();
-        let result = tool
-            .execute(r#"{"command": "echo hello"}"#)
-            .expect("echo should succeed");
+        let result =
+            Tool::execute(&tool, r#"{"command": "echo hello"}"#).expect("echo should succeed");
         assert!(result.contains("hello"), "got: {result}");
     }
 
@@ -398,7 +379,7 @@ mod tests {
         let cmd = r#"{"command": "echo %cd%"}"#;
         #[cfg(not(target_os = "windows"))]
         let cmd = r#"{"command": "pwd"}"#;
-        let result = tool.execute(cmd).expect("pwd/echo cd should succeed");
+        let result = Tool::execute(&tool, cmd).expect("pwd/echo cd should succeed");
         assert!(!result.is_empty());
     }
 
@@ -411,9 +392,7 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let cmd = r#"{"command": "exit 42"}"#;
 
-        let result = tool
-            .execute(cmd)
-            .expect("should not error on non-zero exit");
+        let result = Tool::execute(&tool, cmd).expect("should not error on non-zero exit");
         // Should mention the exit code
         assert!(
             result.contains("exit code") || result.contains("42"),
@@ -424,7 +403,7 @@ mod tests {
     #[test]
     fn test_execute_missing_command() {
         let tool = make_tool();
-        let result = tool.execute(r#"{"timeout_secs": 5}"#);
+        let result = Tool::execute(&tool, r#"{"timeout_secs": 5}"#);
         match result {
             Err(ToolError::InvalidArgs(msg)) => {
                 assert!(msg.contains("command"), "got: {msg}");
@@ -436,7 +415,7 @@ mod tests {
     #[test]
     fn test_execute_empty_command() {
         let tool = make_tool();
-        let result = tool.execute(r#"{"command": "   "}"#);
+        let result = Tool::execute(&tool, r#"{"command": "   "}"#);
         match result {
             Err(ToolError::InvalidArgs(msg)) => {
                 assert!(msg.contains("command"), "got: {msg}");
@@ -448,10 +427,10 @@ mod tests {
     #[test]
     fn test_execute_bad_json() {
         let tool = make_tool();
-        let result = tool.execute("not json");
+        let result = Tool::execute(&tool, "not json");
         match result {
             Err(ToolError::InvalidArgs(msg)) => {
-                assert!(msg.contains("JSON"), "got: {msg}");
+                assert!(msg.contains("invalid args"), "got: {msg}");
             }
             other => panic!("expected InvalidArgs, got {other:?}"),
         }
@@ -466,7 +445,7 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let cmd = r#"{"command": "true"}"#;
 
-        let result = tool.execute(cmd).expect("should succeed");
+        let result = Tool::execute(&tool, cmd).expect("should succeed");
         // Should indicate the command ran even though there's no output
         assert!(
             result.contains("no output") || result.is_empty(),
@@ -477,8 +456,7 @@ mod tests {
     #[test]
     fn test_execute_with_timeout_in_args() {
         let tool = make_tool();
-        let result = tool
-            .execute(r#"{"command": "echo fast", "timeout_secs": 10}"#)
+        let result = Tool::execute(&tool, r#"{"command": "echo fast", "timeout_secs": 10}"#)
             .expect("should succeed");
         assert!(result.contains("fast"), "got: {result}");
     }
@@ -492,7 +470,7 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let cmd = r#"{"command": "echo error text >&2"}"#;
 
-        let result = tool.execute(cmd).expect("should succeed");
+        let result = Tool::execute(&tool, cmd).expect("should succeed");
         assert!(result.contains("error text"), "got: {result}");
     }
 }

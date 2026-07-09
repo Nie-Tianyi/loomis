@@ -4,13 +4,10 @@
 
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::Value;
 use std::sync::Arc;
 
-use tools::Tool;
 use tools::WorkspaceFs;
-use tools::generate_schema;
-use tools::{FsError, ToolError};
+use tools::{FsError, ToolError, tool};
 
 /// Write 工具的参数。
 #[derive(JsonSchema, Deserialize)]
@@ -36,27 +33,9 @@ pub(crate) struct WriteArgs {
 /// ```json
 /// {"file_path": "output/result.md", "content": "# Hello\n\nWorld"}
 /// ```
-pub struct WriteTool {
-    fs: Arc<WorkspaceFs>,
-    schema: Value,
-}
-
-impl WriteTool {
-    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
-        Self {
-            fs,
-            schema: generate_schema::<WriteArgs>(),
-        }
-    }
-}
-
-impl Tool for WriteTool {
-    fn name(&self) -> &str {
-        "write"
-    }
-
-    fn description(&self) -> &str {
-        "Write content to a file in the workspace. Creates the file if it does not \
+#[tool(
+    name = "write",
+    description = "Write content to a file in the workspace. Creates the file if it does not \
          exist; silently overwrites if it does. Parent directories are created \
          automatically.\n\n\
          IMPORTANT: Read the file first before overwriting, so you understand the \
@@ -65,17 +44,19 @@ impl Tool for WriteTool {
          writing a file that does not yet exist.\n\n\
          When NOT to use: modifying part of a file (use edit), appending (use shell \
          with >>), checking if a file exists (use ls or glob).\n\n\
-         Return format: 'Wrote {N} bytes to {file_path}'."
+         Return format: 'Wrote {N} bytes to {file_path}'.",
+    args = WriteArgs
+)]
+pub struct WriteTool {
+    fs: Arc<WorkspaceFs>,
+}
+
+impl WriteTool {
+    pub fn new(fs: Arc<WorkspaceFs>) -> Self {
+        Self { fs }
     }
 
-    fn parameters(&self) -> Value {
-        self.schema.clone()
-    }
-
-    fn execute(&self, args: &str) -> Result<String, ToolError> {
-        let args: WriteArgs = serde_json::from_str(args)
-            .map_err(|e| ToolError::InvalidArgs(format!("invalid args: {e}")))?;
-
+    fn execute(&self, args: WriteArgs) -> Result<String, ToolError> {
         self.fs
             .write(&args.file_path, &args.content)
             .map_err(map_fs_err)?;
@@ -102,6 +83,7 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tools::Tool;
 
     fn setup() -> (tempfile::TempDir, WriteTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -137,9 +119,11 @@ mod tests {
     #[test]
     fn test_write_new_file() {
         let (dir, tool) = setup();
-        let result = tool
-            .execute(r#"{"file_path": "hello.txt", "content": "hello world"}"#)
-            .unwrap();
+        let result = Tool::execute(
+            &tool,
+            r#"{"file_path": "hello.txt", "content": "hello world"}"#,
+        )
+        .unwrap();
         assert!(result.contains("hello.txt"));
         assert!(result.contains("11 bytes"));
         assert_eq!(read_file(&dir, "hello.txt"), "hello world");
@@ -148,33 +132,33 @@ mod tests {
     #[test]
     fn test_write_overwrite() {
         let (dir, tool) = setup();
-        tool.execute(r#"{"file_path": "f.txt", "content": "old"}"#)
-            .unwrap();
-        tool.execute(r#"{"file_path": "f.txt", "content": "new"}"#)
-            .unwrap();
+        Tool::execute(&tool, r#"{"file_path": "f.txt", "content": "old"}"#).unwrap();
+        Tool::execute(&tool, r#"{"file_path": "f.txt", "content": "new"}"#).unwrap();
         assert_eq!(read_file(&dir, "f.txt"), "new");
     }
 
     #[test]
     fn test_write_nested_path() {
         let (dir, tool) = setup();
-        tool.execute(r#"{"file_path": "a/b/c/file.txt", "content": "deep"}"#)
-            .unwrap();
+        Tool::execute(
+            &tool,
+            r#"{"file_path": "a/b/c/file.txt", "content": "deep"}"#,
+        )
+        .unwrap();
         assert_eq!(read_file(&dir, "a/b/c/file.txt"), "deep");
     }
 
     #[test]
     fn test_write_empty_content() {
         let (dir, tool) = setup();
-        tool.execute(r#"{"file_path": "empty.txt", "content": ""}"#)
-            .unwrap();
+        Tool::execute(&tool, r#"{"file_path": "empty.txt", "content": ""}"#).unwrap();
         assert_eq!(read_file(&dir, "empty.txt"), "");
     }
 
     #[test]
     fn test_missing_file_path() {
         let (_dir, tool) = setup();
-        let err = tool.execute(r#"{"content": "stuff"}"#).unwrap_err();
+        let err = Tool::execute(&tool, r#"{"content": "stuff"}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 }
