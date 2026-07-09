@@ -16,7 +16,9 @@ use crate::hooks::SandboxHook;
 use crate::sandbox::audit_logger::AuditLogger;
 use crate::sandbox::resource_tracker::ResourceTracker;
 use crate::sandbox::shell_filter::ShellFilter;
-use crate::tools::{CalculatorTool, GlobTool, GrepTool, LsTool, ReadTool, ShellTool, WriteTool};
+use crate::tools::{
+    CalculatorTool, EditTool, GlobTool, GrepTool, LsTool, ReadTool, ShellTool, WriteTool,
+};
 
 /// System prompt used as the initial seed for every conversation.
 pub const SYSTEM_PROMPT: &str = "\
@@ -109,6 +111,7 @@ pub fn build_coding_agent(
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(CalculatorTool));
     registry.register(Arc::new(ReadTool::new(workspace.clone())));
+    registry.register(Arc::new(EditTool::new(workspace.clone())));
     registry.register(Arc::new(WriteTool::new(workspace.clone())));
     registry.register(Arc::new(GlobTool::new(workspace.clone())));
     registry.register(Arc::new(GrepTool::new(workspace.clone())));
