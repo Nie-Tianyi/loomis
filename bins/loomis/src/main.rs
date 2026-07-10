@@ -39,18 +39,8 @@ async fn main() {
     let kit = loomis::build_coding_agent(&api_key, &cwd, &model, &flash_model, &sandbox_config);
 
     if use_tui {
-        match loomis::tui::run(
-            kit.agent,
-            kit.memory,
-            kit.tool_names,
-            &kit.model,
-            cwd,
-            kit.agent_rx,
-            kit.agent_tx,
-            kit.hook_rx,
-            kit.hook_tx,
-            kit.approval_tx,
-        ) {
+        let model = kit.model.clone();
+        match loomis::tui::run(kit, cwd, &model) {
             Ok(()) => {}
             Err(e) => eprintln!("TUI error: {e}"),
         }

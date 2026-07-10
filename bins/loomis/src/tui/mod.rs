@@ -22,14 +22,21 @@
 //!
 //! | Module | Purpose |
 //! |--------|---------|
-//! | [`app`] | `App` state machine, `ChatMessage` enum, `TuiCommand`, keyboard handling |
+//! | [`app`] | `App` state machine + event application |
+//! | [`messages`] | `ChatMessage`, `TuiCommand`, `ThreadPicker` type definitions |
+//! | [`input`] | Keyboard handling, slash commands, shell confirmation |
 //! | [`ui`] | ratatui rendering: chat area, input area, status bar |
 //! | [`event`] | Event loop, terminal lifecycle, agent background task |
+//! | [`shell_exec`] | User `!command` shell execution + Windows encoding |
 
 mod app;
 mod event;
+mod input;
 mod markdown;
+mod messages;
+mod shell_exec;
 mod ui;
 
-pub use app::{App, ChatMessage, ShellOutputState, ThreadPicker, ToolCallState, TuiCommand};
+pub use app::App;
 pub use event::run;
+pub use messages::{ChatMessage, ShellOutputState, ThreadPicker, ToolCallState, TuiCommand};

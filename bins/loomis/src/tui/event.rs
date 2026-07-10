@@ -11,14 +11,12 @@
 //! ─────────                          ────────────────────────
 //! cmd_tx ───────── TuiCommand ──────→ cmd_rx
 //! agent_rx ←────── AgentEvent ─────── agent_tx
+//! hook_rx  ←────── HookEvent  ─────── hook_tx (SandboxHook) / agent_handler
 //! ```
 
 use std::io;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::Terminal;
@@ -26,13 +24,15 @@ use ratatui::backend::CrosstermBackend;
 
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
+use deepseek::DeepSeekClient;
 use engine::{Agent, AgentEvent};
-use memory::{Memory, SharedMemory};
-use provider::LLMClient;
+use memory::SharedMemory;
 use provider::{Message, Role};
 
-use super::app::{App, TuiCommand};
-use crate::app::HookEvent;
+use super::app::App;
+use super::messages::TuiCommand;
+use super::shell_exec::execute_shell_command;
+use crate::app::{AgentKit, HookEvent};
 
 // ── Entry Point ──────────────────────────────────────────────────────────────────
 
@@ -41,30 +41,20 @@ use crate::app::HookEvent;
 /// This function is **synchronous** — it blocks the calling thread until
 /// the user types `/exit` or presses Ctrl+C/D. The caller must already be
 /// inside a tokio runtime (e.g. via `#[tokio::main]`).
-///
-/// # Parameters
-///
-/// - `agent` — the configured [`Agent`] (moved into a background task).
-/// - `memory` — shared conversation history.
-/// - `tool_names` — cached list of tool names for the `/tools` command.
-/// - `model` — model name for the status bar.
-/// - `agent_rx` — receiving half of the agent→TUI event channel.
-/// - `agent_tx` — sending half (clone) for the agent handler task.
-/// - `hook_rx` — receiving half of the hook→TUI event channel (shell events).
-/// - `hook_tx` — sending half (clone) for the agent handler and SandboxHook.
-/// - `approval_tx` — sender that unblocks the shell-approval hook.
-pub fn run<C: LLMClient + 'static>(
-    agent: Agent<C>,
-    memory: SharedMemory,
-    tool_names: Vec<String>,
-    model: &str,
-    workspace_root: PathBuf,
-    agent_rx: UnboundedReceiver<AgentEvent>,
-    agent_tx: UnboundedSender<AgentEvent>,
-    hook_rx: UnboundedReceiver<HookEvent>,
-    hook_tx: UnboundedSender<HookEvent>,
-    approval_tx: std::sync::mpsc::SyncSender<bool>,
-) -> io::Result<()> {
+pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()> {
+    // ── Destructure the kit ─────────────────────────────────────
+    let AgentKit {
+        agent,
+        memory,
+        tool_names,
+        model: _kit_model,
+        agent_rx,
+        agent_tx,
+        hook_rx,
+        hook_tx,
+        approval_tx,
+    } = kit;
+
     // ── Create command channel ────────────────────────────────────
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<TuiCommand>();
 
@@ -131,9 +121,6 @@ fn run_event_loop(
     hook_rx: UnboundedReceiver<HookEvent>,
     cmd_tx: &UnboundedSender<TuiCommand>,
 ) -> io::Result<()> {
-    // We need to poll both channels without holding a mutable borrow on app
-    // (terminal.draw borrows app immutably). So we collect events first,
-    // then apply them.
     let mut agent_rx = agent_rx;
     let mut hook_rx = hook_rx;
     let mut pending_events: Vec<AgentEvent> = Vec::new();
@@ -143,7 +130,7 @@ fn run_event_loop(
         terminal.draw(|frame| super::ui::draw(frame, app))?;
 
         // ── Poll keyboard ────────────────────────────────────────────
-        if crossterm::event::poll(Duration::from_millis(50))? {
+        if crossterm::event::poll(std::time::Duration::from_millis(50))? {
             match crossterm::event::read()? {
                 Event::Key(key)
                     if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
@@ -217,8 +204,8 @@ fn run_event_loop(
 /// Cancellation is handled via `JoinHandle::abort()`. Since the agent's
 /// own `run_streaming_loop` periodically `.await`s (network I/O), abort
 /// takes effect quickly.
-async fn agent_handler<C: LLMClient + 'static>(
-    agent: Arc<Agent<C>>,
+async fn agent_handler(
+    agent: Arc<Agent<DeepSeekClient>>,
     memory: SharedMemory,
     mut cmd_rx: UnboundedReceiver<TuiCommand>,
     agent_tx: UnboundedSender<AgentEvent>,
@@ -297,7 +284,7 @@ async fn agent_handler<C: LLMClient + 'static>(
                     .into_iter()
                     .filter(|m| m.role == Role::System)
                     .collect();
-                *mem = Memory::new();
+                *mem = memory::Memory::new();
                 for msg in system_msgs {
                     mem.push(msg);
                 }
@@ -316,7 +303,7 @@ async fn agent_handler<C: LLMClient + 'static>(
                 approved,
             } => {
                 // Unblock the synchronous approval hook waiting in
-                // DangerousCommandApprovalHook::before_tool_call.
+                // SandboxHook::before_tool_call.
                 let _ = approval_tx.send(approved);
             }
 
@@ -376,189 +363,4 @@ async fn agent_handler<C: LLMClient + 'static>(
             }
         }
     }
-}
-
-// ── Shell Execution Helper ────────────────────────────────────────────────────────
-
-/// Executes a shell command in the workspace root, capturing stdout and stderr.
-///
-/// On Windows, uses `cmd /C` for near-instant startup (unlike PowerShell which
-/// loads .NET CLR on every invocation). Encoding is handled via
-/// [`decode_windows_stdout`], which tries UTF-8 first and falls back to the
-/// system ANSI code page.
-fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
-    #[cfg(target_os = "windows")]
-    let (shell, shell_arg) = ("cmd", "/C");
-    #[cfg(not(target_os = "windows"))]
-    let (shell, shell_arg) = ("sh", "-c");
-
-    let child = match Command::new(shell)
-        .arg(shell_arg)
-        .arg(command)
-        .current_dir(workspace_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => return format!("Failed to spawn command: {e}"),
-    };
-
-    let pid = child.id();
-
-    // Watchdog: polls every 100ms, kills the process if it exceeds the
-    // timeout. An AtomicBool signal lets it exit early when the command
-    // completes quickly — without this, join() would block for the full
-    // timeout duration even for a 15ms `dir`.
-    let done = Arc::new(AtomicBool::new(false));
-    let done_signal = Arc::clone(&done);
-
-    let timeout = Duration::from_secs(30);
-    let watchdog = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + timeout;
-        while std::time::Instant::now() < deadline {
-            if done_signal.load(Ordering::Relaxed) {
-                return; // command finished, no kill needed
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        // Timeout reached — best-effort kill.
-        #[cfg(target_os = "windows")]
-        {
-            let _ = Command::new("taskkill")
-                .args(["/F", "/PID", &pid.to_string()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-        }
-    });
-
-    let output = match child.wait_with_output() {
-        Ok(o) => o,
-        Err(e) => return format!("Failed to wait on command: {e}"),
-    };
-
-    // Signal the watchdog that the command is done, then join.
-    // The watchdog checks the flag every 100ms, so join returns
-    // within 100ms instead of blocking for the full 30s timeout.
-    done.store(true, Ordering::Relaxed);
-    let _ = watchdog.join();
-
-    let stdout = decode_stdout(&output.stdout);
-    let stderr = decode_stdout(&output.stderr);
-    let exit_code = output.status.code();
-
-    let stdout_clean = stdout.trim_end();
-    let stderr_clean = stderr.trim_end();
-
-    let mut result = String::new();
-    if !stdout_clean.is_empty() {
-        result.push_str(stdout_clean);
-    }
-    if !stderr_clean.is_empty() {
-        if !result.is_empty() {
-            result.push('\n');
-        }
-        result.push_str(stderr_clean);
-    }
-
-    // If nothing was produced, indicate the command ran
-    if result.is_empty() {
-        match exit_code {
-            Some(0) => result.push_str("(command completed with no output)"),
-            Some(code) => {
-                result.push_str(&format!("(exit code: {code}, no output)"));
-            }
-            None => result.push_str("(process terminated by signal, no output)"),
-        }
-    } else if let Some(code) = exit_code
-        && code != 0
-    {
-        result.push_str(&format!("\n\n[exit code: {code}]"));
-    }
-
-    result
-}
-
-/// Decodes child-process stdout/stderr bytes to a Rust string.
-///
-/// On Windows, many CLI tools (especially cmd built-ins like `dir`, `echo`,
-/// and older programs) output in the system ANSI code page (e.g. GBK/CP936 for
-/// Chinese-locale machines). Modern tools (git, cargo, rustc, python 3.7+)
-/// typically output UTF-8 when stdout is not a TTY.
-///
-/// Strategy: try UTF-8 first. If every byte is valid UTF-8, use it. Otherwise
-/// use the Windows [`GetACP`] code page via [`MultiByteToWideChar`]. On Unix
-/// this is just [`String::from_utf8_lossy`].
-#[cfg(target_os = "windows")]
-fn decode_stdout(bytes: &[u8]) -> String {
-    if bytes.is_empty() {
-        return String::new();
-    }
-    // Try UTF-8 first — modern tools output valid UTF-8.
-    if let Ok(utf8) = std::str::from_utf8(bytes) {
-        return utf8.to_string();
-    }
-    // Fall back to the system ANSI code page (e.g. CP936 for zh-CN).
-    unsafe {
-        let acp = GetACP();
-        // CP 65001 IS UTF-8 — if the system already uses UTF-8, just
-        // replace invalid sequences (shouldn't happen if from_utf8 failed).
-        if acp == 65001 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        // Determine how many UTF-16 code units we need.
-        let wide_len = MultiByteToWideChar(
-            acp,
-            0,
-            bytes.as_ptr() as *const i8,
-            bytes.len() as i32,
-            std::ptr::null_mut(),
-            0,
-        );
-        if wide_len <= 0 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        let mut wide: Vec<u16> = vec![0; wide_len as usize];
-        let written = MultiByteToWideChar(
-            acp,
-            0,
-            bytes.as_ptr() as *const i8,
-            bytes.len() as i32,
-            wide.as_mut_ptr(),
-            wide_len,
-        );
-        if written <= 0 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        wide.truncate(written as usize);
-        String::from_utf16_lossy(&wide)
-    }
-}
-
-#[cfg(target_os = "windows")]
-unsafe extern "system" {
-    fn GetACP() -> u32;
-    fn MultiByteToWideChar(
-        CodePage: u32,
-        dwFlags: u32,
-        lpMultiByteStr: *const i8,
-        cbMultiByte: i32,
-        lpWideCharStr: *mut u16,
-        cchWideChar: i32,
-    ) -> i32;
-}
-
-#[cfg(not(target_os = "windows"))]
-fn decode_stdout(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
 }

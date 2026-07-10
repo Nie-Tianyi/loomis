@@ -10,8 +10,9 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::app::{App, ChatMessage, ShellOutputState, ThreadPicker, ToolCallState};
+use super::app::App;
 use super::markdown::render_markdown;
+use super::messages::{ChatMessage, ShellOutputState, ThreadPicker, ToolCallState};
 
 // ── Layout ───────────────────────────────────────────────────────────────────────
 
