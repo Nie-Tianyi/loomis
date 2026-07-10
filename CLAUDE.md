@@ -47,7 +47,7 @@ agent_oxide/
 | `tools` | `libs/` | Abstraction | `Tool` trait (sync, `Send+Sync`), `ToolRegistry`, `WorkspaceFs`, `SandboxConfig`, `ToolError`, `FsError`, `generate_schema` |
 | `memory` | `libs/` | Abstraction | `Memory` (in-memory buffer), `SharedMemory` (`Arc<RwLock<Memory>>`), `MemoryBuilder`, two-tier compaction (MicroCompact + LLM summarisation), `save_conversation`/`load_conversation`/`list_threads` |
 | `engine` | `libs/` | Abstraction | `Agent`, `AgentEvent` (Token, ToolCallStart, ToolResult, etc.), `AgentError`, `AgentHook` trait (on_run_start, before_tool_call, etc.), `EngineContext` (with compaction config), `maybe_compact()` |
-| `loomis` | `bins/` | Binary + Lib | Concrete tools (CalculatorTool, ReadTool, ShellTool, ...), sandbox system (SandboxHook, ShellFilter, AuditLogger, ResourceTracker, EnvSanitizer), TUI (ratatui), `build_coding_agent()`, `compact_with_deepseek()`, `main.rs` |
+| `loomis` | `bins/` | Binary + Lib | Concrete tools (CalculatorTool, ReadTool, ShellTool, ...), sandbox system (SandboxHook, ShellFilter, AuditLogger, ResourceTracker, EnvSanitizer), TUI (ratatui), `build_coding_agent()`, `main.rs` |
 
 ### Dependency graph
 

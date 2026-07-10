@@ -656,7 +656,7 @@ let drained: Vec<Message> = {
     mem.drain_for_compact()
 };
 
-// 阶段 2：通过 LLM 生成摘要（在 loomis 中是 compact_with_deepseek）
+// 阶段 2：通过 LLM 生成摘要（由 Agent::maybe_compact 内部处理）
 let summary = generate_summary(&client, &drained).await;
 
 // 阶段 3：将摘要作为新 System 消息插入
@@ -666,7 +666,7 @@ let summary = generate_summary(&client, &drained).await;
 }
 ```
 
-参考实现：`loomis::compact::compact_with_deepseek`。
+参考实现：`engine::agent::Agent::maybe_compact`。
 
 ---
 

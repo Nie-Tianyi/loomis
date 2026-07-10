@@ -8,8 +8,8 @@
 //! 1. [`Memory::drain_for_compact`] — removes old non-System messages.
 //! 2. [`Memory::apply_compact`] — inserts a summary as a new System message.
 //!
-//! Provider-specific compaction (e.g. `compact_with_deepseek`) lives in
-//! downstream crates (e.g. `loomis`).
+//! Provider-specific compaction lives in downstream crates (see
+//! [`engine::agent::Agent::maybe_compact`]).
 //!
 //! ## Tool output compaction (MicroCompact)
 //!
