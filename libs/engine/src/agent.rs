@@ -192,10 +192,7 @@ impl<C: LLMClient> Agent<C> {
             }
             steps += 1;
 
-            // Macro-compaction — async LLM summarisation.
-            self.maybe_compact().await?;
-
-            // Micro-compaction — sync tool-output clearing.
+            // Run pre-LLM hooks (compaction, etc.).
             for hook in &self.ctx.hooks {
                 hook.on_llm_start("default", &self.ctx.memory);
             }
@@ -343,10 +340,7 @@ impl<C: LLMClient> Agent<C> {
             }
             steps += 1;
 
-            // Macro-compaction — async LLM summarisation.
-            self.maybe_compact().await?;
-
-            // Micro-compaction — sync tool-output clearing.
+            // Run pre-LLM hooks (compaction, etc.).
             for hook in &self.ctx.hooks {
                 hook.on_llm_start("default", &self.ctx.memory);
             }
@@ -480,97 +474,7 @@ impl<C: LLMClient> Agent<C> {
     }
 }
 
-// ── LLM Compaction ────────────────────────────────────────────────────────────
-
-impl<C: LLMClient> Agent<C> {
-    /// Check whether macro-compaction is needed and run it if so.
-    ///
-    /// Called at the start of each agent loop iteration.  Uses
-    /// [`EngineContext::macro_compact`] for the model + budget config.
-    async fn maybe_compact(&self) -> Result<(), AgentError> {
-        let cfg = match &self.ctx.macro_compact {
-            Some(c) => c,
-            None => return Ok(()),
-        };
-
-        let needs = {
-            let mem = self.ctx.memory.read().unwrap();
-            mem.total_chars() > cfg.threshold
-        };
-        if !needs {
-            return Ok(());
-        }
-
-        let old = {
-            let mut mem = self.ctx.memory.write().unwrap();
-            drain_for_compact(&mut mem.messages, cfg.keep_last_n)
-        };
-        if old.is_empty() {
-            return Ok(());
-        }
-
-        let transcript: String = old
-            .iter()
-            .map(|m| format!("[{}]: {}", role_label(m.role), m.content))
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        let prompt = format!(
-            "Summarise the following conversation history concisely. \
-             Preserve key facts, decisions, and context. \
-             Output only the summary, no preamble:\n\n{transcript}"
-        );
-
-        let request = CompletionRequest::new(&cfg.model, vec![Message::new(Role::User, prompt)]);
-
-        let response = self.ctx.llm.generate(request).await?;
-        let summary = response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.clone())
-            .unwrap_or_default();
-
-        {
-            let mut mem = self.ctx.memory.write().unwrap();
-            if !summary.is_empty() {
-                mem.messages.insert(0, Message::new(Role::System, summary));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-fn drain_for_compact(messages: &mut Vec<Message>, keep_last_n: usize) -> Vec<Message> {
-    let non_system_count = messages.iter().filter(|m| m.role != Role::System).count();
-    let keep = std::cmp::min(keep_last_n, non_system_count);
-    let to_drain = non_system_count.saturating_sub(keep);
-    if to_drain == 0 {
-        return Vec::new();
-    }
-    let mut drained = Vec::with_capacity(to_drain);
-    let mut kept = Vec::with_capacity(messages.len() - to_drain);
-    let mut drained_so_far = 0;
-    for msg in messages.drain(..) {
-        if msg.role != Role::System && drained_so_far < to_drain {
-            drained.push(msg);
-            drained_so_far += 1;
-        } else {
-            kept.push(msg);
-        }
-    }
-    *messages = kept;
-    drained
-}
-
-const fn role_label(role: Role) -> &'static str {
-    match role {
-        Role::System => "System",
-        Role::User => "User",
-        Role::Assistant => "Assistant",
-        Role::Tool => "Tool",
-    }
-}
+// ── StreamAccumulator ─────────────────────────────────────────────────────────
 
 // ── StreamAccumulator ─────────────────────────────────────────────────────────
 

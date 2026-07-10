@@ -160,8 +160,9 @@ pub fn build_coding_agent(
     // ── Memory ───────────────────────────────────────────────
     let memory: SharedMemory = Arc::new(std::sync::RwLock::new(Memory::new()));
 
-    // ── LLM Client ────────────────────────────────────────────
+    // ── LLM Clients ─────────────────────────────────────────────
     let client = DeepSeekClient::new(api_key);
+    let compact_client = DeepSeekClient::new(api_key);
 
     // ── Sandbox components ────────────────────────────────────
     let shell_filter = ShellFilter::from_config(sandbox_config);
@@ -174,7 +175,7 @@ pub fn build_coding_agent(
         SandboxHook::new(shell_filter, resource_tracker, audit_logger);
     approval_hook.set_hook_tx(hook_tx.clone());
 
-    // MicroCompactHook — clears old tool output content (sync AgentHook)
+    // MicroCompactHook — clears old tool output content
     let micro_compact = hooks::MicroCompactHook::new(
         hooks::DEFAULT_KEEP_RECENT_TOOL_OUTPUTS,
         hooks::DEFAULT_COMPACTABLE_TOOLS
@@ -183,16 +184,20 @@ pub fn build_coding_agent(
             .collect(),
     );
 
-    let hooks: Vec<Box<dyn engine::AgentHook>> =
-        vec![Box::new(micro_compact), Box::new(approval_hook)];
+    // MacroCompactHook — LLM summarisation when over budget.
+    // Blocks the agent task via Handle::block_on (separate thread from TUI).
+    let macro_compact = hooks::MacroCompactHook::new(
+        flash_model.to_string(),
+        hooks::DEFAULT_COMPACT_CHARS,
+        hooks::DEFAULT_KEEP_LAST_N,
+        compact_client,
+    );
 
-    // Macro-compaction config — LLM summarisation when over budget.
-    // The agent loop handles the async LLM call directly.
-    let macro_compact = engine::MacroCompactConfig {
-        model: flash_model.to_string(),
-        threshold: hooks::DEFAULT_COMPACT_CHARS,
-        keep_last_n: hooks::DEFAULT_KEEP_LAST_N,
-    };
+    let hooks: Vec<Box<dyn engine::AgentHook>> = vec![
+        Box::new(macro_compact),
+        Box::new(micro_compact),
+        Box::new(approval_hook),
+    ];
 
     // ── Engine context (via builder) ─────────────────────────
     let ctx = EngineContext::builder(client, memory.clone(), registry, model.to_string())
@@ -200,7 +205,6 @@ pub fn build_coding_agent(
         .max_steps(50)
         .max_retries(3)
         .streaming(true)
-        .macro_compact(macro_compact)
         .build();
 
     let agent = Agent::new(ctx);

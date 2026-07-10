@@ -3,14 +3,14 @@
 //! This crate provides ready-to-use [`AgentHook`](engine::AgentHook)
 //! implementations for common concerns:
 //!
-//! | Component | Role |
-//! |-----------|------|
-//! | [`MicroCompactHook`] | AgentHook — tool-output clearing in `on_llm_start` |
+//! | Hook | Role |
+//! |------|------|
+//! | [`MicroCompactHook`] | Tool-output clearing in `on_llm_start` |
+//! | [`MacroCompactHook`] | Full LLM summarisation in `on_llm_start` (blocks agent loop) |
 //!
-//! For macro-compaction (LLM summarisation), use
-//! [`engine::MacroCompactConfig`] — the agent loop handles the async
-//! summarisation directly.  This crate provides the default constants
-//! (`DEFAULT_COMPACT_CHARS`, `DEFAULT_KEEP_LAST_N`, etc.).
+//! Both hooks operate during `on_llm_start`.  `MacroCompactHook` uses
+//! [`tokio::runtime::Handle::block_on`] for the LLM call — this blocks
+//! the agent task but not the TUI, since they run on different threads.
 //!
 //! # Custom hooks
 //!
@@ -19,7 +19,7 @@
 mod compact;
 
 pub use compact::{
-    COMPACTED_TOOL_OUTPUT_PLACEHOLDER, CompactError, DEFAULT_COMPACT_CHARS,
-    DEFAULT_COMPACTABLE_TOOLS, DEFAULT_KEEP_LAST_N, DEFAULT_KEEP_RECENT_TOOL_OUTPUTS,
-    MicroCompactHook,
+    CompactError, MacroCompactHook, MicroCompactHook,
+    COMPACTED_TOOL_OUTPUT_PLACEHOLDER, DEFAULT_COMPACTABLE_TOOLS, DEFAULT_COMPACT_CHARS,
+    DEFAULT_KEEP_LAST_N, DEFAULT_KEEP_RECENT_TOOL_OUTPUTS,
 };

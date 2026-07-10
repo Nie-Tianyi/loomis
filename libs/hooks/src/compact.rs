@@ -15,7 +15,7 @@ use std::fmt;
 
 use engine::AgentHook;
 use memory::SharedMemory;
-use provider::{Message, Role};
+use provider::{CompletionRequest, LLMClient, Message, Role};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -83,6 +83,97 @@ impl AgentHook for MicroCompactHook {
     fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
         let mut mem = memory.write().unwrap();
         compact_messages(&mut mem.messages, self.keep_recent, &self.compactable_tools);
+    }
+}
+
+// ── MacroCompactHook ──────────────────────────────────────────────────────────
+
+/// Full LLM summarisation hook.
+///
+/// Implements [`AgentHook`] — in `on_llm_start`, checks whether the conversation
+/// exceeds `threshold` characters.  If it does, drains old non-System messages
+/// (keeping the most recent `keep_last_n`), calls the compact model for a
+/// summary, and inserts it as a System message.
+///
+/// The LLM call blocks the agent loop via
+/// [`tokio::runtime::Handle::block_on`].  This is safe because the agent loop
+/// runs in a dedicated tokio task, separate from the TUI main thread — blocking
+/// here does not affect the UI.
+pub struct MacroCompactHook<C: LLMClient> {
+    /// Model name for summarisation (cheap model).
+    pub compact_model: String,
+    /// Character budget before compaction triggers.
+    pub threshold: usize,
+    /// Number of non-System messages to preserve during drain.
+    pub keep_last_n: usize,
+    /// LLM client (same provider, different model).
+    pub client: C,
+}
+
+impl<C: LLMClient> MacroCompactHook<C> {
+    pub fn new(
+        compact_model: String,
+        threshold: usize,
+        keep_last_n: usize,
+        client: C,
+    ) -> Self {
+        Self {
+            compact_model,
+            threshold,
+            keep_last_n,
+            client,
+        }
+    }
+}
+
+impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
+    fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
+        let needs = {
+            let mem = memory.read().unwrap();
+            mem.total_chars() > self.threshold
+        };
+        if !needs {
+            return;
+        }
+
+        let old = {
+            let mut mem = memory.write().unwrap();
+            drain_for_compact(&mut mem.messages, self.keep_last_n)
+        };
+        if old.is_empty() {
+            return;
+        }
+
+        // Build summarisation transcript
+        let transcript: String = old
+            .iter()
+            .map(|m| format!("[{}]: {}", role_label(m.role), m.content))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let prompt = format!(
+            "Summarise the following conversation history concisely. \
+             Preserve key facts, decisions, and context. \
+             Output only the summary, no preamble:\n\n{transcript}"
+        );
+
+        let request = CompletionRequest::new(
+            &self.compact_model,
+            vec![Message::new(Role::User, prompt)],
+        );
+
+        // Block the agent loop (not the UI — different thread).
+        let summary = tokio::runtime::Handle::current()
+            .block_on(self.client.generate(request))
+            .ok()
+            .and_then(|resp| resp.choices.into_iter().next())
+            .and_then(|c| c.message.content)
+            .unwrap_or_default();
+
+        if !summary.is_empty() {
+            let mut mem = memory.write().unwrap();
+            mem.messages.insert(0, Message::new(Role::System, summary));
+        }
     }
 }
 
