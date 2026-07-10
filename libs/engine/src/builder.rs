@@ -193,7 +193,7 @@ impl<C: LLMClient> AgentBuilder<C> {
     /// Enable or disable SSE streaming (default: `true`).
     ///
     /// When enabled the agent uses `LLMClient::stream()` and emits
-    /// [`AgentEvent::Token`] and [`AgentEvent::ToolCallArgsDelta`] events
+    /// [`AgentEvent::Token`] and [`AgentEvent::ToolCall`] events
     /// in real time via [`Agent::run_with_events`].  When disabled it uses
     /// `LLMClient::generate()` and emits a single [`AgentEvent::Token`]
     /// with the full response.

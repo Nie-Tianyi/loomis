@@ -70,7 +70,7 @@ provider (无内部依赖)
 | `engine` | `EngineContext` | 配置和依赖注入容器（高级 API） |
 | `engine` | `EngineContextBuilder` | `EngineContext` 的建造器 |
 | `engine` | `AgentHook` | 生命周期回调（可拦截工具执行） |
-| `engine` | `AgentEvent` | 通用流式事件（Token, ToolCallStart, ToolResult...） |
+| `engine` | `AgentEvent` | 通用流式事件（Token, ToolCall, ToolResult...） |
 
 ---
 
@@ -860,7 +860,7 @@ let result: String = agent.run_with_events("用户输入", tx).await?;
 while let Some(event) = rx.recv().await {
     match event {
         AgentEvent::Token(t) => print!("{t}"),
-        AgentEvent::ToolCallStart { id, name } => println!("\n[{name}] starting..."),
+        AgentEvent::ToolCall { id, name, .. } => println!("\n[{name}] starting..."),
         AgentEvent::ToolResult { name, output, .. } => println!("[{name}] done"),
         AgentEvent::Done => break,
         _ => {}
@@ -880,8 +880,7 @@ Engine 层的 [`AgentEvent`](../libs/engine/src/agent.rs) 是**通用的**，只
 pub enum AgentEvent {
     Token(String),                        // 流式文本 token
     ReasoningToken(String),               // 推理 token（reasoning 模型）
-    ToolCallStart { id: String, name: String },   // 工具调用开始
-    ToolCallArgsDelta { id: String, delta: String }, // 工具参数片段
+    ToolCall { id: String, name: String, arguments: String }, // 完整工具调用（流结束后发送）
     ToolResult { id: String, name: String, output: String }, // 工具执行结果
     ToolProgress { id: String, name: String, message: String }, // 工具进度
     Done,                                  // Agent 结束
@@ -932,7 +931,7 @@ while let Some(event) = agent_rx.blocking_recv() {
             // 流式输出每个 token
             print!("{text}");
         }
-        AgentEvent::ToolCallStart { name, .. } => {
+        AgentEvent::ToolCall { name, .. } => {
             println!("\n🔧 调用工具: {name}");
         }
         AgentEvent::ToolResult { output, .. } => {
@@ -1163,7 +1162,7 @@ async fn main() {
     while let Some(event) = rx.recv().await {
         match event {
             AgentEvent::Token(text) => print!("{text}"),
-            AgentEvent::ToolCallStart { name, .. } => {
+            AgentEvent::ToolCall { name, .. } => {
                 println!("\n━━━ 调用工具: {name} ━━━");
             }
             AgentEvent::ToolResult { name, output, .. } => {

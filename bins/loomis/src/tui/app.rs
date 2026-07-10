@@ -140,26 +140,15 @@ impl App {
                 }
             },
 
-            AgentEvent::ToolCallStart { id, name } => {
+            AgentEvent::ToolCall { id, name, arguments } => {
                 self.messages.push(ChatMessage::ToolCall {
                     id,
                     name,
-                    args: String::new(),
+                    args: arguments,
                     state: ToolCallState::Running,
                     progress_line: None,
                     timestamp: ChatMessage::now_timestamp(),
                 });
-            }
-
-            AgentEvent::ToolCallArgsDelta { id, delta } => {
-                for msg in self.messages.iter_mut().rev() {
-                    if let ChatMessage::ToolCall { id: mid, args, .. } = msg
-                        && *mid == id
-                    {
-                        args.push_str(&delta);
-                        break;
-                    }
-                }
             }
 
             AgentEvent::ToolResult { id, output, .. } => {
@@ -316,13 +305,10 @@ mod tests {
         let mut app = make_app();
         app.messages.clear();
         app.apply_event(AgentEvent::Token("Before".into()));
-        app.apply_event(AgentEvent::ToolCallStart {
+        app.apply_event(AgentEvent::ToolCall {
             id: "t1".into(),
             name: "echo".into(),
-        });
-        app.apply_event(AgentEvent::ToolCallArgsDelta {
-            id: "t1".into(),
-            delta: r#"{"x":1}"#.into(),
+            arguments: r#"{"x":1}"#.into(),
         });
         app.apply_event(AgentEvent::ToolResult {
             id: "t1".into(),
@@ -355,17 +341,10 @@ mod tests {
     fn test_apply_tool_call_lifecycle() {
         let mut app = make_app();
         app.messages.clear();
-        app.apply_event(AgentEvent::ToolCallStart {
+        app.apply_event(AgentEvent::ToolCall {
             id: "abc".into(),
             name: "ls".into(),
-        });
-        app.apply_event(AgentEvent::ToolCallArgsDelta {
-            id: "abc".into(),
-            delta: r#"{"path""#.into(),
-        });
-        app.apply_event(AgentEvent::ToolCallArgsDelta {
-            id: "abc".into(),
-            delta: r#":"."}"#.into(),
+            arguments: r#"{"path":"."}"#.into(),
         });
         app.apply_event(AgentEvent::ToolResult {
             id: "abc".into(),

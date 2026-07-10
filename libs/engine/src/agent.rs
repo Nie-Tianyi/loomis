@@ -60,13 +60,12 @@ impl From<ProviderError> for AgentError {
 pub enum AgentEvent {
     Token(String),
     ReasoningToken(String),
-    ToolCallStart {
+    /// A fully assembled tool call, emitted once the LLM response stream
+    /// completes and before tool execution begins.
+    ToolCall {
         id: String,
         name: String,
-    },
-    ToolCallArgsDelta {
-        id: String,
-        delta: String,
+        arguments: String,
     },
     ToolResult {
         id: String,
@@ -234,6 +233,17 @@ impl<C: LLMClient> Agent<C> {
                         let _ = tx.send(AgentEvent::Done);
                     }
                     return Ok(assistant_msg.content);
+                }
+
+                // Emit complete tool-call events to the UI before execution begins.
+                if let Some(ref tx) = tx {
+                    for tc in tool_calls {
+                        let _ = tx.send(AgentEvent::ToolCall {
+                            id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            arguments: tc.function.arguments.clone(),
+                        });
+                    }
                 }
 
                 {
@@ -573,22 +583,6 @@ fn emit_chunk_events(
         }
         if let Some(ref r) = choice.delta.reasoning_content {
             let _ = tx.send(AgentEvent::ReasoningToken(r.clone()));
-        }
-        if let Some(ref tool_calls) = choice.delta.tool_calls {
-            for tc in tool_calls {
-                if !tc.id.is_empty() && !tc.function.name.is_empty() {
-                    let _ = tx.send(AgentEvent::ToolCallStart {
-                        id: tc.id.clone(),
-                        name: tc.function.name.clone(),
-                    });
-                }
-                if !tc.function.arguments.is_empty() {
-                    let _ = tx.send(AgentEvent::ToolCallArgsDelta {
-                        id: tc.id.clone(),
-                        delta: tc.function.arguments.clone(),
-                    });
-                }
-            }
         }
     }
     acc.ingest(chunk);

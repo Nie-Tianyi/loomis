@@ -112,7 +112,7 @@ provider (无内部依赖)
 | `deepseek` | `libs/` | 具体实现 | `DeepSeekClient` (impl `LLMClient`), `DeepSeekStream` (SSE 解析管道), `DeepSeekRequest`, `DeepSeekError` |
 | `tools` | `libs/` | 抽象 | `Tool` trait (sync, `Send+Sync`), `ToolRegistry`, `WorkspaceFs`, `SandboxConfig`, `ToolError`, `FsError`, `generate_schema` |
 | `memory` | `libs/` | 抽象 | `Memory` (内存缓冲区), `SharedMemory` (`Arc<RwLock<Memory>>`), `MemoryBuilder`, 双层压缩（MicroCompact + LLM 摘要）, `save_conversation`/`load_conversation`/`list_threads` |
-| `engine` | `libs/` | 抽象 | `Agent`, `AgentEvent` (Token, ToolCallStart, ToolResult 等), `AgentError`, `AgentHook` trait, `EngineContext`（含压缩配置）, `maybe_compact()` |
+| `engine` | `libs/` | 抽象 | `Agent`, `AgentEvent` (Token, ToolCall, ToolResult 等), `AgentError`, `AgentHook` trait, `EngineContext`（含压缩配置）, `maybe_compact()` |
 | `loomis` | `bins/` | 二进制 + 库 | 具体工具 (CalculatorTool, ReadTool, ShellTool 等), 沙箱系统 (SandboxHook, ShellFilter, AuditLogger, ResourceTracker, EnvSanitizer), TUI (ratatui), `build_coding_agent()`, `main.rs` |
 
 ### Agent 主循环 (`libs/engine/`)
@@ -156,7 +156,7 @@ HTTP chunk → buffer → find_event_end(\n\n) → trim_trailing_newlines
                                          → parse JSON → StreamChunk
                                                      ├─ content → Token
                                                      ├─ reasoning_content → ReasoningToken
-                                                     └─ tool_calls → ToolCallStart / ToolCallArgsDelta
+                                                     └─ tool_calls → StreamAccumulator → ToolCall（流结束后发送）
 ```
 
 ### 工具系统 (`libs/tools/` + `bins/loomis/src/tools/`)
