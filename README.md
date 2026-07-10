@@ -112,7 +112,7 @@ provider (无内部依赖)
 | `deepseek` | `libs/` | 具体实现 | `DeepSeekClient` (impl `LLMClient`), `DeepSeekStream` (SSE 解析管道), `DeepSeekRequest`, `DeepSeekError` |
 | `tools` | `libs/` | 抽象 | `Tool` trait (sync, `Send+Sync`), `ToolRegistry`, `WorkspaceFs`, `SandboxConfig`, `ToolError`, `FsError`, `generate_schema` |
 | `memory` | `libs/` | 抽象 | `Memory` (内存缓冲区), `SharedMemory` (`Arc<RwLock<Memory>>`), `MemoryBuilder`, 双层压缩（MicroCompact + LLM 摘要）, `save_conversation`/`load_conversation`/`list_threads` |
-| `engine` | `libs/` | 抽象 | `Agent`, `AgentEvent` (Token, ToolCall, ToolResult 等), `AgentError`, `AgentHook` trait, `EngineContext`（含压缩配置）, `maybe_compact()` |
+| `engine` | `libs/` | 抽象 | `Agent`, `AgentEvent` (Token, ToolCall, ToolResult, NeedUserIntervene 等), `AgentError`, `AgentHook` trait, `CallOrigin`, `InterveneRequest`, `InterveneResponse`, `EngineContext`（含压缩配置）, `maybe_compact()` |
 | `loomis` | `bins/` | 二进制 + 库 | 具体工具 (CalculatorTool, ReadTool, ShellTool 等), 沙箱系统 (SandboxHook, ShellFilter, AuditLogger, ResourceTracker, EnvSanitizer), TUI (ratatui), `build_coding_agent()`, `main.rs` |
 
 ### Agent 主循环 (`libs/engine/`)
@@ -199,7 +199,7 @@ pub trait Tool: Send + Sync {
 
 - `auto_approve.prefixes` 中的命令（`git`, `cargo`, `npm`, `python` 等）→ 自动放行
 - 匹配 `deny_patterns` 的命令（`rm -rf /`, `sudo`, `shutdown` 等）→ 直接拒绝
-- 其他命令 → 弹出 Y/n 确认（以 TUI 内联提示呈现）
+- 其他命令 → 弹出交互式干预提示（支持 Approve/Deny/Other…，↑↓ 导航选项）
 
 ### 记忆与持久化 (`libs/memory/`)
 
@@ -253,10 +253,10 @@ ratatui + crossterm 实现的终端聊天界面。
 TUI 线程                                 Agent 任务 (tokio::spawn)
 ─────────                               ────────────────────────
 cmd_tx ───── TuiCommand ──────────────→ cmd_rx
-agent_rx ←── AgentEvent ─────────────── agent_tx
+agent_rx ←── AgentEvent ─────────────── agent_tx  (Token, ToolCall, NeedUserIntervene, Done)
 ```
 
-**键盘操作**：Enter（发送）、Ctrl+C（取消/退出）、Esc（取消）、PgUp/PgDown（滚动）、↑/↓（历史）、←/→/Home/End（光标移动）。`!<命令>` 前缀直接在 TUI 中执行 Shell 命令。
+**键盘操作**：Enter（发送）、Ctrl+C（取消/退出）、Esc（取消）、PgUp/PgDown（滚动）、↑/↓（历史/干预选项导航）、←/→/Home/End（光标移动）。`!<命令>` 前缀直接在 TUI 中执行 Shell 命令。干预提示下用 ↑↓ 选选项，Enter 确认，Esc 取消。
 
 **斜杠命令**：`/exit`, `/new`, `/save <name>`, `/resume [name]`, `/threads`, `/stats`, `/tools`, `/help`。
 

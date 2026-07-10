@@ -522,33 +522,27 @@ impl AgentHook for CliLoggerHook {
 
 这是 `before_tool_call` 的核心用例 — 在工具执行前拦截并决定是否放行。
 
-> **注意**：Engine 层的 `AgentEvent` 是通用的，不包含 Shell 相关事件。Shell 事件通过 loomis 侧自定义的 `HookEvent` 枚举在单独的通道上发送。详见 [§8.1](#81-agent-事件类型)。
+Engine 层提供了通用的 `InterveneRequest` / `InterveneResponse` 类型 — Hook 通过 `AgentEvent::NeedUserIntervene` 变体向应用层请求用户干预，不再需要自定义事件枚举。
 
 ```rust
 use std::sync::{Arc, Mutex, OnceLock};
-use engine::{AgentError, AgentHook};
+use engine::{AgentError, AgentEvent, AgentHook, InterveneRequest, InterveneResponse};
 use provider::ToolCall;
 use tokio::sync::mpsc;
 
-// 定义应用层的事件类型（不污染 engine 的通用 AgentEvent）
-#[derive(Debug, Clone)]
-pub enum HookEvent {
-    ShellApprovalRequested { tool_call_id: String, command: String },
-}
-
 pub struct DangerousCommandApprovalHook {
-    hook_tx: OnceLock<mpsc::UnboundedSender<HookEvent>>,
-    approval_rx: Mutex<std::sync::mpsc::Receiver<bool>>,
+    agent_tx: OnceLock<mpsc::UnboundedSender<AgentEvent>>,
+    intervene_rx: Mutex<std::sync::mpsc::Receiver<InterveneResponse>>,
 }
 
 impl DangerousCommandApprovalHook {
-    pub fn new() -> (Self, std::sync::mpsc::SyncSender<bool>) {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<bool>(0);
-        (Self { hook_tx: OnceLock::new(), approval_rx: Mutex::new(rx) }, tx)
+    pub fn new() -> (Self, std::sync::mpsc::SyncSender<InterveneResponse>) {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<InterveneResponse>(0);
+        (Self { agent_tx: OnceLock::new(), intervene_rx: Mutex::new(rx) }, tx)
     }
 
-    pub fn set_hook_tx(&self, tx: mpsc::UnboundedSender<HookEvent>) {
-        let _ = self.hook_tx.set(tx);
+    pub fn set_agent_tx(&self, tx: mpsc::UnboundedSender<AgentEvent>) {
+        let _ = self.agent_tx.set(tx);
     }
 }
 
@@ -566,28 +560,43 @@ impl AgentHook for DangerousCommandApprovalHook {
         // 解析命令
         let command = parse_shell_command(&tool.function.arguments);
 
-        // 通知 TUI 显示确认提示（使用自定义 HookEvent 通道）
-        if let Some(tx) = self.hook_tx.get() {
-            let _ = tx.send(HookEvent::ShellApprovalRequested {
-                tool_call_id: tool.id.clone(),
-                command: command.clone(),
-            });
+        // 通过统一的 AgentEvent 通道发送干预请求
+        // 支持 yes/no、多选、自定义文本输入（"Other…"）
+        if let Some(tx) = self.agent_tx.get() {
+            let _ = tx.send(AgentEvent::NeedUserIntervene(InterveneRequest {
+                request_id: uuid_v4(),
+                title: "Approve shell command?".into(),
+                description: command.clone(),
+                options: vec!["Approve".into(), "Deny".into(), "Other…".into()],
+            }));
         }
 
         // 阻塞等待用户响应
-        let approved = self.approval_rx.lock().unwrap().recv().unwrap_or(false);
+        let response = self.intervene_rx.lock().unwrap().recv().unwrap_or(
+            InterveneResponse { chosen: Some(1), custom_text: None } // deny on error
+        );
 
-        if !approved {
-            return Err(AgentError::ToolRejected {
+        match response.chosen {
+            Some(0) => Ok(()),        // "Approve"
+            Some(2) => Ok(()),        // "Other…" — 用户提供自定义输入
+            _ => Err(AgentError::ToolRejected {
                 name: "shell".into(),
                 reason: "User denied shell command execution".into(),
-            });
+            }),
         }
-
-        Ok(())
     }
 }
 ```
+
+**`InterveneRequest` 的三种使用模式：**
+
+| 场景 | `options` | 用户操作 | `InterveneResponse` |
+|------|-----------|----------|---------------------|
+| Yes/No 确认 | `["Approve", "Deny"]` | 选 Approve | `{ chosen: Some(0), custom_text: None }` |
+| 多选一 | `["cargo build", "make", "Other…"]` | 选 make | `{ chosen: Some(1), custom_text: None }` |
+| 自定义输入 | `["Approve", "Deny", "Other…"]` | 选 Other… 后输入文本 | `{ chosen: Some(2), custom_text: Some("pip install") }` |
+
+选项以 `…`（U+2026）结尾时，应用层自动弹出文本输入框。TUI 中用户用 `↑↓` 导航选项，`Enter` 确认，`Esc` 取消。
 
 **关键机制：** 当 `before_tool_call` 返回 `Err(AgentError::ToolRejected)` 时，Agent 循环会：
 1. 跳过工具执行
@@ -771,7 +780,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use deepseek::DeepSeekClient;
-use engine::{Agent, EngineContext};
+use engine::{Agent, AgentEvent, EngineContext, InterveneResponse};
 use memory::{Memory, SharedMemory};
 use provider::{Message, Role};
 use tokio::sync::mpsc;
@@ -782,11 +791,9 @@ pub fn build_coding_agent(
     workspace_root: &Path,
     model: &str,
     flash_model: &str,
-) -> Agent<DeepSeekClient> {
-    // 1. 创建事件通道（用于 TUI/CLI 获取实时进度）
+) -> (Agent<DeepSeekClient>, SharedMemory, mpsc::UnboundedReceiver<AgentEvent>) {
+    // 1. 创建事件通道（单一通道承载所有事件）
     let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
-    // 应用层自定义事件通道（Shell 审批等）
-    let (hook_tx, hook_rx) = mpsc::unbounded_channel::<HookEvent>();
 
     // 2. 创建文件沙箱
     let workspace = WorkspaceFs::new(workspace_root)
@@ -810,9 +817,9 @@ pub fn build_coding_agent(
     // 5. 创建 LLM 客户端
     let client = DeepSeekClient::new(api_key);
 
-    // 6. 创建 Hooks — 注意使用 HookEvent 而非 AgentEvent
-    let (approval_hook, approval_tx) = DangerousCommandApprovalHook::new();
-    approval_hook.set_hook_tx(hook_tx.clone());
+    // 6. 创建 Hooks — 使用 InterveneResponse 替代 bool
+    let (approval_hook, intervene_tx) = DangerousCommandApprovalHook::new();
+    approval_hook.set_agent_tx(agent_tx.clone());
 
     let hooks: Vec<Box<dyn engine::AgentHook>> = vec![
         Box::new(approval_hook),
@@ -825,12 +832,6 @@ pub fn build_coding_agent(
         .max_steps(50)
         .max_retries(3)
         .streaming(true)
-        .compact_tool_outputs(true)
-        .keep_recent_tool_outputs(memory::DEFAULT_KEEP_RECENT_TOOL_OUTPUTS)
-        .compactable_tool_names(
-            memory::DEFAULT_COMPACTABLE_TOOLS.iter().map(|s| s.to_string()).collect(),
-        )
-        .compact_model(flash_model.to_string())
         .build();
 
     // 8. 创建 Agent
@@ -842,7 +843,7 @@ pub fn build_coding_agent(
         mem.push(Message::new(Role::System, SYSTEM_PROMPT));
     }
 
-    agent
+    (agent, memory, agent_rx)
 }
 ```
 
@@ -874,43 +875,57 @@ while let Some(event) = rx.recv().await {
 
 ### 8.1 Agent 事件类型
 
-Engine 层的 [`AgentEvent`](../libs/engine/src/agent.rs) 是**通用的**，只包含与 LLM 交互直接相关的事件：
+Engine 层的 [`AgentEvent`](../libs/engine/src/agent.rs) 涵盖框架可能产生的所有事件 — 应用层不需要定义自定义事件类型：
 
 ```rust
+#[derive(Debug, Clone)]
 pub enum AgentEvent {
+    // ── LLM 流式输出 ──
     Token(String),                        // 流式文本 token
     ReasoningToken(String),               // 推理 token（reasoning 模型）
-    ToolCall { id: String, name: String, arguments: String }, // 完整工具调用（流结束后发送）
-    ToolResult { id: String, name: String, output: String }, // 工具执行结果
-    ToolProgress { id: String, name: String, message: String }, // 工具进度
-    Done,                                  // Agent 结束
+
+    // ── 工具/命令调用（LLM + 用户统一）──
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: String,
+        origin: CallOrigin,               // Llm | User
+    },
+    ToolResult { id: String, name: String, output: String },
+    ToolProgress { id: String, name: String, message: String },
+
+    // ── 交互式用户干预 ──
+    NeedUserIntervene(InterveneRequest),
+
+    // ── 终结 ──
+    Done,
 }
 ```
 
-**应用层自定义事件**：特定于应用的 UI 事件（如 Shell 审批、Shell 输出）应该定义在应用层，通过独立的通道发送，避免污染 engine 的通用 API。Loomis 定义了自己的 `HookEvent`：
+**`CallOrigin`** 区分调用来源：
+- `CallOrigin::Llm` — LLM 决定调用的工具（`◌` / `✓` 图标渲染）
+- `CallOrigin::User` — 用户通过 `!command` 直接执行的命令（`$` 前缀渲染）
 
-```rust
-/// loomis 应用层的 Shell 事件（不在 engine::AgentEvent 中）
-pub enum HookEvent {
-    ShellRunning { command: String },
-    ShellOutput { command: String, output: String },
-    ShellApprovalRequested { tool_call_id: String, command: String },
-}
-```
+**`InterveneRequest`** 通用干预请求：
+- `request_id` — 请求方生成的唯一标识，响应时原样回传
+- `title` — 简短标题（如 `"Approve shell command?"`）
+- `description` — 详细描述（如具体命令内容）
+- `options` — 可选列表；以 `…` 结尾的选项触发文本输入
+
+响应类型 `InterveneResponse { chosen: Option<usize>, custom_text: Option<String> }`。
 
 ### 8.2 通道拓扑（TUI 架构）
 
-loomis 的 TUI 使用双通道架构 — Agent 事件和 Hook 事件分别走独立的通道：
+loomis 的 TUI 使用**单通道**架构 — 所有事件都通过同一个 `AgentEvent` 通道：
 
 ```text
 TUI 线程                          Agent 任务 (tokio::spawn)
 ─────────                          ────────────────────────
 cmd_tx ───────── TuiCommand ──────→ cmd_rx
-agent_rx ←────── AgentEvent ─────── agent_tx    (LLM token / tool call / done)
-hook_rx  ←────── HookEvent ──────── hook_tx     (Shell running / approval)
+agent_rx ←────── AgentEvent ─────── agent_tx    (LLM token / tool call / intervene / done)
 ```
 
-事件循环每帧轮询两个通道 — Hook 事件先于 Agent 事件处理，保证 Shell 状态更新优先渲染。
+不再有独立的 `hook_rx`/`hook_tx` — Shell 运行/审批事件都通过统一通道发送。
 
 ### 8.3 消费事件流
 
@@ -928,22 +943,26 @@ tokio::spawn(async move {
 while let Some(event) = agent_rx.blocking_recv() {
     match event {
         AgentEvent::Token(text) => {
-            // 流式输出每个 token
             print!("{text}");
         }
-        AgentEvent::ToolCall { name, .. } => {
-            println!("\n🔧 调用工具: {name}");
+        AgentEvent::ToolCall { name, origin, .. } => {
+            match origin {
+                CallOrigin::User => println!("\n$ 执行: {name}"),
+                CallOrigin::Llm => println!("\n🔧 调用工具: {name}"),
+            }
         }
         AgentEvent::ToolResult { output, .. } => {
-            // 显示工具输出（可能需要截断）
             let preview = output.chars().take(200).collect::<String>();
             println!("结果: {preview}");
+        }
+        AgentEvent::NeedUserIntervene(req) => {
+            println!("\n⚡ {}: {}", req.title, req.description);
+            // 应用层展示选项并收集用户响应
         }
         AgentEvent::Done => break,
         _ => {}
     }
 }
-```
 
 ---
 
@@ -1168,6 +1187,10 @@ async fn main() {
             AgentEvent::ToolResult { name, output, .. } => {
                 let lines = output.lines().count();
                 println!("[{}] 完成，读取了 {lines} 行", name);
+            }
+            AgentEvent::NeedUserIntervene(req) => {
+                println!("\n⚡ {}: {}", req.title, req.description);
+                // 在生产代码中，这里应展示选项并收集用户响应
             }
             AgentEvent::Done => break,
             _ => {}
