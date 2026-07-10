@@ -7,5 +7,5 @@ pub mod sandbox;
 pub mod tools;
 pub mod tui;
 
-pub use app::{AgentKit, build_coding_agent};
+pub use app::{AgentEvent, AgentKit, HookEvent, build_coding_agent};
 pub use compact::compact_with_deepseek;

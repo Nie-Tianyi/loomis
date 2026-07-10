@@ -16,6 +16,7 @@ use provider::{
 };
 use tools::{Progress, ToolError};
 
+use crate::builder::AgentBuilder;
 use crate::context::EngineContext;
 
 // ── AgentError ────────────────────────────────────────────────────────────────
@@ -72,20 +73,6 @@ pub enum AgentEvent {
         name: String,
         output: String,
     },
-    ShellRunning {
-        command: String,
-    },
-    ShellOutput {
-        command: String,
-        output: String,
-    },
-    /// A shell command requires user approval before execution.
-    /// Sent by [`DangerousCommandApprovalHook`](crate::hooks::DangerousCommandApprovalHook)
-    /// to the TUI so it can render a confirmation prompt.
-    ShellApprovalRequested {
-        tool_call_id: String,
-        command: String,
-    },
     /// Real-time progress update from a running tool.
     ToolProgress {
         id: String,
@@ -102,11 +89,54 @@ pub struct Agent<C: LLMClient> {
 }
 
 impl<C: LLMClient> Agent<C> {
+    /// Create a new [`Agent`] from a fully-configured [`EngineContext`].
+    ///
+    /// This is the **advanced** entry point.  Most users should prefer
+    /// [`Agent::builder`] which provides a fluent API with sensible defaults.
     pub fn new(ctx: EngineContext<C>) -> Self {
         Self { ctx }
     }
 
-    pub async fn run_loop(&self, user_input: &str) -> Result<String, AgentError> {
+    /// Create an [`AgentBuilder`] with the two **required** dependencies.
+    ///
+    /// All other settings have sensible defaults:
+    ///
+    /// | Field | Default |
+    /// |-------|---------|
+    /// | `memory` | Auto-created empty [`Memory`] |
+    /// | `tools` | Empty registry |
+    /// | `hooks` | Empty |
+    /// | `system_prompt` | `None` |
+    /// | `max_steps` | `50` |
+    /// | `max_retries` | `3` |
+    /// | `streaming` | `true` |
+    /// | Compaction | Off — opt in via `.with_micro_compact()` / `.with_macro_compact()` |
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let agent = Agent::builder(client, "deepseek-v4")
+    ///     .system_prompt("You are a helpful assistant.")
+    ///     .tool(calculator_tool)
+    ///     .build();
+    ///
+    /// let answer = agent.run("2+2=?").await?;
+    /// ```
+    pub fn builder(llm: C, model: impl Into<String>) -> AgentBuilder<C> {
+        AgentBuilder::new(llm, model.into())
+    }
+
+    /// Run the agent with the given user input.
+    ///
+    /// Executes the ReAct loop: sends the input to the LLM, collects any
+    /// tool calls, executes them, and repeats until the model produces a
+    /// final text response (no more tool calls).
+    ///
+    /// This is the simplest entry point.  Use [`run_with_events`](Self::run_with_events)
+    /// if you need real-time streaming events (e.g. for a TUI).
+    ///
+    /// Returns the final assistant text on success.
+    pub async fn run(&self, user_input: &str) -> Result<String, AgentError> {
         if self.ctx.streaming {
             self.run_streaming_loop(user_input, None).await
         } else {

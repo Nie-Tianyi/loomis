@@ -47,6 +47,8 @@ async fn main() {
             cwd,
             kit.agent_rx,
             kit.agent_tx,
+            kit.hook_rx,
+            kit.hook_tx,
             kit.approval_tx,
         ) {
             Ok(()) => {}

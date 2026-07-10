@@ -19,17 +19,18 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use engine::{AgentError, AgentEvent, AgentHook};
+use engine::{AgentError, AgentHook};
 use provider::ToolCall;
 use tokio::sync::mpsc;
 
+use crate::app::HookEvent;
 use crate::sandbox::audit_logger::{AuditEntry, AuditLogger};
 use crate::sandbox::resource_tracker::ResourceTracker;
 use crate::sandbox::shell_filter::{CommandVerdict, ShellFilter};
 
 pub struct SandboxHook {
-    /// Sends lifecycle events to the TUI.
-    agent_tx: OnceLock<mpsc::UnboundedSender<AgentEvent>>,
+    /// Sends shell-specific events to the TUI (approval prompts, etc.).
+    hook_tx: OnceLock<mpsc::UnboundedSender<HookEvent>>,
     /// Blocking receive for the user's approval decision
     /// (same rendez-vous pattern as the original hook).
     approval_rx: Mutex<std::sync::mpsc::Receiver<bool>>,
@@ -52,7 +53,7 @@ impl SandboxHook {
         let (tx, rx) = std::sync::mpsc::sync_channel::<bool>(0);
         (
             Self {
-                agent_tx: OnceLock::new(),
+                hook_tx: OnceLock::new(),
                 approval_rx: Mutex::new(rx),
                 shell_filter,
                 resource_tracker,
@@ -62,17 +63,17 @@ impl SandboxHook {
         )
     }
 
-    /// Called by `build_coding_agent` after the agent-event channel
+    /// Called by `build_coding_agent` after the hook-event channel
     /// is created.
-    pub fn set_agent_tx(&self, tx: mpsc::UnboundedSender<AgentEvent>) {
-        let _ = self.agent_tx.set(tx);
+    pub fn set_hook_tx(&self, tx: mpsc::UnboundedSender<HookEvent>) {
+        let _ = self.hook_tx.set(tx);
     }
 
     /// Prompt the user and block until they respond.
     fn request_user_approval(&self, tool_call: &ToolCall, command: &str) -> Result<(), AgentError> {
         // Notify the TUI to render a confirmation prompt.
-        if let Some(tx) = self.agent_tx.get() {
-            let _ = tx.send(AgentEvent::ShellApprovalRequested {
+        if let Some(tx) = self.hook_tx.get() {
+            let _ = tx.send(HookEvent::ShellApprovalRequested {
                 tool_call_id: tool_call.id.clone(),
                 command: command.to_string(),
             });

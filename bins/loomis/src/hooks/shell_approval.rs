@@ -1,8 +1,10 @@
 use std::sync::{Mutex, OnceLock};
 
-use engine::{AgentError, AgentEvent, AgentHook};
+use engine::{AgentError, AgentHook};
 use provider::ToolCall;
 use tokio::sync::mpsc;
+
+use crate::app::HookEvent;
 
 /// Hook that requires user approval before executing **any** shell command.
 ///
@@ -12,7 +14,7 @@ use tokio::sync::mpsc;
 /// hook runs inside the agent's tokio task while the TUI owns the terminal.
 /// Instead this hook uses a two-channel handshake:
 ///
-/// 1. Send an [`AgentEvent::ShellApprovalRequested`] through `agent_tx` so
+/// 1. Send a [`HookEvent::ShellApprovalRequested`] through `hook_tx` so
 ///    the TUI renders an inline confirmation prompt.
 /// 2. Block on `approval_rx` (a rendezvous [`std::sync::mpsc::SyncChannel`])
 ///    until the TUI thread posts the user's answer.
@@ -21,9 +23,9 @@ use tokio::sync::mpsc;
 /// [`build_coding_agent`] but the sender half isn't available until the
 /// TUI event loop starts.
 pub struct DangerousCommandApprovalHook {
-    /// Sends lifecycle events to the TUI. Initialised after construction
-    /// via [`set_agent_tx`].
-    agent_tx: OnceLock<mpsc::UnboundedSender<AgentEvent>>,
+    /// Sends shell approval events to the TUI. Initialised after construction
+    /// via [`set_hook_tx`].
+    hook_tx: OnceLock<mpsc::UnboundedSender<HookEvent>>,
     /// Blocking receive for the user's approval decision.
     approval_rx: Mutex<std::sync::mpsc::Receiver<bool>>,
 }
@@ -40,16 +42,16 @@ impl DangerousCommandApprovalHook {
         let (tx, rx) = std::sync::mpsc::sync_channel::<bool>(0);
         (
             Self {
-                agent_tx: OnceLock::new(),
+                hook_tx: OnceLock::new(),
                 approval_rx: Mutex::new(rx),
             },
             tx,
         )
     }
 
-    /// Called by the TUI event loop once the `agent_tx` channel is created.
-    pub fn set_agent_tx(&self, tx: mpsc::UnboundedSender<AgentEvent>) {
-        let _ = self.agent_tx.set(tx);
+    /// Called by the TUI event loop once the `hook_tx` channel is created.
+    pub fn set_hook_tx(&self, tx: mpsc::UnboundedSender<HookEvent>) {
+        let _ = self.hook_tx.set(tx);
     }
 }
 
@@ -63,8 +65,8 @@ impl AgentHook for DangerousCommandApprovalHook {
         let command = parse_shell_command(&tool.function.arguments);
 
         // Send approval request to the TUI.
-        if let Some(tx) = self.agent_tx.get() {
-            let _ = tx.send(AgentEvent::ShellApprovalRequested {
+        if let Some(tx) = self.hook_tx.get() {
+            let _ = tx.send(HookEvent::ShellApprovalRequested {
                 tool_call_id: tool.id.clone(),
                 command: command.clone(),
             });

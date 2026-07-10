@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use deepseek::DeepSeekClient;
-use engine::{Agent, AgentEvent, EngineContext};
+use engine::{Agent, EngineContext};
 use memory::{Memory, SharedMemory};
 use provider::{Message, Role};
 use tokio::sync::mpsc;
@@ -69,6 +69,35 @@ principles, etc. When necessary, educate your users—do not assume they have an
 background of the field.
 ";
 
+// ── AgentEvent (re-exported from engine) ──────────────────────────────────────
+
+/// Re-export the engine's event type for channel construction.
+pub use engine::AgentEvent;
+
+// ── HookEvent ─────────────────────────────────────────────────────────────────
+
+/// Events produced by loomis-side components (SandboxHook, agent_handler)
+/// that are **not** part of the engine's generic [`AgentEvent`] enum.
+///
+/// These are shell-specific events: running a user `!command`, its output,
+/// and approval prompts for dangerous shell operations.
+///
+/// Sent over a separate `mpsc::unbounded_channel` — the TUI event loop
+/// polls both the agent channel and the hook channel every frame.
+#[derive(Debug, Clone)]
+pub enum HookEvent {
+    /// The user's `!command` shell invocation has started executing.
+    ShellRunning { command: String },
+    /// A user `!command` has completed with its captured stdout/stderr.
+    ShellOutput { command: String, output: String },
+    /// The [`SandboxHook`] is requesting user approval before executing a
+    /// shell command on the agent's behalf.
+    ShellApprovalRequested {
+        tool_call_id: String,
+        command: String,
+    },
+}
+
 /// Product of [`build_coding_agent`] — everything needed to launch the TUI.
 pub struct AgentKit {
     pub agent: Agent<DeepSeekClient>,
@@ -79,7 +108,11 @@ pub struct AgentKit {
     pub agent_rx: mpsc::UnboundedReceiver<AgentEvent>,
     /// Clone of the sending half — for the agent handler background task.
     pub agent_tx: mpsc::UnboundedSender<AgentEvent>,
-    /// The sender that unblocks [`DangerousCommandApprovalHook`] when the user
+    /// Receiving half of the hook-event channel — for shell events.
+    pub hook_rx: mpsc::UnboundedReceiver<HookEvent>,
+    /// Clone of the sending half — for [`SandboxHook`] and agent_handler shell commands.
+    pub hook_tx: mpsc::UnboundedSender<HookEvent>,
+    /// The sender that unblocks the approval hook when the user
     /// answers a shell confirmation prompt.
     pub approval_tx: std::sync::mpsc::SyncSender<bool>,
 }
@@ -93,9 +126,8 @@ pub fn build_coding_agent(
     sandbox_config: &SandboxConfig,
 ) -> AgentKit {
     // ── Channels ──────────────────────────────────────────────
-    // Created here (not in the TUI event loop) so the shell-approval
-    // hook can receive a clone of agent_tx.
     let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
+    let (hook_tx, hook_rx) = mpsc::unbounded_channel::<HookEvent>();
 
     // ── Workspace filesystem ─────────────────────────────────
     let workspace = tools::WorkspaceFs::new(workspace_root, sandbox_config).unwrap_or_else(|e| {
@@ -138,30 +170,26 @@ pub fn build_coding_agent(
     // ── Hooks ─────────────────────────────────────────────────
     let (approval_hook, approval_tx) =
         SandboxHook::new(shell_filter, resource_tracker, audit_logger);
-    approval_hook.set_agent_tx(agent_tx.clone());
+    approval_hook.set_hook_tx(hook_tx.clone());
 
     let hooks: Vec<Box<dyn engine::AgentHook>> = vec![Box::new(approval_hook)];
 
-    // ── Engine context ────────────────────────────────────────
-    let ctx = EngineContext {
-        llm: client,
-        memory: memory.clone(),
-        tools: registry,
-        hooks,
-        model: model.to_string(),
-        max_steps: 50,
-        max_retries: 3,
-        streaming: true,
-        // Micro-compact: clear old tool outputs before each API call
-        compact_tool_outputs: true,
-        keep_recent_tool_outputs: memory::DEFAULT_KEEP_RECENT_TOOL_OUTPUTS,
-        compactable_tool_names: memory::DEFAULT_COMPACTABLE_TOOLS
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-        // Macro-compact: full LLM summarisation when over budget
-        compact_model: Some(flash_model.to_string()),
-    };
+    // ── Engine context (via builder) ─────────────────────────
+    let ctx = EngineContext::builder(client, memory.clone(), registry, model.to_string())
+        .hooks(hooks)
+        .max_steps(50)
+        .max_retries(3)
+        .streaming(true)
+        .compact_tool_outputs(true)
+        .keep_recent_tool_outputs(memory::DEFAULT_KEEP_RECENT_TOOL_OUTPUTS)
+        .compactable_tool_names(
+            memory::DEFAULT_COMPACTABLE_TOOLS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .compact_model(flash_model.to_string())
+        .build();
 
     let agent = Agent::new(ctx);
 
@@ -178,6 +206,8 @@ pub fn build_coding_agent(
         model: model.to_string(),
         agent_rx,
         agent_tx,
+        hook_rx,
+        hook_tx,
         approval_tx,
     }
 }

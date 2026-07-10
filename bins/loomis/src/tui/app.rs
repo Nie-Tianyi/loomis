@@ -12,6 +12,8 @@ use engine::AgentEvent;
 use memory::SharedMemory;
 use provider::Role;
 
+use crate::app::HookEvent;
+
 // ── ChatMessage ──────────────────────────────────────────────────────────────────
 
 /// One display entry in the chat area.
@@ -300,7 +302,25 @@ impl App {
                 }
             }
 
-            AgentEvent::ShellRunning { command } => {
+            AgentEvent::Done => {
+                self.streaming = false;
+            }
+        }
+
+        // Auto-scroll to bottom when new content arrives and user hasn't
+        // manually scrolled up.
+        if self.auto_scroll {
+            self.scroll_offset = 0;
+        }
+    }
+
+    /// Processes a [`HookEvent`] — loomis-specific shell events.
+    ///
+    /// These were previously part of [`AgentEvent`] but have been extracted
+    /// into their own enum so the engine crate stays generic.
+    pub fn apply_hook_event(&mut self, event: HookEvent) {
+        match event {
+            HookEvent::ShellRunning { command } => {
                 self.messages.push(ChatMessage::ShellOutput {
                     command,
                     state: ShellOutputState::Running,
@@ -308,7 +328,7 @@ impl App {
                 });
             }
 
-            AgentEvent::ShellOutput { command, output } => {
+            HookEvent::ShellOutput { command, output } => {
                 // Find the Running entry for this command and update it
                 // with the captured output. If not found (e.g. CLI mode
                 // didn't send ShellRunning), push a new message.
@@ -332,7 +352,7 @@ impl App {
                 });
             }
 
-            AgentEvent::ShellApprovalRequested {
+            HookEvent::ShellApprovalRequested {
                 tool_call_id,
                 command,
             } => {
@@ -343,14 +363,8 @@ impl App {
                     timestamp: ChatMessage::now_timestamp(),
                 });
             }
-
-            AgentEvent::Done => {
-                self.streaming = false;
-            }
         }
 
-        // Auto-scroll to bottom when new content arrives and user hasn't
-        // manually scrolled up.
         if self.auto_scroll {
             self.scroll_offset = 0;
         }
@@ -1379,7 +1393,7 @@ mod tests {
     fn test_apply_shell_output_creates_message() {
         let mut app = make_app();
         app.messages.clear();
-        app.apply_event(AgentEvent::ShellOutput {
+        app.apply_hook_event(HookEvent::ShellOutput {
             command: "echo test".into(),
             output: "test".into(),
         });

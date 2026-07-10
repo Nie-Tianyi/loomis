@@ -32,6 +32,7 @@ use provider::LLMClient;
 use provider::{Message, Role};
 
 use super::app::{App, TuiCommand};
+use crate::app::HookEvent;
 
 // ── Entry Point ──────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,8 @@ use super::app::{App, TuiCommand};
 /// - `model` — model name for the status bar.
 /// - `agent_rx` — receiving half of the agent→TUI event channel.
 /// - `agent_tx` — sending half (clone) for the agent handler task.
+/// - `hook_rx` — receiving half of the hook→TUI event channel (shell events).
+/// - `hook_tx` — sending half (clone) for the agent handler and SandboxHook.
 /// - `approval_tx` — sender that unblocks the shell-approval hook.
 pub fn run<C: LLMClient + 'static>(
     agent: Agent<C>,
@@ -58,6 +61,8 @@ pub fn run<C: LLMClient + 'static>(
     workspace_root: PathBuf,
     agent_rx: UnboundedReceiver<AgentEvent>,
     agent_tx: UnboundedSender<AgentEvent>,
+    hook_rx: UnboundedReceiver<HookEvent>,
+    hook_tx: UnboundedSender<HookEvent>,
     approval_tx: std::sync::mpsc::SyncSender<bool>,
 ) -> io::Result<()> {
     // ── Create command channel ────────────────────────────────────
@@ -69,6 +74,7 @@ pub fn run<C: LLMClient + 'static>(
         memory.clone(),
         cmd_rx,
         agent_tx,
+        hook_tx.clone(),
         workspace_root.clone(),
         approval_tx,
     ));
@@ -97,7 +103,7 @@ pub fn run<C: LLMClient + 'static>(
     let mut app = App::new(model, memory, tool_names, workspace_root);
 
     // ── Event loop ───────────────────────────────────────────────────
-    let result = run_event_loop(&mut terminal, &mut app, agent_rx, &cmd_tx);
+    let result = run_event_loop(&mut terminal, &mut app, agent_rx, hook_rx, &cmd_tx);
 
     // ── Cleanup ──────────────────────────────────────────────────────
     let _ = cmd_tx.send(TuiCommand::Exit);
@@ -117,17 +123,19 @@ pub fn run<C: LLMClient + 'static>(
 
 // ── Event Loop ───────────────────────────────────────────────────────────────────
 
-/// The main TUI loop: poll input, drain agent events, render.
+/// The main TUI loop: poll input, drain agent + hook events, render.
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     agent_rx: UnboundedReceiver<AgentEvent>,
+    hook_rx: UnboundedReceiver<HookEvent>,
     cmd_tx: &UnboundedSender<TuiCommand>,
 ) -> io::Result<()> {
-    // We need to poll agent_rx without holding a mutable borrow on app
+    // We need to poll both channels without holding a mutable borrow on app
     // (terminal.draw borrows app immutably). So we collect events first,
     // then apply them.
     let mut agent_rx = agent_rx;
+    let mut hook_rx = hook_rx;
     let mut pending_events: Vec<AgentEvent> = Vec::new();
 
     loop {
@@ -180,7 +188,12 @@ fn run_event_loop(
             pending_events.push(event);
         }
 
-        // Apply all events together
+        // ── Drain hook events (shell events) ────────────────────────
+        while let Ok(event) = hook_rx.try_recv() {
+            app.apply_hook_event(event);
+        }
+
+        // Apply all agent events together
         for event in pending_events.drain(..) {
             app.apply_event(event);
         }
@@ -209,6 +222,7 @@ async fn agent_handler<C: LLMClient + 'static>(
     memory: SharedMemory,
     mut cmd_rx: UnboundedReceiver<TuiCommand>,
     agent_tx: UnboundedSender<AgentEvent>,
+    hook_tx: UnboundedSender<HookEvent>,
     workspace_root: PathBuf,
     approval_tx: std::sync::mpsc::SyncSender<bool>,
 ) {
@@ -314,11 +328,11 @@ async fn agent_handler<C: LLMClient + 'static>(
                 //
                 // Send an immediate "Running" event so the user knows
                 // the command is in progress (not frozen).
-                let _ = agent_tx.send(AgentEvent::ShellRunning {
+                let _ = hook_tx.send(HookEvent::ShellRunning {
                     command: command.clone(),
                 });
 
-                let tx = agent_tx.clone();
+                let tx = hook_tx.clone();
                 let mem = memory.clone();
                 let ws = workspace_root.clone();
                 let cmd_for_blocking = command.clone();
@@ -343,7 +357,7 @@ async fn agent_handler<C: LLMClient + 'static>(
                     }
 
                     // Send to TUI for display
-                    let _ = tx.send(AgentEvent::ShellOutput { command, output });
+                    let _ = tx.send(HookEvent::ShellOutput { command, output });
                 });
             }
 
