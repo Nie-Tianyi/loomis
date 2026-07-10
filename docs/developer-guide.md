@@ -65,10 +65,12 @@ provider (无内部依赖)
 | `tools` | `ToolRegistry` | 工具注册表（按名称查找和分发执行） |
 | `tools` | `WorkspaceFs` | 沙箱文件系统（所有路径限制在 workspace 内） |
 | `memory` | `Memory`, `SharedMemory` | 对话记忆缓冲区 + 两阶段压缩 |
-| `engine` | `Agent` | ReAct 循环：推理 → 行动 → 观察 → 推理... |
+| `engine` | `Agent` | ReAct 循环 — `run()` / `run_with_events()` |
+| `engine` | `AgentBuilder` | **新手入口** — 流式 API 建造 Agent |
+| `engine` | `EngineContext` | 配置和依赖注入容器（高级 API） |
+| `engine` | `EngineContextBuilder` | `EngineContext` 的建造器 |
 | `engine` | `AgentHook` | 生命周期回调（可拦截工具执行） |
-| `engine` | `AgentEvent` | 流式事件（Token, ToolCallStart, ToolResult 等） |
-| `engine` | `EngineContext` | Agent 配置和依赖注入容器 |
+| `engine` | `AgentEvent` | 通用流式事件（Token, ToolCallStart, ToolResult...） |
 
 ---
 
@@ -101,14 +103,12 @@ schemars = { workspace = true }
 
 ### 2.2 最小 Agent 的五分钟版本
 
+使用 `Agent::builder()` — 最简单的入门方式：
+
 ```rust
 // bins/my-agent/src/main.rs
-use std::sync::Arc;
 use deepseek::DeepSeekClient;
-use engine::{Agent, EngineContext};
-use memory::{Memory, SharedMemory};
-use provider::{Message, Role};
-use tools::ToolRegistry;
+use engine::Agent;
 
 #[tokio::main]
 async fn main() {
@@ -119,30 +119,12 @@ async fn main() {
     // 2. 创建 LLM 客户端
     let client = DeepSeekClient::new(&api_key);
 
-    // 3. 创建 Memory 并注入 System Prompt
-    let memory: SharedMemory = Arc::new(std::sync::RwLock::new(Memory::new()));
-    {
-        let mut mem = memory.write().unwrap();
-        mem.push(Message::new(Role::System, "你是一个有帮助的助手。"));
-    }
-
-    // 4. 创建空的 ToolRegistry（无工具 Agent）
-    let registry = Arc::new(ToolRegistry::new());
-
-    // 5. 组装 EngineContext
-    let ctx = EngineContext {
-        llm: client,
-        memory: memory.clone(),
-        tools: registry,
-        hooks: vec![],       // 无钩子
-        model: "deepseek-v4-pro".into(),
-        max_steps: 20,
-        max_retries: 3,
-        streaming: false,    // 非流式，简单输出
-    };
-
-    // 6. 创建 Agent 并运行
-    let agent = Agent::new(ctx);
+    // 3. 一行创建 Agent — memory 自动创建，system prompt 自动注入
+    let agent = Agent::builder(client, "deepseek-v4-pro")
+        .system_prompt("你是一个有帮助的助手。")
+        .max_steps(20)
+        .streaming(false)     // 非流式，简单输出
+        .build();
 
     println!("Agent 已启动。输入你的问题：");
     loop {
@@ -156,17 +138,19 @@ async fn main() {
 
         // 将用户输入推入 memory
         {
-            let mut mem = memory.write().unwrap();
-            mem.push(Message::new(Role::User, &input));
+            let mut mem = agent.memory().write().unwrap();
+            mem.push(provider::Message::new(provider::Role::User, &input));
         }
 
-        match agent.run_loop(&input).await {
+        match agent.run(&input).await {
             Ok(response) => println!("Agent: {response}"),
             Err(e) => eprintln!("错误: {e}"),
         }
     }
 }
 ```
+
+> **💡 提示**：`Agent::builder()` 自动创建了一个空的 `Memory`，并将 `system_prompt` 作为第一条 System 消息注入。如果你需要共享 memory（例如多个 Agent 共用），可以用 `.memory(my_shared_memory)` 传入预创建的 memory。
 
 这就是一个可运行的最小 Agent。它没有工具，只会进行纯文本对话。下面我们将逐步添加更多能力。
 
@@ -536,12 +520,36 @@ impl AgentHook for CliLoggerHook {
 
 ### 5.2 工具审批钩子（拦截危险操作）
 
-这是 `before_tool_call` 的核心用例 — 在工具执行前拦截并决定是否放行：
+这是 `before_tool_call` 的核心用例 — 在工具执行前拦截并决定是否放行。
+
+> **注意**：Engine 层的 `AgentEvent` 是通用的，不包含 Shell 相关事件。Shell 事件通过 loomis 侧自定义的 `HookEvent` 枚举在单独的通道上发送。详见 [§8.1](#81-agent-事件类型)。
 
 ```rust
+use std::sync::{Arc, Mutex, OnceLock};
+use engine::{AgentError, AgentHook};
+use provider::ToolCall;
+use tokio::sync::mpsc;
+
+// 定义应用层的事件类型（不污染 engine 的通用 AgentEvent）
+#[derive(Debug, Clone)]
+pub enum HookEvent {
+    ShellApprovalRequested { tool_call_id: String, command: String },
+}
+
 pub struct DangerousCommandApprovalHook {
-    agent_tx: OnceLock<mpsc::UnboundedSender<AgentEvent>>,
+    hook_tx: OnceLock<mpsc::UnboundedSender<HookEvent>>,
     approval_rx: Mutex<std::sync::mpsc::Receiver<bool>>,
+}
+
+impl DangerousCommandApprovalHook {
+    pub fn new() -> (Self, std::sync::mpsc::SyncSender<bool>) {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<bool>(0);
+        (Self { hook_tx: OnceLock::new(), approval_rx: Mutex::new(rx) }, tx)
+    }
+
+    pub fn set_hook_tx(&self, tx: mpsc::UnboundedSender<HookEvent>) {
+        let _ = self.hook_tx.set(tx);
+    }
 }
 
 impl AgentHook for DangerousCommandApprovalHook {
@@ -558,9 +566,9 @@ impl AgentHook for DangerousCommandApprovalHook {
         // 解析命令
         let command = parse_shell_command(&tool.function.arguments);
 
-        // 通知 TUI 显示确认提示
-        if let Some(tx) = self.agent_tx.get() {
-            let _ = tx.send(AgentEvent::ShellApprovalRequested {
+        // 通知 TUI 显示确认提示（使用自定义 HookEvent 通道）
+        if let Some(tx) = self.hook_tx.get() {
+            let _ = tx.send(HookEvent::ShellApprovalRequested {
                 tool_call_id: tool.id.clone(),
                 command: command.clone(),
             });
@@ -664,41 +672,121 @@ let summary = generate_summary(&client, &drained).await;
 
 ## 7. 组装：把所有组件连接在一起
 
-### 7.1 EngineContext
+### 7.1 EngineContext 与 AgentBuilder
 
-[`EngineContext`](../libs/engine/src/context.rs) 是所有依赖的容器：
+[`EngineContext`](../libs/engine/src/context.rs) 是所有依赖的容器。它有两种创建方式：
+
+**方式 1（推荐新手）：`Agent::builder()`** — 最简单，自动创建 Memory、自动注入 system prompt：
 
 ```rust
-pub struct EngineContext<C: LLMClient> {
-    pub llm: C,                          // LLM provider
-    pub memory: SharedMemory,            // 共享记忆
-    pub tools: Arc<ToolRegistry>,        // 工具注册表
-    pub hooks: Vec<Box<dyn AgentHook>>,  // 生命周期钩子
-    pub model: String,                   // 模型名
-    pub max_steps: usize,                // 最大循环步数 (防止无限循环)
-    pub max_retries: usize,              // 网络错误最大重试次数
-    pub streaming: bool,                 // 是否启用 SSE 流式
-}
+let agent = Agent::builder(client, "deepseek-v4-pro")
+    .system_prompt("You are a helpful assistant.")
+    .tool(my_tool)
+    .hook(my_hook)
+    .max_steps(50)
+    .with_micro_compact(5, compactable_tools)
+    .with_macro_compact("deepseek-v4-flash")
+    .build();
 ```
+
+**方式 2（高级用户）：`EngineContext::builder()`** — 需要手动管理 Memory 和 ToolRegistry：
+
+```rust
+let ctx = EngineContext::builder(client, memory, tools, "deepseek-v4-pro")
+    .hook(my_hook)
+    .max_steps(50)
+    .max_retries(3)
+    .streaming(true)
+    .with_micro_compact(5, compactable_tools)
+    .with_macro_compact("deepseek-v4-flash")
+    .build();
+let agent = Agent::new(ctx);
+```
+
+**方式 3（完全手动）：结构体字面量** — 向后兼容，所有字段均为 `pub`：
+
+```rust
+let ctx = EngineContext {
+    llm: client,
+    memory: memory.clone(),
+    tools: registry,
+    hooks: vec![],
+    model: "deepseek-v4-pro".into(),
+    max_steps: 50,
+    max_retries: 3,
+    streaming: true,
+    compact_tool_outputs: false,       // 压缩默认关闭
+    keep_recent_tool_outputs: 5,
+    compactable_tool_names: HashSet::new(),
+    compact_model: None,
+};
+let agent = Agent::new(ctx);
+```
+
+`EngineContext` 的完整字段：
+
+| 字段 | 类型 | 默认值（Builder） | 说明 |
+|------|------|-------------------|------|
+| `llm` | `C: LLMClient` | **必需** | LLM provider |
+| `memory` | `SharedMemory` | 自动创建 | 共享对话记忆 |
+| `tools` | `Arc<ToolRegistry>` | 空注册表 | 工具注册表 |
+| `hooks` | `Vec<Box<dyn AgentHook>>` | 空 | 生命周期钩子 |
+| `model` | `String` | **必需** | 模型名称 |
+| `max_steps` | `usize` | `50` | 最大 ReAct 循环步数 |
+| `max_retries` | `usize` | `3` | 网络错误最大重试次数 |
+| `streaming` | `bool` | `true` | 是否启用 SSE 流式 |
+| `compact_tool_outputs` | `bool` | `false` | 是否启用工具输出微压缩 |
+| `keep_recent_tool_outputs` | `usize` | `5` | 压缩时保留的最近输出数 |
+| `compactable_tool_names` | `HashSet<String>` | 空 | 可压缩的工具名集合 |
+| `compact_model` | `Option<String>` | `None` | 用于 LLM 摘要压缩的模型 |
 
 ### 7.2 标准组装模式
 
-参考 [`loomis::app::build_coding_agent`](../bins/loomis/src/app.rs)，标准组装遵循以下步骤：
+参考 [`loomis::app::build_coding_agent`](../bins/loomis/src/app.rs)，标准组装有两种风格：
+
+**简洁风格（推荐）— `Agent::builder()`：**
+
+```rust
+use deepseek::DeepSeekClient;
+use engine::Agent;
+
+let client = DeepSeekClient::new(api_key);
+
+let agent = Agent::builder(client, "deepseek-v4-pro")
+    .system_prompt("You are a helpful coding assistant.")
+    .tool(Arc::new(CalculatorTool))
+    .tool(ReadTool::new(workspace.clone()))
+    .tool(ShellTool::new(workspace_root, Duration::from_secs(30)))
+    .hook(Box::new(CliLoggerHook))
+    .max_steps(50)
+    .with_micro_compact(5, compactable_tools)
+    .with_macro_compact("deepseek-v4-flash")
+    .build();
+```
+
+**高级风格 — `EngineContext::builder()`（需要 Sandbox 等复杂组件时）：**
 
 ```rust
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use deepseek::DeepSeekClient;
-use engine::{Agent, AgentEvent, EngineContext};
+use engine::{Agent, EngineContext};
 use memory::{Memory, SharedMemory};
 use provider::{Message, Role};
 use tokio::sync::mpsc;
 use tools::{ToolRegistry, WorkspaceFs};
 
-pub fn build_coding_agent(api_key: &str, workspace_root: &Path, model: &str, flash_model: &str) -> Agent<DeepSeekClient> {
+pub fn build_coding_agent(
+    api_key: &str,
+    workspace_root: &Path,
+    model: &str,
+    flash_model: &str,
+) -> Agent<DeepSeekClient> {
     // 1. 创建事件通道（用于 TUI/CLI 获取实时进度）
     let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
+    // 应用层自定义事件通道（Shell 审批等）
+    let (hook_tx, hook_rx) = mpsc::unbounded_channel::<HookEvent>();
 
     // 2. 创建文件沙箱
     let workspace = WorkspaceFs::new(workspace_root)
@@ -722,26 +810,28 @@ pub fn build_coding_agent(api_key: &str, workspace_root: &Path, model: &str, fla
     // 5. 创建 LLM 客户端
     let client = DeepSeekClient::new(api_key);
 
-    // 6. 创建 Hooks
+    // 6. 创建 Hooks — 注意使用 HookEvent 而非 AgentEvent
     let (approval_hook, approval_tx) = DangerousCommandApprovalHook::new();
-    approval_hook.set_agent_tx(agent_tx.clone());
+    approval_hook.set_hook_tx(hook_tx.clone());
 
     let hooks: Vec<Box<dyn engine::AgentHook>> = vec![
         Box::new(approval_hook),
         Box::new(CliLoggerHook),
     ];
 
-    // 7. 组装 EngineContext
-    let ctx = EngineContext {
-        llm: client,
-        memory: memory.clone(),
-        tools: registry,
-        hooks,
-        model: model.to_string(),
-        max_steps: 50,
-        max_retries: 3,
-        streaming: true,
-    };
+    // 7. 组装 EngineContext（使用 Builder）
+    let ctx = EngineContext::builder(client, memory.clone(), registry, model.to_string())
+        .hooks(hooks)
+        .max_steps(50)
+        .max_retries(3)
+        .streaming(true)
+        .compact_tool_outputs(true)
+        .keep_recent_tool_outputs(memory::DEFAULT_KEEP_RECENT_TOOL_OUTPUTS)
+        .compactable_tool_names(
+            memory::DEFAULT_COMPACTABLE_TOOLS.iter().map(|s| s.to_string()).collect(),
+        )
+        .compact_model(flash_model.to_string())
+        .build();
 
     // 8. 创建 Agent
     let agent = Agent::new(ctx);
@@ -760,7 +850,7 @@ pub fn build_coding_agent(api_key: &str, workspace_root: &Path, model: &str, fla
 
 ```rust
 // 方式 1：简单运行（无事件流）
-let result: String = agent.run_loop("你好，帮我写个排序函数").await?;
+let result: String = agent.run("你好，帮我写个排序函数").await?;
 
 // 方式 2：带事件流（用于 TUI 实时渲染）
 let (tx, rx) = mpsc::unbounded_channel();
@@ -782,9 +872,9 @@ while let Some(event) = rx.recv().await {
 
 ## 8. Streaming Events 与 TUI 集成
 
-### 8.1 AgentEvent 类型
+### 8.1 Agent 事件类型
 
-[`AgentEvent`](../libs/engine/src/agent.rs) 枚举覆盖了 Agent 执行过程中的所有事件：
+Engine 层的 [`AgentEvent`](../libs/engine/src/agent.rs) 是**通用的**，只包含与 LLM 交互直接相关的事件：
 
 ```rust
 pub enum AgentEvent {
@@ -793,26 +883,35 @@ pub enum AgentEvent {
     ToolCallStart { id: String, name: String },   // 工具调用开始
     ToolCallArgsDelta { id: String, delta: String }, // 工具参数片段
     ToolResult { id: String, name: String, output: String }, // 工具执行结果
-    ShellRunning { command: String },     // Shell 正在执行
-    ShellOutput { command: String, output: String }, // Shell 输出
-    ShellApprovalRequested {              // 需要审批的 Shell 命令
-        tool_call_id: String,
-        command: String,
-    },
+    ToolProgress { id: String, name: String, message: String }, // 工具进度
     Done,                                  // Agent 结束
+}
+```
+
+**应用层自定义事件**：特定于应用的 UI 事件（如 Shell 审批、Shell 输出）应该定义在应用层，通过独立的通道发送，避免污染 engine 的通用 API。Loomis 定义了自己的 `HookEvent`：
+
+```rust
+/// loomis 应用层的 Shell 事件（不在 engine::AgentEvent 中）
+pub enum HookEvent {
+    ShellRunning { command: String },
+    ShellOutput { command: String, output: String },
+    ShellApprovalRequested { tool_call_id: String, command: String },
 }
 ```
 
 ### 8.2 通道拓扑（TUI 架构）
 
-loomis 的 TUI 使用以下通道架构：
+loomis 的 TUI 使用双通道架构 — Agent 事件和 Hook 事件分别走独立的通道：
 
 ```text
 TUI 线程                          Agent 任务 (tokio::spawn)
 ─────────                          ────────────────────────
 cmd_tx ───────── TuiCommand ──────→ cmd_rx
-agent_rx ←────── AgentEvent ─────── agent_tx
+agent_rx ←────── AgentEvent ─────── agent_tx    (LLM token / tool call / done)
+hook_rx  ←────── HookEvent ──────── hook_tx     (Shell running / approval)
 ```
+
+事件循环每帧轮询两个通道 — Hook 事件先于 Agent 事件处理，保证 Shell 状态更新优先渲染。
 
 ### 8.3 消费事件流
 
@@ -928,15 +1027,13 @@ let name = generate_thread_name("帮我写一个 Rust web server");
 ```rust
 // bins/code-reviewer/src/main.rs
 use std::sync::Arc;
-use std::time::Duration;
 
 use deepseek::DeepSeekClient;
-use engine::{Agent, AgentError, AgentEvent, AgentHook, EngineContext};
-use memory::{Memory, SharedMemory};
+use engine::{Agent, AgentError, AgentEvent, AgentHook};
 use provider::{Message, Role, ToolCall};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use tools::{ToolError, ToolRegistry, WorkspaceFs, tool};
+use tools::{ToolError, WorkspaceFs, tool};
 
 // ══════════════════════════════════════════════════════════════════════
 // 工具：读取文件
@@ -1024,38 +1121,18 @@ async fn main() {
 
     // ── 沙箱 ──────────────────────────────────────────
     let fs = WorkspaceFs::new(&cwd).expect("workspace init failed");
-    let fs = Arc::new(fs);
-
-    // ── 工具注册 ─────────────────────────────────────
-    let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(ReviewFileTool::new(fs)));
-    let registry = Arc::new(registry);
-
-    // ── Memory ────────────────────────────────────────
-    let memory: SharedMemory = Arc::new(std::sync::RwLock::new(Memory::new()));
 
     // ── LLM ───────────────────────────────────────────
     let client = DeepSeekClient::new(&api_key);
 
-    // ── Context ───────────────────────────────────────
-    let ctx = EngineContext {
-        llm: client,
-        memory: memory.clone(),
-        tools: registry,
-        hooks: vec![Box::new(ReviewProgressHook)],
-        model: "deepseek-v4-pro".into(),
-        max_steps: 15,
-        max_retries: 3,
-        streaming: true,
-    };
-
-    let agent = Agent::new(ctx);
-
-    // ── Seed ──────────────────────────────────────────
-    {
-        let mut mem = memory.write().unwrap();
-        mem.push(Message::new(Role::System, SYSTEM_PROMPT));
-    }
+    // ── 创建 Agent（Builder 一行搞定）───────────────
+    let agent = Agent::builder(client, "deepseek-v4-pro")
+        .system_prompt(SYSTEM_PROMPT)
+        .tool(ReviewFileTool::new(Arc::new(fs)))
+        .hook(Box::new(ReviewProgressHook))
+        .max_steps(15)
+        .streaming(true)
+        .build();
 
     // ── Event channel ─────────────────────────────────
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1132,17 +1209,12 @@ for msg in mem.messages() {
     println!("[{:?}] {}", msg.role, msg.content);
 }
 
-// 2. 设置较低的最大步数来调试工具循环
-let ctx = EngineContext {
-    max_steps: 3,  // 限制 3 步，方便观察
-    ..
-};
-
-// 3. 使用非流式模式做原型验证
-let ctx = EngineContext {
-    streaming: false,  // 非流式输出更易读
-    ..
-};
+// 2. 使用 Builder 设置较低的最大步数来调试工具循环
+let agent = Agent::builder(client, "deepseek-v4-pro")
+    .system_prompt("...")
+    .max_steps(3)  // 限制 3 步，方便观察
+    .streaming(false) // 非流式输出更易读
+    .build();
 ```
 
 ### A.3 添加 Provider 的检查清单
