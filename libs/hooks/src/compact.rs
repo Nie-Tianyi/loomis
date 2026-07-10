@@ -111,12 +111,7 @@ pub struct MacroCompactHook<C: LLMClient> {
 }
 
 impl<C: LLMClient> MacroCompactHook<C> {
-    pub fn new(
-        compact_model: String,
-        threshold: usize,
-        keep_last_n: usize,
-        client: C,
-    ) -> Self {
+    pub fn new(compact_model: String, threshold: usize, keep_last_n: usize, client: C) -> Self {
         Self {
             compact_model,
             threshold,
@@ -157,10 +152,8 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
              Output only the summary, no preamble:\n\n{transcript}"
         );
 
-        let request = CompletionRequest::new(
-            &self.compact_model,
-            vec![Message::new(Role::User, prompt)],
-        );
+        let request =
+            CompletionRequest::new(&self.compact_model, vec![Message::new(Role::User, prompt)]);
 
         // Block the agent loop (not the UI — different thread).
         let summary = tokio::runtime::Handle::current()

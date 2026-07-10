@@ -140,7 +140,11 @@ impl App {
                 }
             },
 
-            AgentEvent::ToolCall { id, name, arguments } => {
+            AgentEvent::ToolCall {
+                id,
+                name,
+                arguments,
+            } => {
                 self.messages.push(ChatMessage::ToolCall {
                     id,
                     name,
