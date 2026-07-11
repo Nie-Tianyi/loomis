@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 
 use memory::SharedMemory;
 use provider::{
-    CompletionRequest, CompletionResponse, LLMClient, Message, ProviderError, Role, StreamChunk,
-    ToolCall, ToolCallFunction, ToolCallType,
+    CompletionRequest, CompletionResponse, FinishReason, LLMClient, Message, ProviderError, Role,
+    StreamChunk, ToolCall, ToolCallFunction, ToolCallType,
 };
 use tools::{Progress, ToolError};
 
@@ -428,35 +428,24 @@ impl<C: LLMClient> Agent<C> {
                 }
             }
 
-            let assistant_msg = acc.into_assistant_message();
+            let (assistant_msg, finish_reason) = acc.into_assistant_message();
 
             for hook in &self.ctx.hooks {
                 hook.on_llm_end("default", &assistant_msg);
             }
 
-            if let Some(tool_calls) = &assistant_msg.tool_calls {
-                if tool_calls.is_empty() {
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::RunCompleted {
-                            answer: assistant_msg.content.clone(),
-                        });
-                    }
-                    for hook in &self.ctx.hooks {
-                        hook.on_run_finish(
-                            "default",
-                            &RunOutcome::Success {
-                                answer: assistant_msg.content.clone(),
-                            },
-                        );
-                    }
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::Done);
-                    }
-                    return Ok(assistant_msg.content);
-                }
+            let has_tool_calls = assistant_msg
+                .tool_calls
+                .as_ref()
+                .is_some_and(|tcs| !tcs.is_empty());
+            let is_truncated = matches!(finish_reason, Some(FinishReason::Length));
+
+            if has_tool_calls {
+                // ── Execute tools ──────────────────────────────────────────
 
                 // Emit complete tool-call events to the UI before execution begins.
                 if let Some(ref tx) = tx {
+                    let tool_calls = assistant_msg.tool_calls.as_ref().unwrap();
                     for tc in tool_calls {
                         let _ = tx.send(AgentEvent::ToolCall {
                             id: tc.id.clone(),
@@ -472,6 +461,7 @@ impl<C: LLMClient> Agent<C> {
                     mem.push(assistant_msg.clone());
                 }
 
+                let tool_calls = assistant_msg.tool_calls.as_ref().unwrap();
                 for tc in tool_calls {
                     let mut blocked = false;
                     for hook in &self.ctx.hooks {
@@ -575,7 +565,15 @@ impl<C: LLMClient> Agent<C> {
                         }
                     };
                 }
+            } else if is_truncated {
+                // ── Auto-continue: push partial output and loop ───────────
+                {
+                    let mut mem = self.ctx.memory.write().unwrap();
+                    mem.push(assistant_msg);
+                }
+                // No events emitted — the run is not finished.
             } else {
+                // ── Normal exit ──────────────────────────────────────────
                 {
                     let mut mem = self.ctx.memory.write().unwrap();
                     mem.push(assistant_msg.clone());
@@ -725,6 +723,7 @@ impl<C: LLMClient> Agent<C> {
             let content = choice.message.content.unwrap_or_default();
             let tool_calls = choice.message.tool_calls;
             let reasoning = choice.message.reasoning_content;
+            let finish_reason = &choice.finish_reason;
 
             let msg = Message {
                 role: Role::Assistant,
@@ -747,37 +746,45 @@ impl<C: LLMClient> Agent<C> {
                 let _ = tx.send(AgentEvent::Token(content.clone()));
             }
 
+            let is_truncated = matches!(finish_reason, Some(FinishReason::Length));
+
             if let Some(tool_calls) = tool_calls {
                 if tool_calls.is_empty() {
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::RunCompleted {
-                            answer: content.clone(),
-                        });
-                    }
-                    for hook in &self.ctx.hooks {
-                        hook.on_run_finish(
-                            "default",
-                            &RunOutcome::Success {
+                    if is_truncated {
+                        // Auto-continue: push partial output and loop.
+                        let mut mem = self.ctx.memory.write().unwrap();
+                        mem.push(msg);
+                    } else {
+                        if let Some(ref tx) = tx {
+                            let _ = tx.send(AgentEvent::RunCompleted {
                                 answer: content.clone(),
-                            },
-                        );
+                            });
+                        }
+                        for hook in &self.ctx.hooks {
+                            hook.on_run_finish(
+                                "default",
+                                &RunOutcome::Success {
+                                    answer: content.clone(),
+                                },
+                            );
+                        }
+                        if let Some(ref tx) = tx {
+                            let _ = tx.send(AgentEvent::Done);
+                        }
+                        {
+                            let mut mem = self.ctx.memory.write().unwrap();
+                            mem.push(msg);
+                        }
+                        return Ok(content);
                     }
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::Done);
-                    }
+                } else {
+                    // ── Non-empty tool calls: push msg then execute ──
                     {
                         let mut mem = self.ctx.memory.write().unwrap();
                         mem.push(msg);
                     }
-                    return Ok(content);
-                }
 
-                {
-                    let mut mem = self.ctx.memory.write().unwrap();
-                    mem.push(msg);
-                }
-
-                for tc in &tool_calls {
+                    for tc in &tool_calls {
                     let mut blocked = false;
                     for hook in &self.ctx.hooks {
                         if let Err(e) = hook.before_tool_call("default", tc) {
@@ -862,28 +869,35 @@ impl<C: LLMClient> Agent<C> {
                         }
                     }
                 }
+                }
             } else {
-                if let Some(ref tx) = tx {
-                    let _ = tx.send(AgentEvent::RunCompleted {
-                        answer: content.clone(),
-                    });
-                }
-                for hook in &self.ctx.hooks {
-                    hook.on_run_finish(
-                        "default",
-                        &RunOutcome::Success {
-                            answer: content.clone(),
-                        },
-                    );
-                }
-                if let Some(ref tx) = tx {
-                    let _ = tx.send(AgentEvent::Done);
-                }
-                {
+                if is_truncated {
+                    // Auto-continue: push partial output and loop.
                     let mut mem = self.ctx.memory.write().unwrap();
                     mem.push(msg);
+                } else {
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(AgentEvent::RunCompleted {
+                            answer: content.clone(),
+                        });
+                    }
+                    for hook in &self.ctx.hooks {
+                        hook.on_run_finish(
+                            "default",
+                            &RunOutcome::Success {
+                                answer: content.clone(),
+                            },
+                        );
+                    }
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(AgentEvent::Done);
+                    }
+                    {
+                        let mut mem = self.ctx.memory.write().unwrap();
+                        mem.push(msg);
+                    }
+                    return Ok(content);
                 }
-                return Ok(content);
             }
         }
     }
@@ -897,6 +911,7 @@ struct StreamAccumulator {
     content: String,
     reasoning: String,
     tool_calls: BTreeMap<u32, ToolCallAccumulator>,
+    finish_reason: Option<FinishReason>,
 }
 
 struct ToolCallAccumulator {
@@ -911,6 +926,7 @@ impl StreamAccumulator {
             content: String::new(),
             reasoning: String::new(),
             tool_calls: BTreeMap::new(),
+            finish_reason: None,
         }
     }
 
@@ -941,10 +957,15 @@ impl StreamAccumulator {
                     entry.arguments.push_str(&tc.function.arguments);
                 }
             }
+            // Capture finish_reason from the terminal chunk (null on all
+            // intermediate chunks, set on the final chunk).
+            if let Some(ref fr) = choice.finish_reason {
+                self.finish_reason = Some(fr.clone());
+            }
         }
     }
 
-    fn into_assistant_message(self) -> Message {
+    fn into_assistant_message(self) -> (Message, Option<FinishReason>) {
         let tool_calls: Vec<ToolCall> = self
             .tool_calls
             .into_values()
@@ -965,13 +986,14 @@ impl StreamAccumulator {
             Some(tool_calls)
         };
 
-        Message {
+        let msg = Message {
             role: Role::Assistant,
             content: self.content,
             tool_calls,
             tool_call_id: None,
             name: None,
-        }
+        };
+        (msg, self.finish_reason)
     }
 }
 
@@ -1077,9 +1099,10 @@ mod tests {
         )
         .unwrap();
         acc.ingest(&chunk);
-        let msg = acc.into_assistant_message();
+        let (msg, finish_reason) = acc.into_assistant_message();
         assert_eq!(msg.content, "Hello");
         assert!(msg.tool_calls.is_none());
+        assert!(finish_reason.is_none());
     }
 
     #[test]
