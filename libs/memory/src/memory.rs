@@ -24,6 +24,12 @@ pub struct MemoryBuilder {
     messages: Vec<Message>,
 }
 
+impl Default for MemoryBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryBuilder {
     /// Create a new empty [`MemoryBuilder`].
     pub fn new() -> Self {

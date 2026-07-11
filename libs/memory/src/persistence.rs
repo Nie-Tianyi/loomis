@@ -51,8 +51,7 @@ pub fn save_conversation(name: &str, workspace_root: &Path, memory: &Memory) -> 
         messages: memory.to_context_vec(),
     };
 
-    let json =
-        serde_json::to_string_pretty(&cf).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(&cf).map_err(io::Error::other)?;
     fs::write(dir.join(format!("{name}.json")), &json)?;
 
     let md = format_conversation_md(&cf);
@@ -85,7 +84,7 @@ pub fn list_threads(workspace_root: &Path) -> io::Result<Vec<ThreadInfo>> {
         let entry = entry?;
         let path = entry.path();
 
-        if path.extension().map_or(true, |ext| ext != "json") {
+        if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
 
@@ -147,8 +146,6 @@ pub fn thread_name_from_message(first_message: &str) -> String {
     for ch in snippet.chars() {
         if ch.is_ascii_alphanumeric() {
             slug.push(ch.to_ascii_lowercase());
-        } else if ch == '-' {
-            slug.push('-');
         } else {
             slug.push('-');
         }
