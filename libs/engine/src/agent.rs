@@ -542,6 +542,119 @@ impl<C: LLMClient> Agent<C> {
 // ── Streaming Loop ────────────────────────────────────────────────────────────
 
 impl<C: LLMClient> Agent<C> {
+    /// Execute the **ReAct** (Reasoning + Acting) loop with SSE streaming.
+    ///
+    /// This is the core of the agent framework.  It implements a two-level
+    /// loop that drives the LLM conversation until a terminal state is reached.
+    ///
+    /// # High-level flow
+    ///
+    /// ```text
+    /// begin_run()                         // notify hooks, push user msg to memory
+    ///   │
+    ///   ▼
+    /// ┌─────────────────────────────────┐
+    /// │  Outer loop (step 1..max_steps)  │  ←─ ReAct loop
+    /// │  ┌─────────────────────────────┐ │
+    /// │  │ 1. prepare_llm_call()       │ │  ←─ run hooks, build context from memory
+    /// │  │ 2. stream_with_retry()      │ │  ←─ open SSE connection to provider
+    /// │  │                             │ │
+    /// │  │  Inner loop (chunk by chunk)│ │  ←─ read SSE stream with 120s timeout
+    /// │  │  ├─ emit_chunk_events()     │ │  ←─ forward Token/ReasoningToken to TUI
+    /// │  │  └─ acc.ingest()            │ │  ←─ accumulate into final message
+    /// │  │                             │ │
+    /// │  │ 3. into_assistant_message() │ │  ←─ materialize the full response
+    /// │  │ 4. on_llm_end() hooks       │ │
+    /// │  └──────────┬──────────────────┘ │
+    /// │             │                     │
+    /// │     ┌───────┼───────┐             │
+    /// │     ▼       ▼       ▼             │
+    /// │  tool     length  final           │
+    /// │  calls    (trunc) answer          │
+    /// └─────┬───────┬───────┬─────────────┘
+    ///       │       │       │
+    ///       ▼       ▼       ▼
+    ///   execute    push    finish_run()
+    ///   tools      to      (success)
+    ///   ──► loop   memory
+    ///              ──► loop
+    /// ```
+    ///
+    /// # The ReAct loop (outer loop)
+    ///
+    /// Each iteration of the outer loop is one "step."  The agent sends the
+    /// full conversation context to the LLM, collects the response, and
+    /// either (a) executes tool calls, (b) handles a truncated response, or
+    /// (c) returns the final answer.
+    ///
+    /// The counter starts at 1 and is compared against [`EngineContext::max_steps`]
+    /// (default 50).  If the counter is exceeded **before** the next LLM call,
+    /// the run fails with [`AgentError::MaxStepsReached`].  Tools that produce
+    /// their own content (e.g. a subagent that runs its own multi-step loop)
+    /// do **not** count against this limit — only LLM calls count.
+    ///
+    /// # The chunk loop (inner loop)
+    ///
+    /// The SSE stream is read one chunk at a time.  Each chunk goes through
+    /// two paths in parallel:
+    ///
+    /// | Component | Role |
+    /// |-----------|------|
+    /// | [`emit_chunk_events`] | Push `Token` / `ReasoningToken` events to the |
+    /// |                       | TUI so the user sees text as it arrives.      |
+    /// | [`StreamAccumulator`] | Buffer content, reasoning, and tool-call |
+    /// |                       | fragments into a complete [`Message`].  |
+    ///
+    /// Both paths are driven from the same chunk — the accumulator always
+    /// ingests; the TUI event sender is optional (no-op when `tx` is `None`,
+    /// e.g. library mode).
+    ///
+    /// A per-chunk timeout of **120 seconds** guards against stalled SSE
+    /// connections.  If no chunk arrives within that window, the run fails
+    /// with [`AgentError::StreamTimeout`].
+    ///
+    /// # Terminal branches (after the inner loop completes)
+    ///
+    /// The assistant message is inspected to decide what happens next:
+    ///
+    /// | Condition | Action | Rationale |
+    /// |-----------|--------|-----------|
+    /// | **Has tool calls** | [`execute_tool_calls`] → **loop** | The LLM wants to |
+    /// |                    |                                | use a tool; execute |
+    /// |                    |                                | it, push results to |
+    /// |                    |                                | memory, and let the |
+    /// |                    |                                | LLM see the output |
+    /// |                    |                                | next iteration. |
+    /// | **Truncated**      | Push to memory → **loop** |   | `finish_reason` is |
+    /// | (`FinishReason::Length`) |                         | `"length"` — the model |
+    /// |                    |                                | hit its max-token |
+    /// |                    |                                | limit mid-response. |
+    /// |                    |                                | The partial message |
+    /// |                    |                                | stays in context so |
+    /// |                    |                                | the model can continue. |
+    /// | **Neither**        | [`finish_run`] → **return** |   | The model produced a |
+    /// |                    |                                | final text answer. |
+    /// |                    |                                | Push to memory, emit |
+    /// |                    |                                | `RunCompleted`, then |
+    /// |                    |                                | `Done`, and return. |
+    ///
+    /// # Truncation handling
+    ///
+    /// When the provider returns `FinishReason::Length`, the model's output
+    /// was cut off before it finished.  This typically happens when the model
+    /// is generating a long code block or document.  Instead of returning a
+    /// partial answer, the loop pushes the truncated message to memory and
+    /// spins again — the model will see its own partial output in context and
+    /// continue from where it left off.  The next LLM call naturally
+    /// resumes the thought because the assistant message without tool calls
+    /// but with `finish_reason: "length"` is in the history.
+    ///
+    /// # Cancellation
+    ///
+    /// This method does **not** directly handle cancellation — the caller
+    /// (typically a TUI) should wrap the future in a [`tokio::select!`] with
+    /// a cancellation channel, then call [`fail_run`] or send `AgentEvent::Cancelled`
+    /// externally.  See the `loomis` binary for the TUI-side cancellation pattern.
     async fn run_streaming_loop(
         &self,
         user_input: &str,
@@ -556,12 +669,17 @@ impl<C: LLMClient> Agent<C> {
             }
             steps += 1;
 
+            // ── Build context: run on_step_start + on_llm_start hooks, then
+            //    snapshot the full conversation history from memory.  The
+            //    context includes the system prompt, all prior user/assistant
+            //    messages, and any tool-call results from previous steps.
             let messages = self.prepare_llm_call(steps);
             let tools = self.ctx.tools.to_tool_defs();
             let request = CompletionRequest::new(&self.ctx.model, messages)
                 .with_stream(true)
                 .with_tools(tools);
 
+            // ── Open SSE stream with retry + exponential backoff ──
             let mut stream = match stream_with_retry(
                 &self.ctx.llm,
                 request.clone(),
@@ -574,9 +692,13 @@ impl<C: LLMClient> Agent<C> {
                 Err(e) => return self.fail_run(e, &tx),
             };
 
-            // ── Per-chunk timeout (prevents hang on stalled SSE stream) ──
+            // ── Per-chunk timeout — prevents hanging forever on a stalled
+            //    SSE connection.  120s is long enough for the provider to
+            //    generate a very large token, but short enough that the user
+            //    isn't waiting indefinitely.
             const STREAM_CHUNK_TIMEOUT_SECS: u64 = 120;
 
+            // ── Inner loop: drain the SSE stream chunk by chunk ──
             let mut acc = StreamAccumulator::new();
             loop {
                 let chunk_result = match tokio::time::timeout(
@@ -586,7 +708,7 @@ impl<C: LLMClient> Agent<C> {
                 .await
                 {
                     Ok(Some(result)) => result,
-                    Ok(None) => break,
+                    Ok(None) => break,          // stream exhausted normally
                     Err(_elapsed) => {
                         return self.fail_run(AgentError::StreamTimeout, &tx);
                     }
@@ -602,11 +724,14 @@ impl<C: LLMClient> Agent<C> {
                 }
             }
 
+            // ── Materialize the full assistant message from accumulated
+            //    deltas, then notify hooks.
             let (assistant_msg, finish_reason) = acc.into_assistant_message();
             for hook in &self.ctx.hooks {
                 hook.on_llm_end("default", &assistant_msg);
             }
 
+            // ── Decide next action ──
             let has_tool_calls = assistant_msg
                 .tool_calls
                 .as_ref()
@@ -614,14 +739,20 @@ impl<C: LLMClient> Agent<C> {
             let is_truncated = matches!(finish_reason, Some(FinishReason::Length));
 
             if has_tool_calls {
+                // Tool calls → execute them, push results to memory, loop
+                // again so the LLM can see the tool outputs.
                 self.execute_tool_calls(&assistant_msg, &tx).await;
             } else if is_truncated {
+                // Truncated → push the partial message to memory and spin
+                // again.  The next LLM call will see its own partial output
+                // in context and continue generation.
                 self.ctx
                     .memory
                     .write()
                     .expect("memory lock poisoned")
                     .push(assistant_msg);
             } else {
+                // Final answer → push to memory and return.
                 self.ctx
                     .memory
                     .write()
@@ -719,14 +850,70 @@ impl<C: LLMClient> Agent<C> {
 }
 
 // ── StreamAccumulator ─────────────────────────────────────────────────────────
+//
+// The SSE protocol delivers LLM responses as a sequence of small, incremental
+// "deltas" (chunks).  A single assistant message can span dozens of chunks:
+// content tokens arrive one at a time, tool-call fragments are spread across
+// multiple chunks, and reasoning (chain-of-thought) is interleaved with
+// everything else.  `StreamAccumulator` is the buffer that stitches these
+// deltas back into a complete [`Message`].
 
+/// Accumulates incremental SSE deltas into a complete assistant [`Message`].
+///
+/// # Why this exists
+///
+/// The DeepSeek (and OpenAI-compatible) streaming API sends responses as
+/// Server-Sent Events.  Each chunk carries a [`StreamChunk`] with a `delta`
+/// field that contains **partial** updates:
+///
+/// | Delta field | Arrival pattern |
+/// |-------------|-----------------|
+/// | `content` | One or a few text tokens per chunk, concatenated in order |
+/// | `reasoning_content` | Same as content, but for chain-of-thought |
+/// | `tool_calls` | Fragmented — `id` and `name` may arrive in one chunk, |
+/// |             | `arguments` dribble in over many subsequent chunks |
+/// | `finish_reason` | `null` on every chunk except the final one |
+///
+/// # Tool-call fragmentation
+///
+/// This is the tricky part.  The provider sends tool calls incrementally:
+///
+/// ```text
+/// Chunk 1:  delta.tool_calls[0] = { index: 0, id: "call_1", function.name: "read" }
+/// Chunk 2:  delta.tool_calls[0] = { index: 0, function.arguments: "{\"file" }
+/// Chunk 3:  delta.tool_calls[0] = { index: 0, function.arguments: "_path\": " }
+/// Chunk 4:  delta.tool_calls[0] = { index: 0, function.arguments: "\"src/main.rs\"}" }
+/// Chunk 5:  (final — finish_reason: "tool_calls")
+/// ```
+///
+/// We key by `tc.index` (a `u32`), creating a [`ToolCallAccumulator`] on first
+/// sight and appending argument fragments on subsequent chunks.  The `id` and
+/// `name` are set once (first non-empty value wins — they're typically only
+/// populated in the first chunk for a given index).
+///
+/// # `BTreeMap` ordering
+///
+/// A [`BTreeMap<u32, _>`] is used instead of [`HashMap`] so that when we
+/// materialize the tool calls in [`into_assistant_message`], they are emitted
+/// in the same order the LLM declared them.  Tool execution order matters:
+/// the LLM may intend `tool[0]` to run before `tool[1]`.
 struct StreamAccumulator {
+    /// Accumulated text content (the assistant's "answer" text).
     content: String,
+    /// Accumulated reasoning / chain-of-thought text.
     reasoning: String,
+    /// In-progress tool calls, keyed by the LLM-assigned index.
     tool_calls: BTreeMap<u32, ToolCallAccumulator>,
+    /// The `finish_reason` from the terminal chunk; `None` until the
+    /// final chunk arrives.
     finish_reason: Option<FinishReason>,
 }
 
+/// Buffers incremental fields for a single tool call during streaming.
+///
+/// The SSE protocol fragments tool calls across multiple chunks —
+/// `id` and `name` typically arrive in one chunk, while `arguments`
+/// stream in as incremental JSON fragments over subsequent chunks.
 struct ToolCallAccumulator {
     id: String,
     name: String,
@@ -743,6 +930,25 @@ impl StreamAccumulator {
         }
     }
 
+    /// Ingest one SSE chunk, appending its deltas to the internal buffers.
+    ///
+    /// Called once per chunk in the inner streaming loop.  For each
+    /// [`choice`](StreamChunk::choices) in the chunk:
+    ///
+    /// - **Text content** and **reasoning** are appended verbatim to their
+    ///   respective `String` buffers.  These are simple concatenations —
+    ///   the provider sends them in display order.
+    ///
+    /// - **Tool calls** are merged by `index`.  A [`ToolCallAccumulator`] is
+    ///   created on first encounter; subsequent chunks append `function.arguments`
+    ///   fragments and overwrite `id`/`function.name` if the incoming chunk
+    ///   carries non-empty values for those fields.
+    ///
+    /// - **`finish_reason`** is captured from the final chunk (it's `null` on
+    ///   all intermediate chunks).  Only the last non-null value is retained.
+    ///
+    /// This method is deliberately infallible — SSE parse errors are handled
+    /// upstream in [`stream_with_retry`], and this is pure string accumulation.
     fn ingest(&mut self, chunk: &StreamChunk) {
         for choice in &chunk.choices {
             if let Some(ref c) = choice.delta.content {
@@ -761,23 +967,44 @@ impl StreamAccumulator {
                                 name: String::new(),
                                 arguments: String::new(),
                             });
+                    // id and name are typically set in the first chunk for a
+                    // given index; subsequent chunks carry only argument fragments.
+                    // Non-empty checks prevent clobbering with empty strings.
                     if !tc.id.is_empty() {
                         entry.id = tc.id.clone();
                     }
                     if !tc.function.name.is_empty() {
                         entry.name = tc.function.name.clone();
                     }
+                    // Arguments are always appended — they arrive as JSON
+                    // fragments spread across multiple chunks.
                     entry.arguments.push_str(&tc.function.arguments);
                 }
             }
-            // Capture finish_reason from the terminal chunk (null on all
-            // intermediate chunks, set on the final chunk).
+            // finish_reason is `null` on every intermediate chunk.  Only the
+            // terminal chunk carries a value like `"stop"`, `"tool_calls"`,
+            // or `"length"`.
             if let Some(ref fr) = choice.finish_reason {
                 self.finish_reason = Some(fr.clone());
             }
         }
     }
 
+    /// Materialize all accumulated deltas into a single assistant [`Message`].
+    ///
+    /// Consumes `self`.  Returns the complete message plus the `finish_reason`
+    /// from the terminal chunk (if any).
+    ///
+    /// # Tool-call materialization
+    ///
+    /// The `BTreeMap<u32, ToolCallAccumulator>` is drained in index order,
+    /// producing a `Vec<ToolCall>` where each entry has:
+    /// - `index: 0` (set after draining — the field is not meaningful on
+    ///   constructed messages, only for the provider protocol)
+    /// - `id`, `function.name`, `function.arguments` — the fully accumulated values
+    ///
+    /// An empty tool-calls list is normalized to `None` (the provider
+    /// distinguishes "no tool calls" from "empty tool-calls list").
     fn into_assistant_message(self) -> (Message, Option<FinishReason>) {
         let tool_calls: Vec<ToolCall> = self
             .tool_calls
@@ -812,6 +1039,30 @@ impl StreamAccumulator {
 
 // ── Event emission ────────────────────────────────────────────────────────────
 
+/// Push per-chunk events to the TUI channel and update the accumulator.
+///
+/// This is the glue between the streaming pipeline and the user interface.
+/// For each choice in the chunk:
+///
+/// - **`content` delta** → emits [`AgentEvent::Token`] so the TUI can render
+///   text character-by-character as the model generates it.
+/// - **`reasoning_content` delta** → emits [`AgentEvent::ReasoningToken`] for
+///   chain-of-thought display (typically rendered in a collapsible section or
+///   dimmed style in the TUI).
+///
+/// After emitting events, the chunk is passed to [`StreamAccumulator::ingest`]
+/// so the full message can be materialized later.
+///
+/// # Why two paths?
+///
+/// The TUI needs **immediate** text for real-time rendering, but the agent
+/// loop needs the **complete** message for tool-call extraction and memory
+/// storage.  Events are fire-and-forget (the `let _ =` drops send errors
+/// when the TUI has gone away), while accumulation is infallible.
+///
+/// When `tx` is `None` (library mode — no TUI attached), this function is
+/// not called at all; the inner loop calls `acc.ingest()` directly to skip
+/// the event-send overhead.
 fn emit_chunk_events(
     tx: &mpsc::UnboundedSender<AgentEvent>,
     chunk: &StreamChunk,
