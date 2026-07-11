@@ -39,7 +39,7 @@ use crate::sandbox::shell_filter::ShellFilter;
 /// from flooding the conversation context.
 const MAX_OUTPUT_BYTES: usize = 100_000;
 
-/// Shell 工具的参数。
+/// Arguments for shell command execution.
 #[derive(JsonSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ShellArgs {

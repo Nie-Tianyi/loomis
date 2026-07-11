@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! # Provider — LLM abstraction layer
 //!
 //! This crate defines the [`LLMClient`] trait and all shared types needed

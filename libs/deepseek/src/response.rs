@@ -1,3 +1,6 @@
+//! DeepSeek-specific response types — mirrors the provider crate's types
+//! with serde derives needed for the DeepSeek API wire format.
+
 use serde::Deserialize;
 
 use provider::{Choice, ChoiceMessage, CompletionResponse, FinishReason, ToolCall, Usage};

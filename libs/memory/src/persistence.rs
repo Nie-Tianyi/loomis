@@ -47,7 +47,7 @@ pub fn save_conversation(name: &str, workspace_root: &Path, memory: &Memory) -> 
 
     let cf = ConversationFile {
         version: CURRENT_VERSION,
-        saved_at: iso_now(),
+        saved_at: iso8601_now(),
         messages: memory.to_context_vec(),
     };
 
@@ -136,8 +136,11 @@ pub fn default_thread_name(workspace_root: &Path) -> String {
     read_current_thread(workspace_root).unwrap_or_else(|| DEFAULT_THREAD.to_string())
 }
 
+/// Maximum length of the first-message snippet used for thread name generation.
+const MAX_THREAD_NAME_CHARS: usize = 60;
+
 pub fn generate_thread_name(first_message: &str) -> String {
-    let end = first_message.floor_char_boundary(60.min(first_message.len()));
+    let end = first_message.floor_char_boundary(MAX_THREAD_NAME_CHARS.min(first_message.len()));
     let snippet = &first_message[..end];
 
     let mut slug = String::with_capacity(snippet.len());
@@ -167,7 +170,7 @@ pub fn generate_thread_name(first_message: &str) -> String {
 
     let trimmed = collapsed.trim_matches('-');
     if trimmed.is_empty() {
-        format!("conversation-{}", iso_now().replace([':', 'T'], "-"))
+        format!("conversation-{}", iso8601_now().replace([':', 'T'], "-"))
     } else {
         trimmed.to_string()
     }
@@ -175,7 +178,10 @@ pub fn generate_thread_name(first_message: &str) -> String {
 
 // ── Internal Helpers ───────────────────────────────────────────────────────────
 
-fn iso_now() -> String {
+/// Returns the current UTC time as an ISO-8601 formatted string (`YYYY-MM-DDTHH:MM:SSZ`).
+///
+/// Hand-rolled to avoid a `chrono` dependency. Correct for dates from 1970 to 2100.
+pub fn iso8601_now() -> String {
     let d = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();

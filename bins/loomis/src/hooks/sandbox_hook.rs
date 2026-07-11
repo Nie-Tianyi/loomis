@@ -74,7 +74,7 @@ impl SandboxHook {
         _tool_call: &ToolCall,
         command: &str,
     ) -> Result<(), AgentError> {
-        let request_id = uuid_v4();
+        let request_id = next_request_id();
 
         // Notify the TUI to render an interactive intervention prompt.
         if let Some(tx) = self.agent_tx.get() {
@@ -87,13 +87,18 @@ impl SandboxHook {
         }
 
         // Block until the TUI responds.
-        let response = self.intervene_rx.lock().unwrap().recv().unwrap_or({
-            // Channel closed — treat as deny.
-            InterveneResponse {
-                chosen: Some(1), // "Deny"
-                custom_text: None,
-            }
-        });
+        let response = self
+            .intervene_rx
+            .lock()
+            .expect("lock poisoned")
+            .recv()
+            .unwrap_or({
+                // Channel closed — treat as deny.
+                InterveneResponse {
+                    chosen: Some(1), // "Deny"
+                    custom_text: None,
+                }
+            });
 
         match response.chosen {
             Some(0) => Ok(()), // "Approve"
@@ -150,7 +155,7 @@ impl AgentHook for SandboxHook {
             CommandVerdict::Blocked { reason } => {
                 // Log the block and reject immediately — no prompt.
                 self.audit_logger.log(AuditEntry {
-                    timestamp: chrono_now(),
+                    timestamp: memory::iso8601_now(),
                     session_id: session_id.to_string(),
                     tool: "shell".into(),
                     command: command.clone(),
@@ -166,7 +171,7 @@ impl AgentHook for SandboxHook {
             CommandVerdict::AutoApproved => {
                 // Log and allow — no prompt.
                 self.audit_logger.log(AuditEntry {
-                    timestamp: chrono_now(),
+                    timestamp: memory::iso8601_now(),
                     session_id: session_id.to_string(),
                     tool: "shell".into(),
                     command: command.clone(),
@@ -181,7 +186,7 @@ impl AgentHook for SandboxHook {
                 match self.request_user_approval(tool_call, &command) {
                     Ok(()) => {
                         self.audit_logger.log(AuditEntry {
-                            timestamp: chrono_now(),
+                            timestamp: memory::iso8601_now(),
                             session_id: session_id.to_string(),
                             tool: "shell".into(),
                             command,
@@ -192,7 +197,7 @@ impl AgentHook for SandboxHook {
                     }
                     Err(e) => {
                         self.audit_logger.log(AuditEntry {
-                            timestamp: chrono_now(),
+                            timestamp: memory::iso8601_now(),
                             session_id: session_id.to_string(),
                             tool: "shell".into(),
                             command,
@@ -214,7 +219,7 @@ impl AgentHook for SandboxHook {
         // (Shell operations are already logged inline in before_tool_call.)
         if tool_call.function.name != "shell" {
             self.audit_logger.log(AuditEntry {
-                timestamp: chrono_now(),
+                timestamp: memory::iso8601_now(),
                 session_id: session_id.to_string(),
                 tool: tool_call.function.name.clone(),
                 command: tool_call.function.arguments.clone(),
@@ -236,7 +241,7 @@ impl AgentHook for SandboxHook {
             RunOutcome::Cancelled => "cancelled",
         };
         self.audit_logger.log(AuditEntry {
-            timestamp: chrono_now(),
+            timestamp: memory::iso8601_now(),
             session_id: session_id.to_string(),
             tool: "__run_finish__".into(),
             command: String::new(),
@@ -250,7 +255,7 @@ impl AgentHook for SandboxHook {
         self.resource_tracker
             .record(session_id, &tool_call.function.name);
         self.audit_logger.log(AuditEntry {
-            timestamp: chrono_now(),
+            timestamp: memory::iso8601_now(),
             session_id: session_id.to_string(),
             tool: tool_call.function.name.clone(),
             command: tool_call.function.arguments.clone(),
@@ -265,73 +270,16 @@ impl AgentHook for SandboxHook {
     }
 }
 
-/// Returns an ISO-8601 timestamp string for the current UTC time.
-fn chrono_now() -> String {
-    // Avoid adding a chrono dependency — use std only.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    // Manual ISO-8601 formatting: YYYY-MM-DDTHH:MM:SSZ
-    let days_since_epoch = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-
-    // Compute year/month/day from days since Unix epoch.
-    // This is correct for all dates from 1970 to 2100.
-    let mut year = 1970i64;
-    let mut remaining = days_since_epoch as i64;
-    loop {
-        let days_in_year = if is_leap(year) { 366 } else { 365 };
-        if remaining < days_in_year {
-            break;
-        }
-        remaining -= days_in_year;
-        year += 1;
-    }
-    let month_lengths = if is_leap(year) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-    let mut month = 1usize;
-    for &ml in &month_lengths {
-        if remaining < ml {
-            break;
-        }
-        remaining -= ml;
-        month += 1;
-    }
-    let day = remaining + 1;
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hours, minutes, seconds
-    )
-}
-
-fn is_leap(y: i64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
-}
-
-/// Generate a simple UUID v4-like string for request identification.
-fn uuid_v4() -> String {
-    use std::time::SystemTime;
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    // Simple pseudo-UUID — sufficient for unique request ids within a session.
-    format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        (now >> 64) as u32,
-        (now >> 48) as u16,
-        (now >> 36) as u16 & 0x0fff,
-        (0x8000 | (now as u16 & 0x3fff)),
-        now as u64 & 0xffffffffffff,
-    )
+/// Generate a unique request identifier for intervention prompts.
+///
+/// Uses an atomic counter for uniqueness within a session — not a UUID v4
+/// (which would require randomness per RFC 4122), but sufficient for
+/// correlating intervention requests and responses.
+fn next_request_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("req-{id:016x}")
 }
 
 #[cfg(test)]
@@ -339,8 +287,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_chrono_now_produces_iso8601() {
-        let ts = chrono_now();
+    fn test_iso8601_now_produces_correct_format() {
+        let ts = memory::iso8601_now();
         // Should look like "2026-07-09T12:34:56Z"
         assert!(ts.ends_with('Z'), "got {ts}");
         assert_eq!(ts.len(), 20, "got {ts}");

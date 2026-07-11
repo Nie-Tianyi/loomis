@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! # Hooks — Pluggable lifecycle behaviours for Agent Oxide
 //!
 //! This crate provides ready-to-use [`AgentHook`](engine::AgentHook)

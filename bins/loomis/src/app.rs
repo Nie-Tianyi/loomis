@@ -208,7 +208,7 @@ pub fn build_coding_agent(
 
     // ── Seed system prompt ────────────────────────────────────
     {
-        let mut mem = memory.write().unwrap();
+        let mut mem = memory.write().expect("memory lock poisoned");
         mem.push(Message::new(Role::System, SYSTEM_PROMPT));
     }
 

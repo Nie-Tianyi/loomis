@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! Proc macros for the [`tools`] crate.
 //!
 //! Provides the [`tool`] attribute macro that generates `Tool` trait

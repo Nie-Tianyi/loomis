@@ -33,7 +33,7 @@ impl ResourceTracker {
 
     /// Check quotas before an operation. Returns `Ok(())` if within limits.
     pub fn check(&self, session_id: &str, tool_name: &str) -> Result<(), String> {
-        let mut sessions = self.sessions.write().unwrap();
+        let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         let stats = sessions.entry(session_id.to_string()).or_default();
 
         if stats.total_operations.load(Ordering::Relaxed) >= self.max_total_operations {
@@ -59,13 +59,13 @@ impl ResourceTracker {
 
     /// Record that an operation completed (must be paired with `check`).
     pub fn record(&self, session_id: &str, tool_name: &str) {
-        if let Ok(mut sessions) = self.sessions.write()
-            && let Some(stats) = sessions.get_mut(session_id)
-        {
-            stats.total_operations.fetch_add(1, Ordering::Relaxed);
-            if tool_name == "shell" {
-                stats.active_shells.fetch_sub(1, Ordering::Relaxed);
-            }
+        let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+        // Use entry().or_default() so missing sessions are created rather
+        // than silently ignored — ensures counters always converge.
+        let stats = sessions.entry(session_id.to_string()).or_default();
+        stats.total_operations.fetch_add(1, Ordering::Relaxed);
+        if tool_name == "shell" {
+            stats.active_shells.fetch_sub(1, Ordering::Relaxed);
         }
     }
 }

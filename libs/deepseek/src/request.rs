@@ -1,3 +1,6 @@
+//! DeepSeek-specific request types — wraps [`CompletionRequest`](provider::CompletionRequest)
+//! with provider-specific fields (thinking, reasoning_effort, etc.).
+
 use serde::Serialize;
 
 use provider::{CompletionRequest, Message, ToolChoice, ToolDef};

@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! # Engine — Agent ReAct Loop
 //!
 //! Core agent loop with [`AgentHook`] lifecycle and streaming [`AgentEvent`]s.

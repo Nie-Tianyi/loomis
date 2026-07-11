@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! # DeepSeek — API client
 //!
 //! Concrete implementation of [`provider::LLMClient`] for the DeepSeek API.

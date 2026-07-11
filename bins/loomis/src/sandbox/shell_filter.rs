@@ -62,11 +62,13 @@ impl ShellFilter {
     }
 
     /// Extract the first word (the binary name) from a command string.
-    /// Handles quoted binaries like `"my tool" arg`.
+    /// Handles quoted binaries like `"my tool" arg` and `'my tool' arg`.
     fn extract_binary(command: &str) -> &str {
         let trimmed = command.trim();
         if let Some(rest) = trimmed.strip_prefix('"') {
             rest.split('"').next().unwrap_or(trimmed)
+        } else if let Some(rest) = trimmed.strip_prefix('\'') {
+            rest.split('\'').next().unwrap_or(trimmed)
         } else {
             trimmed.split_whitespace().next().unwrap_or(trimmed)
         }

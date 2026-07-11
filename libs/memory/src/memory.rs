@@ -25,6 +25,14 @@ pub struct MemoryBuilder {
 }
 
 impl MemoryBuilder {
+    /// Create a new empty [`MemoryBuilder`].
+    pub fn new() -> Self {
+        Self {
+            messages: Vec::new(),
+        }
+    }
+
+    /// Pre-populate the builder with existing messages.
     pub fn with_messages(mut self, messages: Vec<Message>) -> Self {
         self.messages = messages;
         self
@@ -147,11 +155,11 @@ mod tests {
     fn test_shared_memory_write_read() {
         let mem: SharedMemory = Arc::new(RwLock::new(Memory::new()));
         {
-            let mut w = mem.write().unwrap();
+            let mut w = mem.write().expect("memory lock poisoned");
             w.push(user_msg("hello"));
         }
         {
-            let r = mem.read().unwrap();
+            let r = mem.read().expect("memory lock poisoned");
             assert_eq!(r.message_count(), 1);
         }
     }

@@ -9,8 +9,10 @@ use crate::agent::{AgentError, RunOutcome};
 /// the events you care about. All methods are synchronous.
 ///
 /// For async work (e.g. LLM summarisation / macro-compaction), use
-/// a dedicated component — the agent loop provides a separate
-/// `before_llm_async` hook point for that purpose.
+/// [`tokio::runtime::Handle::block_on`] inside a sync hook method.
+/// The agent loop runs in a dedicated tokio task separate from the
+/// TUI thread, so blocking here does not affect the UI.
+/// See [`MacroCompactHook`](hooks::MacroCompactHook) for an example.
 ///
 /// ## Naming convention
 ///
@@ -33,19 +35,18 @@ use crate::agent::{AgentError, RunOutcome};
 /// | [`before_tool_call`](Self::before_tool_call) | Before tool execution | Tool |
 /// | [`after_tool_call`](Self::after_tool_call) | After tool execution (success) | Tool |
 /// | [`on_tool_failed`](Self::on_tool_failed) | When tool execution fails | Tool |
-#[allow(unused_variables)]
 pub trait AgentHook: Send + Sync {
     // ── Run lifecycle ─────────────────────────────────────────────────────────
 
     /// Called when a new user input begins a full task run.
-    fn on_run_start(&self, session_id: &str, user_input: &str) {}
+    fn on_run_start(&self, _session_id: &str, _user_input: &str) {}
 
     /// Called when the task terminates — success, error, or cancellation.
     ///
     /// The [`RunOutcome`] discriminates the three cases.  This is the single
     /// place to hook run-level teardown (audit trail closure, resource summary,
     /// persistence triggers, cleanup).
-    fn on_run_finish(&self, session_id: &str, outcome: &RunOutcome) {}
+    fn on_run_finish(&self, _session_id: &str, _outcome: &RunOutcome) {}
 
     // ── Step lifecycle ───────────────────────────────────────────────────────
 
@@ -54,7 +55,7 @@ pub trait AgentHook: Send + Sync {
     ///
     /// `step` is 1-indexed; `max_steps` is the configured limit.  Use this to
     /// track progress or emit early warnings when approaching the limit.
-    fn on_step_start(&self, session_id: &str, step: usize, max_steps: usize) {}
+    fn on_step_start(&self, _session_id: &str, _step: usize, _max_steps: usize) {}
 
     // ── LLM lifecycle ────────────────────────────────────────────────────────
 
@@ -62,10 +63,10 @@ pub trait AgentHook: Send + Sync {
     ///
     /// Receives shared memory so the hook can compact or transform
     /// messages in-place (e.g. tool-output clearing).
-    fn on_llm_start(&self, session_id: &str, memory: &SharedMemory) {}
+    fn on_llm_start(&self, _session_id: &str, _memory: &SharedMemory) {}
 
     /// Called after receiving a response from the LLM.
-    fn on_llm_end(&self, session_id: &str, response: &Message) {}
+    fn on_llm_end(&self, _session_id: &str, _response: &Message) {}
 
     /// Called when an LLM provider call fails.
     ///
@@ -75,10 +76,10 @@ pub trait AgentHook: Send + Sync {
     /// error).
     fn on_llm_error(
         &self,
-        session_id: &str,
-        error: &ProviderError,
-        attempt: usize,
-        will_retry: bool,
+        _session_id: &str,
+        _error: &ProviderError,
+        _attempt: usize,
+        _will_retry: bool,
     ) {
     }
 
@@ -88,13 +89,13 @@ pub trait AgentHook: Send + Sync {
     ///
     /// Return `Err(AgentError::ToolRejected)` to skip the tool and add
     /// the error message as the observation instead.
-    fn before_tool_call(&self, session_id: &str, tool_call: &ToolCall) -> Result<(), AgentError> {
+    fn before_tool_call(&self, _session_id: &str, _tool_call: &ToolCall) -> Result<(), AgentError> {
         Ok(())
     }
 
     /// Called after a tool has been executed successfully, with its
     /// observation output.
-    fn after_tool_call(&self, session_id: &str, tool_call: &ToolCall, observation: &str) {}
+    fn after_tool_call(&self, _session_id: &str, _tool_call: &ToolCall, _observation: &str) {}
 
     /// Called when a tool execution fails — the tool returned an error
     /// or was not found in the registry.
@@ -102,5 +103,5 @@ pub trait AgentHook: Send + Sync {
     /// Pairs with [`after_tool_call`](Self::after_tool_call) which fires
     /// only on success.  Use this to distinguish failures in audit logs
     /// and track per-tool error rates.
-    fn on_tool_failed(&self, session_id: &str, tool_call: &ToolCall, error: &str) {}
+    fn on_tool_failed(&self, _session_id: &str, _tool_call: &ToolCall, _error: &str) {}
 }

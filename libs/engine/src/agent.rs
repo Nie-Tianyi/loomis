@@ -293,6 +293,236 @@ impl<C: LLMClient> Agent<C> {
     }
 }
 
+// ── Shared Loop Helpers ────────────────────────────────────────────────────────
+//
+// Extracted from run_streaming_loop and run_non_streaming_loop to eliminate
+// ~500 lines of duplication. These methods are called by both loops.
+
+impl<C: LLMClient> Agent<C> {
+    /// Begin a run: notify hooks, emit RunStarted, push user message.
+    fn begin_run(&self, user_input: &str, tx: &Option<mpsc::UnboundedSender<AgentEvent>>) {
+        for hook in &self.ctx.hooks {
+            hook.on_run_start("default", user_input);
+        }
+        if let Some(tx) = tx {
+            let _ = tx.send(AgentEvent::RunStarted {
+                session_id: "default".into(),
+                user_input: user_input.to_string(),
+            });
+        }
+        self.ctx
+            .memory
+            .write()
+            .expect("memory lock poisoned")
+            .push(Message::new(Role::User, user_input));
+    }
+
+    /// Run step-level hooks (on_step_start + on_llm_start) and return the
+    /// context vector for the LLM call.
+    fn prepare_llm_call(&self, steps: usize) -> Vec<Message> {
+        for hook in &self.ctx.hooks {
+            hook.on_step_start("default", steps, self.ctx.max_steps);
+        }
+        for hook in &self.ctx.hooks {
+            hook.on_llm_start("default", &self.ctx.memory);
+        }
+        self.ctx
+            .memory
+            .read()
+            .expect("memory lock poisoned")
+            .to_context_vec()
+    }
+
+    /// Emit failure events, notify hooks, and return the error.
+    fn fail_run(
+        &self,
+        err: AgentError,
+        tx: &Option<mpsc::UnboundedSender<AgentEvent>>,
+    ) -> Result<String, AgentError> {
+        if let Some(tx) = tx {
+            let _ = tx.send(AgentEvent::RunFailed {
+                error: err.to_string(),
+            });
+        }
+        for hook in &self.ctx.hooks {
+            hook.on_run_finish(
+                "default",
+                &RunOutcome::Error {
+                    error: err.to_string(),
+                },
+            );
+        }
+        if let Some(tx) = tx {
+            let _ = tx.send(AgentEvent::Done);
+        }
+        Err(err)
+    }
+
+    /// Emit success events, notify hooks, and return the answer.
+    fn finish_run(
+        &self,
+        answer: String,
+        tx: &Option<mpsc::UnboundedSender<AgentEvent>>,
+    ) -> Result<String, AgentError> {
+        if let Some(tx) = tx {
+            let _ = tx.send(AgentEvent::RunCompleted {
+                answer: answer.clone(),
+            });
+        }
+        for hook in &self.ctx.hooks {
+            hook.on_run_finish(
+                "default",
+                &RunOutcome::Success {
+                    answer: answer.clone(),
+                },
+            );
+        }
+        if let Some(tx) = tx {
+            let _ = tx.send(AgentEvent::Done);
+        }
+        Ok(answer)
+    }
+
+    /// Execute all tool calls from an assistant message.
+    ///
+    /// Handles hook-based rejection (before_tool_call), progress streaming,
+    /// success/failure/not-found, memory updates, and event emission.
+    /// This is the core shared tool-execution path used by both loops.
+    async fn execute_tool_calls(
+        &self,
+        assistant_msg: &Message,
+        tx: &Option<mpsc::UnboundedSender<AgentEvent>>,
+    ) {
+        // Emit ToolCall events before execution.
+        if let Some(tx) = tx {
+            if let Some(ref tool_calls) = assistant_msg.tool_calls {
+                for tc in tool_calls {
+                    let _ = tx.send(AgentEvent::ToolCall {
+                        id: tc.id.clone(),
+                        name: tc.function.name.clone(),
+                        arguments: tc.function.arguments.clone(),
+                        origin: CallOrigin::Llm,
+                    });
+                }
+            }
+        }
+
+        {
+            let mut mem = self.ctx.memory.write().expect("memory lock poisoned");
+            mem.push(assistant_msg.clone());
+        }
+
+        let tool_calls = match assistant_msg.tool_calls.as_ref() {
+            Some(tcs) => tcs,
+            None => return,
+        };
+
+        for tc in tool_calls {
+            let mut blocked = false;
+            for hook in &self.ctx.hooks {
+                if let Err(e) = hook.before_tool_call("default", tc) {
+                    let msg = Message::tool_result(&tc.id, format!("Tool rejected: {e}"));
+                    self.ctx
+                        .memory
+                        .write()
+                        .expect("memory lock poisoned")
+                        .push(msg);
+                    if let Some(tx) = tx {
+                        let _ = tx.send(AgentEvent::ToolRejected {
+                            id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            reason: e.to_string(),
+                        });
+                    }
+                    blocked = true;
+                    break;
+                }
+            }
+
+            if blocked {
+                continue;
+            }
+
+            // Pull from progress stream.
+            let tool_result = self
+                .ctx
+                .tools
+                .execute_stream(&tc.function.name, &tc.function.arguments);
+
+            match tool_result {
+                Some(Ok(mut stream)) => {
+                    let mut final_output = String::new();
+                    while let Some(progress) = stream.next().await {
+                        match progress {
+                            Progress::InProgress(msg) => {
+                                if let Some(tx) = tx {
+                                    let _ = tx.send(AgentEvent::ToolProgress {
+                                        id: tc.id.clone(),
+                                        name: tc.function.name.clone(),
+                                        message: msg,
+                                    });
+                                }
+                            }
+                            Progress::Done(output) => final_output = output,
+                        }
+                    }
+                    for hook in &self.ctx.hooks {
+                        hook.after_tool_call("default", tc, &final_output);
+                    }
+                    self.ctx
+                        .memory
+                        .write()
+                        .expect("memory lock poisoned")
+                        .push(Message::tool_result(&tc.id, &final_output));
+                    if let Some(tx) = tx {
+                        let _ = tx.send(AgentEvent::ToolSuccessful {
+                            id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            output: final_output,
+                        });
+                    }
+                }
+                Some(Err(e)) => {
+                    let err_msg = e.to_string();
+                    for hook in &self.ctx.hooks {
+                        hook.on_tool_failed("default", tc, &err_msg);
+                    }
+                    self.ctx
+                        .memory
+                        .write()
+                        .expect("memory lock poisoned")
+                        .push(Message::tool_result(&tc.id, &err_msg));
+                    if let Some(tx) = tx {
+                        let _ = tx.send(AgentEvent::ToolFailure {
+                            id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            error: err_msg,
+                        });
+                    }
+                }
+                None => {
+                    let err_msg = format!("Tool not found: {}", tc.function.name);
+                    for hook in &self.ctx.hooks {
+                        hook.on_tool_failed("default", tc, &err_msg);
+                    }
+                    self.ctx
+                        .memory
+                        .write()
+                        .expect("memory lock poisoned")
+                        .push(Message::tool_result(&tc.id, &err_msg));
+                    if let Some(tx) = tx {
+                        let _ = tx.send(AgentEvent::ToolFailure {
+                            id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            error: err_msg,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Streaming Loop ────────────────────────────────────────────────────────────
 
 impl<C: LLMClient> Agent<C> {
@@ -301,64 +531,16 @@ impl<C: LLMClient> Agent<C> {
         user_input: &str,
         tx: Option<mpsc::UnboundedSender<AgentEvent>>,
     ) -> Result<String, AgentError> {
-        for hook in &self.ctx.hooks {
-            hook.on_run_start("default", user_input);
-        }
-
-        // Notify the application that a run has started.
-        if let Some(ref tx) = tx {
-            let _ = tx.send(AgentEvent::RunStarted {
-                session_id: "default".into(),
-                user_input: user_input.to_string(),
-            });
-        }
-
-        // Push the user message into conversation memory — this is what
-        // makes `user_input` the actual input to the agent, not just a label.
-        {
-            let mut mem = self.ctx.memory.write().unwrap();
-            mem.push(Message::new(Role::User, user_input));
-        }
+        self.begin_run(user_input, &tx);
 
         let mut steps = 0;
         loop {
             if steps >= self.ctx.max_steps {
-                let err = AgentError::MaxStepsReached(self.ctx.max_steps);
-                if let Some(ref tx) = tx {
-                    let _ = tx.send(AgentEvent::RunFailed {
-                        error: err.to_string(),
-                    });
-                }
-                for hook in &self.ctx.hooks {
-                    hook.on_run_finish(
-                        "default",
-                        &RunOutcome::Error {
-                            error: err.to_string(),
-                        },
-                    );
-                }
-                if let Some(ref tx) = tx {
-                    let _ = tx.send(AgentEvent::Done);
-                }
-                return Err(err);
+                return self.fail_run(AgentError::MaxStepsReached(self.ctx.max_steps), &tx);
             }
             steps += 1;
 
-            // Step-level hooks — called before on_llm_start each iteration.
-            for hook in &self.ctx.hooks {
-                hook.on_step_start("default", steps, self.ctx.max_steps);
-            }
-
-            // Run pre-LLM hooks (compaction, etc.).
-            for hook in &self.ctx.hooks {
-                hook.on_llm_start("default", &self.ctx.memory);
-            }
-
-            let messages = {
-                let mem = self.ctx.memory.read().unwrap();
-                mem.to_context_vec()
-            };
-
+            let messages = self.prepare_llm_call(steps);
             let tools = self.ctx.tools.to_tool_defs();
             let request = CompletionRequest::new(&self.ctx.model, messages)
                 .with_stream(true)
@@ -373,54 +555,15 @@ impl<C: LLMClient> Agent<C> {
             .await
             {
                 Ok(s) => s,
-                Err(e) => {
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::RunFailed {
-                            error: e.to_string(),
-                        });
-                    }
-                    for hook in &self.ctx.hooks {
-                        hook.on_run_finish(
-                            "default",
-                            &RunOutcome::Error {
-                                error: e.to_string(),
-                            },
-                        );
-                    }
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::Done);
-                    }
-                    return Err(e);
-                }
+                Err(e) => return self.fail_run(e, &tx),
             };
 
             let mut acc = StreamAccumulator::new();
-
             while let Some(chunk_result) = stream.next().await {
                 let chunk = match chunk_result {
                     Ok(c) => c,
-                    Err(e) => {
-                        let agent_err = AgentError::Provider(e);
-                        if let Some(ref tx) = tx {
-                            let _ = tx.send(AgentEvent::RunFailed {
-                                error: agent_err.to_string(),
-                            });
-                        }
-                        for hook in &self.ctx.hooks {
-                            hook.on_run_finish(
-                                "default",
-                                &RunOutcome::Error {
-                                    error: agent_err.to_string(),
-                                },
-                            );
-                        }
-                        if let Some(ref tx) = tx {
-                            let _ = tx.send(AgentEvent::Done);
-                        }
-                        return Err(agent_err);
-                    }
+                    Err(e) => return self.fail_run(AgentError::Provider(e), &tx),
                 };
-
                 if let Some(ref tx) = tx {
                     emit_chunk_events(tx, &chunk, &mut acc);
                 } else {
@@ -429,7 +572,6 @@ impl<C: LLMClient> Agent<C> {
             }
 
             let (assistant_msg, finish_reason) = acc.into_assistant_message();
-
             for hook in &self.ctx.hooks {
                 hook.on_llm_end("default", &assistant_msg);
             }
@@ -441,160 +583,20 @@ impl<C: LLMClient> Agent<C> {
             let is_truncated = matches!(finish_reason, Some(FinishReason::Length));
 
             if has_tool_calls {
-                // ── Execute tools ──────────────────────────────────────────
-
-                // Emit complete tool-call events to the UI before execution begins.
-                if let Some(ref tx) = tx {
-                    let tool_calls = assistant_msg.tool_calls.as_ref().unwrap();
-                    for tc in tool_calls {
-                        let _ = tx.send(AgentEvent::ToolCall {
-                            id: tc.id.clone(),
-                            name: tc.function.name.clone(),
-                            arguments: tc.function.arguments.clone(),
-                            origin: CallOrigin::Llm,
-                        });
-                    }
-                }
-
-                {
-                    let mut mem = self.ctx.memory.write().unwrap();
-                    mem.push(assistant_msg.clone());
-                }
-
-                let tool_calls = assistant_msg.tool_calls.as_ref().unwrap();
-                for tc in tool_calls {
-                    let mut blocked = false;
-                    for hook in &self.ctx.hooks {
-                        if let Err(e) = hook.before_tool_call("default", tc) {
-                            let msg = Message::tool_result(&tc.id, format!("Tool rejected: {e}"));
-                            {
-                                let mut mem = self.ctx.memory.write().unwrap();
-                                mem.push(msg);
-                            }
-                            if let Some(ref tx) = tx {
-                                let _ = tx.send(AgentEvent::ToolRejected {
-                                    id: tc.id.clone(),
-                                    name: tc.function.name.clone(),
-                                    reason: e.to_string(),
-                                });
-                            }
-                            blocked = true;
-                            break;
-                        }
-                    }
-
-                    if blocked {
-                        continue;
-                    }
-
-                    // ── Pull from progress stream ────────────────────
-                    let tool_result = self
-                        .ctx
-                        .tools
-                        .execute_stream(&tc.function.name, &tc.function.arguments);
-
-                    let _observation = match tool_result {
-                        Some(Ok(mut stream)) => {
-                            let mut final_output = String::new();
-                            while let Some(progress) = stream.next().await {
-                                match progress {
-                                    Progress::InProgress(msg) => {
-                                        if let Some(ref tx) = tx {
-                                            let _ = tx.send(AgentEvent::ToolProgress {
-                                                id: tc.id.clone(),
-                                                name: tc.function.name.clone(),
-                                                message: msg,
-                                            });
-                                        }
-                                    }
-                                    Progress::Done(output) => final_output = output,
-                                }
-                            }
-                            // Success path: notify hooks, push to memory, emit ToolSuccessful.
-                            for hook in &self.ctx.hooks {
-                                hook.after_tool_call("default", tc, &final_output);
-                            }
-                            {
-                                let mut mem = self.ctx.memory.write().unwrap();
-                                mem.push(Message::tool_result(&tc.id, &final_output));
-                            }
-                            if let Some(ref tx) = tx {
-                                let _ = tx.send(AgentEvent::ToolSuccessful {
-                                    id: tc.id.clone(),
-                                    name: tc.function.name.clone(),
-                                    output: final_output.clone(),
-                                });
-                            }
-                            final_output
-                        }
-                        Some(Err(e)) => {
-                            let err_msg = e.to_string();
-                            for hook in &self.ctx.hooks {
-                                hook.on_tool_failed("default", tc, &err_msg);
-                            }
-                            {
-                                let mut mem = self.ctx.memory.write().unwrap();
-                                mem.push(Message::tool_result(&tc.id, &err_msg));
-                            }
-                            if let Some(ref tx) = tx {
-                                let _ = tx.send(AgentEvent::ToolFailure {
-                                    id: tc.id.clone(),
-                                    name: tc.function.name.clone(),
-                                    error: err_msg.clone(),
-                                });
-                            }
-                            err_msg
-                        }
-                        None => {
-                            let err_msg = format!("Tool not found: {}", tc.function.name);
-                            for hook in &self.ctx.hooks {
-                                hook.on_tool_failed("default", tc, &err_msg);
-                            }
-                            {
-                                let mut mem = self.ctx.memory.write().unwrap();
-                                mem.push(Message::tool_result(&tc.id, &err_msg));
-                            }
-                            if let Some(ref tx) = tx {
-                                let _ = tx.send(AgentEvent::ToolFailure {
-                                    id: tc.id.clone(),
-                                    name: tc.function.name.clone(),
-                                    error: err_msg.clone(),
-                                });
-                            }
-                            err_msg
-                        }
-                    };
-                }
+                self.execute_tool_calls(&assistant_msg, &tx).await;
             } else if is_truncated {
-                // ── Auto-continue: push partial output and loop ───────────
-                {
-                    let mut mem = self.ctx.memory.write().unwrap();
-                    mem.push(assistant_msg);
-                }
-                // No events emitted — the run is not finished.
+                self.ctx
+                    .memory
+                    .write()
+                    .expect("memory lock poisoned")
+                    .push(assistant_msg);
             } else {
-                // ── Normal exit ──────────────────────────────────────────
-                {
-                    let mut mem = self.ctx.memory.write().unwrap();
-                    mem.push(assistant_msg.clone());
-                }
-                if let Some(ref tx) = tx {
-                    let _ = tx.send(AgentEvent::RunCompleted {
-                        answer: assistant_msg.content.clone(),
-                    });
-                }
-                for hook in &self.ctx.hooks {
-                    hook.on_run_finish(
-                        "default",
-                        &RunOutcome::Success {
-                            answer: assistant_msg.content.clone(),
-                        },
-                    );
-                }
-                if let Some(ref tx) = tx {
-                    let _ = tx.send(AgentEvent::Done);
-                }
-                return Ok(assistant_msg.content);
+                self.ctx
+                    .memory
+                    .write()
+                    .expect("memory lock poisoned")
+                    .push(assistant_msg.clone());
+                return self.finish_run(assistant_msg.content, &tx);
             }
         }
     }
@@ -604,64 +606,16 @@ impl<C: LLMClient> Agent<C> {
         user_input: &str,
         tx: Option<mpsc::UnboundedSender<AgentEvent>>,
     ) -> Result<String, AgentError> {
-        for hook in &self.ctx.hooks {
-            hook.on_run_start("default", user_input);
-        }
-
-        // Notify the application that a run has started.
-        if let Some(ref tx) = tx {
-            let _ = tx.send(AgentEvent::RunStarted {
-                session_id: "default".into(),
-                user_input: user_input.to_string(),
-            });
-        }
-
-        // Push the user message into conversation memory — this is what
-        // makes `user_input` the actual input to the agent, not just a label.
-        {
-            let mut mem = self.ctx.memory.write().unwrap();
-            mem.push(Message::new(Role::User, user_input));
-        }
+        self.begin_run(user_input, &tx);
 
         let mut steps = 0;
         loop {
             if steps >= self.ctx.max_steps {
-                let err = AgentError::MaxStepsReached(self.ctx.max_steps);
-                if let Some(ref tx) = tx {
-                    let _ = tx.send(AgentEvent::RunFailed {
-                        error: err.to_string(),
-                    });
-                }
-                for hook in &self.ctx.hooks {
-                    hook.on_run_finish(
-                        "default",
-                        &RunOutcome::Error {
-                            error: err.to_string(),
-                        },
-                    );
-                }
-                if let Some(ref tx) = tx {
-                    let _ = tx.send(AgentEvent::Done);
-                }
-                return Err(err);
+                return self.fail_run(AgentError::MaxStepsReached(self.ctx.max_steps), &tx);
             }
             steps += 1;
 
-            // Step-level hooks — called before on_llm_start each iteration.
-            for hook in &self.ctx.hooks {
-                hook.on_step_start("default", steps, self.ctx.max_steps);
-            }
-
-            // Run pre-LLM hooks (compaction, etc.).
-            for hook in &self.ctx.hooks {
-                hook.on_llm_start("default", &self.ctx.memory);
-            }
-
-            let messages = {
-                let mem = self.ctx.memory.read().unwrap();
-                mem.to_context_vec()
-            };
-
+            let messages = self.prepare_llm_call(steps);
             let tools = self.ctx.tools.to_tool_defs();
             let request = CompletionRequest::new(&self.ctx.model, messages)
                 .with_stream(false)
@@ -676,54 +630,19 @@ impl<C: LLMClient> Agent<C> {
             .await
             {
                 Ok(r) => r,
-                Err(e) => {
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::RunFailed {
-                            error: e.to_string(),
-                        });
-                    }
-                    for hook in &self.ctx.hooks {
-                        hook.on_run_finish(
-                            "default",
-                            &RunOutcome::Error {
-                                error: e.to_string(),
-                            },
-                        );
-                    }
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::Done);
-                    }
-                    return Err(e);
-                }
+                Err(e) => return self.fail_run(e, &tx),
             };
 
             let choice = match response.choices.into_iter().next() {
                 Some(c) => c,
-                None => {
-                    let err = AgentError::NoChoices;
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::RunFailed {
-                            error: err.to_string(),
-                        });
-                    }
-                    for hook in &self.ctx.hooks {
-                        hook.on_run_finish(
-                            "default",
-                            &RunOutcome::Error {
-                                error: err.to_string(),
-                            },
-                        );
-                    }
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::Done);
-                    }
-                    return Err(err);
-                }
+                None => return self.fail_run(AgentError::NoChoices, &tx),
             };
+
             let content = choice.message.content.unwrap_or_default();
             let tool_calls = choice.message.tool_calls;
+            let has_tool_calls = tool_calls.as_ref().is_some_and(|tcs| !tcs.is_empty());
+            let is_truncated = matches!(&choice.finish_reason, Some(FinishReason::Length));
             let reasoning = choice.message.reasoning_content;
-            let finish_reason = &choice.finish_reason;
 
             let msg = Message {
                 role: Role::Assistant,
@@ -737,6 +656,7 @@ impl<C: LLMClient> Agent<C> {
                 hook.on_llm_end("default", &msg);
             }
 
+            // Emit tokens for TUI display (non-streaming: single bulk event).
             if let Some(ref tx) = tx {
                 if let Some(ref r) = reasoning {
                     if !r.is_empty() {
@@ -746,164 +666,26 @@ impl<C: LLMClient> Agent<C> {
                 let _ = tx.send(AgentEvent::Token(content.clone()));
             }
 
-            let is_truncated = matches!(finish_reason, Some(FinishReason::Length));
-
-            if let Some(tool_calls) = tool_calls {
-                if tool_calls.is_empty() {
-                    if is_truncated {
-                        // Auto-continue: push partial output and loop.
-                        let mut mem = self.ctx.memory.write().unwrap();
-                        mem.push(msg);
-                    } else {
-                        if let Some(ref tx) = tx {
-                            let _ = tx.send(AgentEvent::RunCompleted {
-                                answer: content.clone(),
-                            });
-                        }
-                        for hook in &self.ctx.hooks {
-                            hook.on_run_finish(
-                                "default",
-                                &RunOutcome::Success {
-                                    answer: content.clone(),
-                                },
-                            );
-                        }
-                        if let Some(ref tx) = tx {
-                            let _ = tx.send(AgentEvent::Done);
-                        }
-                        {
-                            let mut mem = self.ctx.memory.write().unwrap();
-                            mem.push(msg);
-                        }
-                        return Ok(content);
-                    }
-                } else {
-                    // ── Non-empty tool calls: push msg then execute ──
-                    {
-                        let mut mem = self.ctx.memory.write().unwrap();
-                        mem.push(msg);
-                    }
-
-                    for tc in &tool_calls {
-                    let mut blocked = false;
-                    for hook in &self.ctx.hooks {
-                        if let Err(e) = hook.before_tool_call("default", tc) {
-                            let tool_msg =
-                                Message::tool_result(&tc.id, format!("Tool rejected: {e}"));
-                            {
-                                let mut mem = self.ctx.memory.write().unwrap();
-                                mem.push(tool_msg);
-                            }
-                            blocked = true;
-                            break;
-                        }
-                    }
-                    if blocked {
-                        continue;
-                    }
-
-                    // ── Pull from progress stream ────────────────────
-                    let tool_result = self
-                        .ctx
-                        .tools
-                        .execute_stream(&tc.function.name, &tc.function.arguments);
-
-                    match tool_result {
-                        Some(Ok(mut stream)) => {
-                            let mut final_output = String::new();
-                            while let Some(progress) = stream.next().await {
-                                match progress {
-                                    Progress::InProgress(msg) => {
-                                        if let Some(ref tx) = tx {
-                                            let _ = tx.send(AgentEvent::ToolProgress {
-                                                id: tc.id.clone(),
-                                                name: tc.function.name.clone(),
-                                                message: msg,
-                                            });
-                                        }
-                                    }
-                                    Progress::Done(output) => final_output = output,
-                                }
-                            }
-                            for hook in &self.ctx.hooks {
-                                hook.after_tool_call("default", tc, &final_output);
-                            }
-                            {
-                                let mut mem = self.ctx.memory.write().unwrap();
-                                mem.push(Message::tool_result(&tc.id, &final_output));
-                            }
-                        }
-                        Some(Err(e)) => {
-                            let err_msg = e.to_string();
-                            for hook in &self.ctx.hooks {
-                                hook.on_tool_failed("default", tc, &err_msg);
-                            }
-                            {
-                                let mut mem = self.ctx.memory.write().unwrap();
-                                mem.push(Message::tool_result(&tc.id, &err_msg));
-                            }
-                            if let Some(ref tx) = tx {
-                                let _ = tx.send(AgentEvent::ToolFailure {
-                                    id: tc.id.clone(),
-                                    name: tc.function.name.clone(),
-                                    error: err_msg,
-                                });
-                            }
-                        }
-                        None => {
-                            let err_msg = format!("Tool not found: {}", tc.function.name);
-                            for hook in &self.ctx.hooks {
-                                hook.on_tool_failed("default", tc, &err_msg);
-                            }
-                            {
-                                let mut mem = self.ctx.memory.write().unwrap();
-                                mem.push(Message::tool_result(&tc.id, &err_msg));
-                            }
-                            if let Some(ref tx) = tx {
-                                let _ = tx.send(AgentEvent::ToolFailure {
-                                    id: tc.id.clone(),
-                                    name: tc.function.name.clone(),
-                                    error: err_msg,
-                                });
-                            }
-                        }
-                    }
-                }
-                }
+            if has_tool_calls {
+                // Tool calls: delegate to shared executor.
+                self.execute_tool_calls(&msg, &tx).await;
+            } else if is_truncated {
+                self.ctx
+                    .memory
+                    .write()
+                    .expect("memory lock poisoned")
+                    .push(msg);
             } else {
-                if is_truncated {
-                    // Auto-continue: push partial output and loop.
-                    let mut mem = self.ctx.memory.write().unwrap();
-                    mem.push(msg);
-                } else {
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::RunCompleted {
-                            answer: content.clone(),
-                        });
-                    }
-                    for hook in &self.ctx.hooks {
-                        hook.on_run_finish(
-                            "default",
-                            &RunOutcome::Success {
-                                answer: content.clone(),
-                            },
-                        );
-                    }
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::Done);
-                    }
-                    {
-                        let mut mem = self.ctx.memory.write().unwrap();
-                        mem.push(msg);
-                    }
-                    return Ok(content);
-                }
+                self.ctx
+                    .memory
+                    .write()
+                    .expect("memory lock poisoned")
+                    .push(msg);
+                return self.finish_run(content, &tx);
             }
         }
     }
 }
-
-// ── StreamAccumulator ─────────────────────────────────────────────────────────
 
 // ── StreamAccumulator ─────────────────────────────────────────────────────────
 
@@ -1017,6 +799,11 @@ fn emit_chunk_events(
 
 // ── Retry helpers ─────────────────────────────────────────────────────────────
 
+/// Base delay in milliseconds for exponential backoff on retryable failures.
+const RETRY_BASE_MS: u64 = 500;
+/// Exponential factor applied to the retry count.
+const RETRY_EXP_FACTOR: u32 = 2;
+
 async fn generate_with_retry(
     client: &impl LLMClient,
     request: CompletionRequest,
@@ -1026,7 +813,9 @@ async fn generate_with_retry(
     let mut last_err = None;
     for attempt in 0..=max_retries {
         if attempt > 0 {
-            let backoff = Duration::from_millis(500 * 2u64.pow(attempt as u32 - 1));
+            let backoff = Duration::from_millis(
+                RETRY_BASE_MS * (RETRY_EXP_FACTOR as u64).pow(attempt as u32 - 1),
+            );
             tokio::time::sleep(backoff).await;
         }
         match client.generate(request.clone()).await {
@@ -1056,7 +845,9 @@ async fn stream_with_retry(
     let mut last_err = None;
     for attempt in 0..=max_retries {
         if attempt > 0 {
-            let backoff = Duration::from_millis(500 * 2u64.pow(attempt as u32 - 1));
+            let backoff = Duration::from_millis(
+                RETRY_BASE_MS * (RETRY_EXP_FACTOR as u64).pow(attempt as u32 - 1),
+            );
             tokio::time::sleep(backoff).await;
         }
         match client.stream(request.clone()).await {

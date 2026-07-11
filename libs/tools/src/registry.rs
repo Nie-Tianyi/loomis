@@ -1,3 +1,9 @@
+//! [`ToolRegistry`] — a thread-safe, name-indexed collection of [`Tool`]s.
+//!
+//! Tools are stored as `Arc<dyn Tool>` keyed by [`Tool::name()`]. The registry
+//! can convert all tools to [`ToolDef`](provider::ToolDef)s for API requests
+//! and dispatch execution by name.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

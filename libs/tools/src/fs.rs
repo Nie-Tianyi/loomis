@@ -58,10 +58,20 @@ impl WorkspaceFs {
     ///
     /// On success the returned path is guaranteed to start with
     /// `workspace_root`.  When the resolved path already exists on disk
-    /// we also perform a **TOCTOU re-check**: canonicalize a second time
-    /// and verify that the inode / file-index hasn't changed between the
-    /// two calls.  This makes symlink-swap attacks substantially harder
-    /// (though a truly race-free design would need handle-based I/O).
+    /// we also perform a **TOCTOU re-check** (see below).
+    ///
+    /// ## Known limitations
+    ///
+    /// 1. **Non-existing paths** bypass the TOCTOU re-check entirely —
+    ///    if a file is created by an attacker between resolution and
+    ///    the subsequent I/O operation, it will not be detected.
+    /// 2. **File identity** is verified via `(len, modified)` heuristic
+    ///    rather than platform-specific inode/file-index APIs. This is
+    ///    not cryptographically strong — a determined attacker with
+    ///    write access can craft a file with matching size and mtime.
+    ///
+    /// A truly race-free design would require handle-based I/O (open
+    /// file, then `fstat` the handle).
     fn resolve(&self, path: &str) -> Result<PathBuf, FsError> {
         let joined = if path.is_empty() {
             self.workspace_root.clone()
@@ -84,9 +94,11 @@ impl WorkspaceFs {
 
         // ── TOCTOU re-check for existing paths ──────────────────────────
         // Re-canonicalize and verify the file identity hasn't changed.
-        // On Unix we compare inode numbers; on Windows we compare the file
-        // index obtained from the handle.  If the path didn't exist at the
-        // first canonicalize (normalize_partial path), this is a no-op.
+        // We compare file length + modification time as a heuristic for
+        // "same file" — this is NOT an inode/file-index comparison, and
+        // can be defeated by a determined attacker with write access.
+        // If the path didn't exist at the first canonicalize (normalize_partial
+        // path), this re-check is skipped — new files are not covered.
         if let Ok(meta) = normalized.metadata() {
             let re_canon = normalized.canonicalize().map_err(FsError::Io)?;
             if !re_canon.starts_with(&self.workspace_root) {
@@ -168,6 +180,10 @@ impl WorkspaceFs {
     ///
     /// Enforces content size limits, extension blocklist, hidden-file
     /// protection, and binary-content detection (null-byte heuristic).
+    ///
+    /// **TOCTOU note**: There is a window between [`resolve`](Self::resolve)
+    /// and the actual `fs::write` call. A symlink-swap in that window can
+    /// bypass the path sandbox. See [`resolve`](Self::resolve) for details.
     pub fn write(&self, path: &str, content: &str) -> Result<(), FsError> {
         let resolved = self.resolve(path)?;
 
@@ -218,6 +234,10 @@ impl WorkspaceFs {
     }
 
     /// Replace lines `start..=end` (1-indexed) with `new_content`.
+    ///
+    /// **TOCTOU note**: There is a window between [`resolve`](Self::resolve)
+    /// and the actual `fs::write` call. See [`resolve`](Self::resolve) for
+    /// the limitations of our TOCTOU protection.
     pub fn edit_lines(
         &self,
         path: &str,
@@ -311,6 +331,11 @@ impl WorkspaceFs {
         let mut matches = Vec::new();
         for file_path in &files {
             let resolved = self.resolve(file_path)?;
+            // Skip files too large to read (consistent with `read()` behavior).
+            let metadata = resolved.metadata().map_err(FsError::Io)?;
+            if metadata.len() > self.max_read_bytes as u64 {
+                continue;
+            }
             let content = fs::read_to_string(&resolved).map_err(FsError::Io)?;
             for (line_num, line) in content.lines().enumerate() {
                 if re.is_match(line) {

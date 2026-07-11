@@ -17,6 +17,13 @@ use tools::{Progress, ProgressStream, ToolError, ToolRegistry, tool};
 
 use crate::config::SubagentConfig;
 
+/// Default timeout in seconds when `SubagentConfig::timeout_secs` is `None`.
+const DEFAULT_SUBAGENT_TIMEOUT_SECS: u64 = 300;
+/// Maximum chars of tool arguments to show in progress messages before truncating.
+const TRUNCATE_ARGS_CHARS: usize = 120;
+/// Maximum chars of tool output to show in summary before truncating.
+const OUTPUT_SUMMARY_CHARS: usize = 160;
+
 // ── SubagentTool ──────────────────────────────────────────────────────────────
 
 /// A tool that spawns a fresh sub-agent to complete a complex sub-task.
@@ -151,7 +158,7 @@ async fn run_subagent<C: LLMClient + 'static>(
     let timeout = config
         .timeout_secs
         .map(std::time::Duration::from_secs)
-        .unwrap_or_else(|| std::time::Duration::from_secs(300));
+        .unwrap_or_else(|| std::time::Duration::from_secs(DEFAULT_SUBAGENT_TIMEOUT_SECS));
     let deadline = tokio::time::Instant::now() + timeout;
 
     let result = loop {
@@ -258,8 +265,8 @@ fn forward_event_to_progress(event: engine::AgentEvent, tx: &mpsc::UnboundedSend
             name, arguments, ..
         } => {
             // Truncate long arguments for readability.
-            let args_summary = if arguments.len() > 120 {
-                format!("{}…", &arguments[..120])
+            let args_summary = if arguments.len() > TRUNCATE_ARGS_CHARS {
+                format!("{}…", &arguments[..TRUNCATE_ARGS_CHARS])
             } else {
                 arguments
             };
@@ -294,8 +301,8 @@ fn forward_event_to_progress(event: engine::AgentEvent, tx: &mpsc::UnboundedSend
 fn summarize_output(output: &str) -> String {
     let first_line = output.lines().next().unwrap_or("");
     let trimmed = first_line.trim();
-    if trimmed.len() > 160 {
-        format!("{}…", &trimmed[..160])
+    if trimmed.len() > OUTPUT_SUMMARY_CHARS {
+        format!("{}…", &trimmed[..OUTPUT_SUMMARY_CHARS])
     } else if trimmed.is_empty() {
         "(empty output)".into()
     } else {
@@ -314,7 +321,7 @@ mod tests {
         let long = "a".repeat(200);
         let s = summarize_output(&long);
         assert!(s.ends_with('…'));
-        assert!(s.len() <= 164); // 160 + "…"
+        assert!(s.len() <= OUTPUT_SUMMARY_CHARS + "…".len());
     }
 
     #[test]

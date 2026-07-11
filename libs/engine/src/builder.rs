@@ -157,7 +157,7 @@ impl<C: LLMClient> AgentBuilder<C> {
     /// equivalent to manually calling:
     ///
     /// ```ignore
-    /// memory.write().unwrap().push(Message::new(Role::System, prompt));
+    /// memory.write().expect("memory lock poisoned").push(Message::new(Role::System, prompt));
     /// ```
     ///
     /// # Example
@@ -314,7 +314,13 @@ mod tests {
         assert_eq!(agent.max_steps(), 50);
         assert!(agent.streaming());
         // Auto-created memory is empty.
-        assert!(agent.memory().read().unwrap().is_empty());
+        assert!(
+            agent
+                .memory()
+                .read()
+                .expect("memory lock poisoned")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -322,7 +328,7 @@ mod tests {
         let agent = Agent::builder(MockClient, "m")
             .system_prompt("You are a test bot.")
             .build();
-        let mem = agent.memory().read().unwrap();
+        let mem = agent.memory().read().expect("memory lock poisoned");
         assert_eq!(mem.message_count(), 1);
         assert_eq!(mem.messages()[0].role, Role::System);
         assert!(mem.messages()[0].content.contains("test bot"));
@@ -349,12 +355,21 @@ mod tests {
     #[test]
     fn explicit_memory_is_used_instead_of_auto_created() {
         let mem: SharedMemory = Arc::new(RwLock::new(Memory::new()));
-        mem.write().unwrap().push(Message::new(Role::User, "hello"));
+        mem.write()
+            .expect("memory lock poisoned")
+            .push(Message::new(Role::User, "hello"));
 
         let agent = Agent::builder(MockClient, "m").memory(mem.clone()).build();
 
         assert!(std::ptr::eq(Arc::as_ptr(agent.memory()), Arc::as_ptr(&mem)));
-        assert_eq!(agent.memory().read().unwrap().message_count(), 1);
+        assert_eq!(
+            agent
+                .memory()
+                .read()
+                .expect("memory lock poisoned")
+                .message_count(),
+            1
+        );
     }
 
     #[test]
@@ -369,7 +384,7 @@ mod tests {
             .system_prompt("SYSTEM PROMPT")
             .build();
 
-        let messages = agent.memory().read().unwrap();
+        let messages = agent.memory().read().expect("memory lock poisoned");
         assert_eq!(messages.message_count(), 2);
         assert_eq!(messages.messages()[0].role, Role::User);
         assert_eq!(messages.messages()[1].role, Role::System);

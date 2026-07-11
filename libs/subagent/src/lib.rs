@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! # Subagent — Spawn child agents as tools
 //!
 //! Provides [`SubagentTool`] — a [`Tool`](tools::Tool) that spawns a fresh

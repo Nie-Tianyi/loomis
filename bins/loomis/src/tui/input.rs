@@ -319,7 +319,7 @@ impl App {
                 });
                 return Some(None);
             }
-            let mem = self.memory.read().unwrap();
+            let mem = self.memory.read().expect("memory lock poisoned");
             match memory::save_conversation(name, &self.workspace_root, &mem) {
                 Ok(()) => {
                     let _ = memory::write_current_thread(name, &self.workspace_root);
@@ -357,7 +357,7 @@ impl App {
             "/new" => {
                 // Save current conversation before starting fresh.
                 if let Some(ref title) = self.conversation_title {
-                    let mem = self.memory.read().unwrap();
+                    let mem = self.memory.read().expect("memory lock poisoned");
                     let _ = memory::save_conversation(title, &self.workspace_root, &mem);
                 }
                 self.conversation_title = None;
@@ -378,7 +378,7 @@ impl App {
             }
 
             "/stats" => {
-                let mem = self.memory.read().unwrap();
+                let mem = self.memory.read().expect("memory lock poisoned");
                 let content = format!(
                     "Messages: {}  |  Characters: {}",
                     mem.message_count(),
@@ -490,7 +490,7 @@ impl App {
     fn do_resume(&mut self, name: &str) -> Option<TuiCommand> {
         match memory::load_conversation(name, &self.workspace_root) {
             Ok(loaded) => {
-                *self.memory.write().unwrap() = loaded;
+                *self.memory.write().expect("memory lock poisoned") = loaded;
                 let _ = memory::write_current_thread(name, &self.workspace_root);
                 self.conversation_title = Some(name.to_string());
                 self.rebuild_messages_from_memory();
@@ -539,7 +539,7 @@ impl App {
     /// Rebuilds `self.messages` (TUI display) from the current state of
     /// `self.memory`. Used after `/resume` to restore display history.
     fn rebuild_messages_from_memory(&mut self) {
-        let mem = self.memory.read().unwrap();
+        let mem = self.memory.read().expect("memory lock poisoned");
         let msgs = mem.messages().to_vec(); // clone under lock, then drop
         drop(mem);
 

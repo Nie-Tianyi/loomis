@@ -226,7 +226,7 @@ async fn agent_handler(
 
                     // Auto-save conversation after each agent turn.
                     {
-                        let mem = mem_for_save.read().unwrap();
+                        let mem = mem_for_save.read().expect("memory lock poisoned");
                         let name = memory::default_thread_name(&ws);
                         let _ = memory::save_conversation(&name, &ws, &mem);
                     }
@@ -262,7 +262,7 @@ async fn agent_handler(
                 }
 
                 // Drain memory — preserve only System messages.
-                let mut mem = memory.write().unwrap();
+                let mut mem = memory.write().expect("memory lock poisoned");
                 let system_msgs: Vec<Message> = mem
                     .to_context_vec()
                     .into_iter()
@@ -276,7 +276,7 @@ async fn agent_handler(
 
                 // Persist the cleared state.
                 {
-                    let mem = memory.read().unwrap();
+                    let mem = memory.read().expect("memory lock poisoned");
                     let name = memory::default_thread_name(&workspace_root);
                     let _ = memory::save_conversation(&name, &workspace_root, &mem);
                 }
@@ -330,7 +330,7 @@ async fn agent_handler(
 
                     // Push into shared memory so the LLM sees it
                     {
-                        let mut mem = mem.write().unwrap();
+                        let mut mem = mem.write().expect("memory lock poisoned");
                         mem.push(Message::new(
                             Role::User,
                             format!(
@@ -352,7 +352,7 @@ async fn agent_handler(
             TuiCommand::Exit => {
                 // Save conversation before exiting.
                 {
-                    let mem = memory.read().unwrap();
+                    let mem = memory.read().expect("memory lock poisoned");
                     let name = memory::default_thread_name(&workspace_root);
                     let _ = memory::save_conversation(&name, &workspace_root, &mem);
                 }

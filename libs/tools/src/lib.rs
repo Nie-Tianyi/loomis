@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! # Tools — abstraction layer
 //!
 //! Defines the [`Tool`] trait, [`ToolRegistry`] container, [`WorkspaceFs`]

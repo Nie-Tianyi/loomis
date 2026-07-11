@@ -39,17 +39,14 @@ pub const DEFAULT_KEEP_LAST_N: usize = 10;
 
 #[derive(Debug, Clone)]
 pub enum CompactError {
+    /// The summarisation model returned an error.
     SummariserFailed(String),
-    NothingToCompact,
 }
 
 impl fmt::Display for CompactError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SummariserFailed(reason) => write!(f, "summariser failed: {reason}"),
-            Self::NothingToCompact => {
-                write!(f, "nothing to compact — conversation is within budget")
-            }
         }
     }
 }
@@ -81,7 +78,7 @@ impl MicroCompactHook {
 
 impl AgentHook for MicroCompactHook {
     fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
-        let mut mem = memory.write().unwrap();
+        let mut mem = memory.write().expect("memory lock poisoned");
         compact_messages(&mut mem.messages, self.keep_recent, &self.compactable_tools);
     }
 }
@@ -124,7 +121,7 @@ impl<C: LLMClient> MacroCompactHook<C> {
 impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
     fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
         let needs = {
-            let mem = memory.read().unwrap();
+            let mem = memory.read().expect("memory lock poisoned");
             mem.total_chars() > self.threshold
         };
         if !needs {
@@ -132,7 +129,7 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
         }
 
         let old = {
-            let mut mem = memory.write().unwrap();
+            let mut mem = memory.write().expect("memory lock poisoned");
             drain_for_compact(&mut mem.messages, self.keep_last_n)
         };
         if old.is_empty() {
@@ -164,7 +161,7 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
             .unwrap_or_default();
 
         if !summary.is_empty() {
-            let mut mem = memory.write().unwrap();
+            let mut mem = memory.write().expect("memory lock poisoned");
             mem.messages.insert(0, Message::new(Role::System, summary));
         }
     }
@@ -234,7 +231,6 @@ fn compact_messages(
 
 // ── Private helpers (also used by tests) ──────────────────────────────────────
 
-#[allow(dead_code)]
 fn drain_for_compact(messages: &mut Vec<Message>, keep_last_n: usize) -> Vec<Message> {
     let non_system_count = messages.iter().filter(|m| m.role != Role::System).count();
     let keep = std::cmp::min(keep_last_n, non_system_count);
@@ -257,7 +253,6 @@ fn drain_for_compact(messages: &mut Vec<Message>, keep_last_n: usize) -> Vec<Mes
     drained
 }
 
-#[allow(dead_code)]
 const fn role_label(role: Role) -> &'static str {
     match role {
         Role::System => "System",
@@ -440,9 +435,9 @@ mod tests {
     #[test]
     fn test_compact_error_display() {
         assert!(
-            CompactError::NothingToCompact
+            CompactError::SummariserFailed("test".into())
                 .to_string()
-                .contains("nothing to compact")
+                .contains("summariser failed")
         );
     }
 }
