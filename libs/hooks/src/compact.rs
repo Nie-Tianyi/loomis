@@ -26,11 +26,11 @@ pub const COMPACTED_TOOL_OUTPUT_PLACEHOLDER: &str = "[Old tool result content cl
 pub const DEFAULT_KEEP_RECENT_TOOL_OUTPUTS: usize = 5;
 
 /// Default set of tool names whose outputs are eligible for compaction.
-pub const DEFAULT_COMPACTABLE_TOOLS: &[&str] =
+pub const DEFAULT_COMPACT_ELIGIBLE_TOOLS: &[&str] =
     &["read", "shell", "grep", "glob", "edit", "write", "ls"];
 
 /// Default character budget before macro-compaction triggers.
-pub const DEFAULT_COMPACT_CHARS: usize = 2_000_000;
+pub const DEFAULT_COMPACT_CHAR_LIMIT: usize = 2_000_000;
 
 /// Default number of non-System messages preserved during macro-compaction drain.
 pub const DEFAULT_KEEP_LAST_N: usize = 10;
@@ -64,14 +64,14 @@ pub struct MicroCompactHook {
     /// How many of the most recent tool outputs to preserve.
     pub keep_recent: usize,
     /// Which tool names are eligible for output compaction.
-    pub compactable_tools: HashSet<String>,
+    pub compact_eligible_tools: HashSet<String>,
 }
 
 impl MicroCompactHook {
-    pub fn new(keep_recent: usize, compactable_tools: HashSet<String>) -> Self {
+    pub fn new(keep_recent: usize, compact_eligible_tools: HashSet<String>) -> Self {
         Self {
             keep_recent,
-            compactable_tools,
+            compact_eligible_tools,
         }
     }
 }
@@ -79,7 +79,7 @@ impl MicroCompactHook {
 impl AgentHook for MicroCompactHook {
     fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
         let mut mem = memory.write().expect("memory lock poisoned");
-        compact_messages(&mut mem.messages, self.keep_recent, &self.compactable_tools);
+        compact_messages(&mut mem.messages, self.keep_recent, &self.compact_eligible_tools);
     }
 }
 
@@ -259,6 +259,7 @@ const fn role_label(role: Role) -> &'static str {
         Role::User => "User",
         Role::Assistant => "Assistant",
         Role::Tool => "Tool",
+        _ => "Unknown",
     }
 }
 
@@ -267,7 +268,7 @@ const fn role_label(role: Role) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use provider::{ToolCall, ToolCallFunction, ToolCallType};
+    use provider::{ToolCall, ToolCallFunction, ToolCallKind};
 
     fn user_msg(content: &str) -> Message {
         Message::new(Role::User, content)
@@ -287,7 +288,7 @@ mod tests {
             vec![ToolCall {
                 index: 0,
                 id: id.to_string(),
-                r#type: ToolCallType::Function,
+                kind: ToolCallKind::Function,
                 function: ToolCallFunction {
                     name: tool_name.to_string(),
                     arguments: "{}".to_string(),
@@ -386,8 +387,8 @@ mod tests {
     }
 
     #[test]
-    fn test_default_compactable_tools_is_non_empty() {
-        assert!(!DEFAULT_COMPACTABLE_TOOLS.is_empty());
+    fn test_default_compact_eligible_tools_is_non_empty() {
+        assert!(!DEFAULT_COMPACT_ELIGIBLE_TOOLS.is_empty());
     }
 
     #[test]

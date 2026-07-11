@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_parameters_schema() {
-        let params = EchoTool.parameters();
+        let params = EchoTool.parameter_schema();
         assert_eq!(params["type"], "object");
         assert!(params["properties"]["text"]["type"] == "string");
         assert_eq!(params["additionalProperties"], false);

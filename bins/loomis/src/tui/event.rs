@@ -24,7 +24,7 @@ use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use deepseek::DeepSeekClient;
-use engine::{Agent, AgentEvent, CallOrigin, InterveneResponse};
+use engine::{Agent, AgentEvent, CallOrigin, InterventionResponse};
 use memory::SharedMemory;
 use provider::{Message, Role};
 
@@ -49,7 +49,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         model: _kit_model,
         agent_rx,
         agent_tx,
-        intervene_tx,
+        intervention_tx,
     } = kit;
 
     // ── Create command channel ────────────────────────────────────
@@ -62,7 +62,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         cmd_rx,
         agent_tx,
         workspace_root.clone(),
-        intervene_tx,
+        intervention_tx,
     ));
 
     // ── Terminal setup ───────────────────────────────────────────────
@@ -199,7 +199,7 @@ async fn agent_handler(
     mut cmd_rx: UnboundedReceiver<TuiCommand>,
     agent_tx: UnboundedSender<AgentEvent>,
     workspace_root: PathBuf,
-    intervene_tx: std::sync::mpsc::SyncSender<InterveneResponse>,
+    intervention_tx: std::sync::mpsc::SyncSender<InterventionResponse>,
 ) {
     let mut current_run: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -282,13 +282,13 @@ async fn agent_handler(
                 }
             }
 
-            TuiCommand::InterveneResponse {
+            TuiCommand::InterventionResponse {
                 request_id: _,
                 response,
             } => {
                 // Unblock the synchronous intervention hook waiting in
                 // SandboxHook::before_tool_call.
-                let _ = intervene_tx.send(response);
+                let _ = intervention_tx.send(response);
             }
 
             TuiCommand::RunShell(command) => {

@@ -16,8 +16,8 @@ use std::{fs, io};
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const THREADS_DIR: &str = ".loomis/threads";
-const CURRENT_FILE: &str = ".loomis/current";
-const DEFAULT_THREAD: &str = "autosave";
+const CURRENT_THREAD_FILE: &str = ".loomis/current";
+const DEFAULT_THREAD_NAME: &str = "autosave";
 const CURRENT_VERSION: u32 = 1;
 
 // ── ThreadInfo ─────────────────────────────────────────────────────────────────
@@ -117,15 +117,15 @@ pub fn list_threads(workspace_root: &Path) -> io::Result<Vec<ThreadInfo>> {
     Ok(threads)
 }
 
-pub fn read_current_thread(workspace_root: &Path) -> Option<String> {
-    let path = workspace_root.join(CURRENT_FILE);
+pub fn read_current_thread_name(workspace_root: &Path) -> Option<String> {
+    let path = workspace_root.join(CURRENT_THREAD_FILE);
     let content = fs::read_to_string(&path).ok()?;
     let name = content.trim().to_string();
     if name.is_empty() { None } else { Some(name) }
 }
 
-pub fn write_current_thread(name: &str, workspace_root: &Path) -> io::Result<()> {
-    let path = workspace_root.join(CURRENT_FILE);
+pub fn write_current_thread_name(name: &str, workspace_root: &Path) -> io::Result<()> {
+    let path = workspace_root.join(CURRENT_THREAD_FILE);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -133,13 +133,13 @@ pub fn write_current_thread(name: &str, workspace_root: &Path) -> io::Result<()>
 }
 
 pub fn default_thread_name(workspace_root: &Path) -> String {
-    read_current_thread(workspace_root).unwrap_or_else(|| DEFAULT_THREAD.to_string())
+    read_current_thread_name(workspace_root).unwrap_or_else(|| DEFAULT_THREAD_NAME.to_string())
 }
 
 /// Maximum length of the first-message snippet used for thread name generation.
 const MAX_THREAD_NAME_CHARS: usize = 60;
 
-pub fn generate_thread_name(first_message: &str) -> String {
+pub fn thread_name_from_message(first_message: &str) -> String {
     let end = first_message.floor_char_boundary(MAX_THREAD_NAME_CHARS.min(first_message.len()));
     let snippet = &first_message[..end];
 
@@ -251,6 +251,7 @@ fn format_conversation_md(cf: &ConversationFile) -> String {
                 md.push_str("\n\n---\n\n");
                 continue;
             }
+            _ => "Unknown",
         };
         md.push_str(&format!("## [{role_str}]\n\n"));
         if let Some(ref tool_calls) = msg.tool_calls {
@@ -291,7 +292,7 @@ mod tests {
         assert!(root.join(".loomis/threads/test-thread.json").exists());
 
         let loaded = load_conversation("test-thread", root).unwrap();
-        assert_eq!(loaded.message_count(), 3);
+        assert_eq!(loaded.len(), 3);
         let msgs = loaded.to_context_vec();
         assert_eq!(msgs[0].role, Role::System);
         assert_eq!(msgs[0].content, "You are helpful.");
@@ -307,26 +308,26 @@ mod tests {
     fn test_current_thread_read_write() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        assert!(read_current_thread(root).is_none());
-        write_current_thread("my-session", root).unwrap();
-        assert_eq!(read_current_thread(root).unwrap(), "my-session");
+        assert!(read_current_thread_name(root).is_none());
+        write_current_thread_name("my-session", root).unwrap();
+        assert_eq!(read_current_thread_name(root).unwrap(), "my-session");
     }
 
     #[test]
     fn test_generate_thread_name_english() {
-        let name = generate_thread_name("Help me research quantum computing");
+        let name = thread_name_from_message("Help me research quantum computing");
         assert_eq!(name, "help-me-research-quantum-computing");
     }
 
     #[test]
     fn test_generate_thread_name_collapses_hyphens() {
-        let name = generate_thread_name("Hello!!! World???");
+        let name = thread_name_from_message("Hello!!! World???");
         assert_eq!(name, "hello-world");
     }
 
     #[test]
     fn test_generate_thread_name_chinese_fallback() {
-        let name = generate_thread_name("你好世界");
+        let name = thread_name_from_message("你好世界");
         assert!(name.starts_with("conversation-"));
     }
 }

@@ -3,16 +3,17 @@ use serde::{Deserialize, Serialize};
 /// A single message in a conversation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
+    /// The role of the message author.
     pub role: Role,
+    /// The text content of the message.
     pub content: String,
-    /// Present when role is `assistant` and the model wants to call tools.
+    /// Present when role is `Assistant` and the model wants to call tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
-    /// Present when role is `tool` — the id of the tool call this message responds to.
+    /// Present when role is `Tool` — the id of the tool call this message responds to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
-    /// Optional name of the tool that produced this result (role `tool`),
-    /// or the participant name for role `user`.
+    /// Optional name: tool name (role `Tool`) or participant name (role `User`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
@@ -51,10 +52,15 @@ impl Message {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Role {
+    /// System prompt / instructions.
     System,
+    /// End-user message.
     User,
+    /// Model-generated response.
     Assistant,
+    /// Result of a tool execution.
     Tool,
 }
 
@@ -67,14 +73,19 @@ pub struct ToolCall {
     /// Unique identifier for this tool call.
     #[serde(default)]
     pub id: String,
+    /// The kind of tool call (currently only `function`).
     #[serde(rename = "type", default)]
-    pub r#type: ToolCallType,
+    pub kind: ToolCallKind,
+    /// The function name and arguments.
     pub function: ToolCallFunction,
 }
 
+/// The kind of tool call — currently only `Function` is supported.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum ToolCallType {
+#[non_exhaustive]
+pub enum ToolCallKind {
+    /// A function-call tool invocation.
     #[default]
     Function,
 }
@@ -110,7 +121,7 @@ mod tests {
         let tc = ToolCall {
             index: 0,
             id: "call_1".into(),
-            r#type: ToolCallType::Function,
+            kind: ToolCallKind::Function,
             function: ToolCallFunction {
                 name: "echo".into(),
                 arguments: r#"{"text":"hi"}"#.into(),

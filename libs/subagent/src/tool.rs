@@ -291,7 +291,7 @@ fn forward_event_to_progress(event: engine::AgentEvent, tx: &mpsc::UnboundedSend
         AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. } | AgentEvent::Cancelled => {
             // The caller handles these to produce final Progress::Done.
         }
-        AgentEvent::Done | AgentEvent::RunStarted { .. } | AgentEvent::NeedUserIntervene(_) => {
+        AgentEvent::Done | AgentEvent::RunStarted { .. } | AgentEvent::InterventionRequired(_) => {
             // Ignored — not forwarded to parent.
         }
     }

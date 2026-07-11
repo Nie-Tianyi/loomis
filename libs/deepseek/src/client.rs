@@ -20,7 +20,9 @@ pub struct DeepSeekClient {
 
 impl DeepSeekClient {
     pub fn new(api_key: impl Into<String>) -> Self {
-        let base_url = std::env::var("BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned());
+        let base_url = std::env::var("DEEPSEEK_BASE_URL")
+            .or_else(|_| std::env::var("BASE_URL"))
+            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned());
         Self {
             api_key: api_key.into(),
             base_url,
@@ -33,10 +35,29 @@ impl DeepSeekClient {
         self
     }
 
-    /// Send a non-streaming request (DeepSeek-specific API).
-    pub async fn send(&self, request: DeepSeekRequest) -> Result<DeepSeekResponse, DeepSeekError> {
+    /// Check the HTTP response status and return an `Api` error on failure.
+    /// Returns the response back on success so the caller can parse the body.
+    async fn check_response_status(
+        response: reqwest::Response,
+    ) -> Result<reqwest::Response, DeepSeekError> {
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(DeepSeekError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+        Ok(response)
+    }
+
+    /// Send a non-streaming completion request.
+    pub async fn complete(
+        &self,
+        request: DeepSeekRequest,
+    ) -> Result<DeepSeekResponse, DeepSeekError> {
         if request.stream {
-            return Err(DeepSeekError::StreamingNotSupported);
+            return Err(DeepSeekError::StreamNotSupported);
         }
 
         let url = format!("{}/v1/chat/completions", self.base_url);
@@ -49,14 +70,7 @@ impl DeepSeekClient {
             .await
             .map_err(DeepSeekError::Http)?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(DeepSeekError::Api {
-                status: status.as_u16(),
-                body,
-            });
-        }
+        let response = Self::check_response_status(response).await?;
 
         response
             .json::<DeepSeekResponse>()
@@ -64,8 +78,8 @@ impl DeepSeekClient {
             .map_err(|e| DeepSeekError::Parse(e.to_string()))
     }
 
-    /// Send a streaming request (DeepSeek-specific API).
-    pub async fn stream_raw(
+    /// Start a streaming completion request.
+    pub async fn start_stream(
         &self,
         mut request: DeepSeekRequest,
     ) -> Result<DeepSeekStream, DeepSeekError> {
@@ -81,14 +95,7 @@ impl DeepSeekClient {
             .await
             .map_err(DeepSeekError::Http)?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(DeepSeekError::Api {
-                status: status.as_u16(),
-                body,
-            });
-        }
+        let response = Self::check_response_status(response).await?;
 
         Ok(DeepSeekStream {
             response,
@@ -101,7 +108,7 @@ impl DeepSeekClient {
 impl LLMClient for DeepSeekClient {
     async fn generate(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
         let ds_req = DeepSeekRequest::from(req);
-        let ds_resp = self.send(ds_req).await?;
+        let ds_resp = self.complete(ds_req).await?;
         Ok(CompletionResponse::from(ds_resp))
     }
 
@@ -110,7 +117,7 @@ impl LLMClient for DeepSeekClient {
         req: CompletionRequest,
     ) -> Result<BoxStream<'static, Result<StreamChunk, ProviderError>>, ProviderError> {
         let ds_req = DeepSeekRequest::from(req);
-        let ds_stream = self.stream_raw(ds_req).await?;
+        let ds_stream = self.start_stream(ds_req).await?;
 
         let stream = futures_util::stream::try_unfold(ds_stream, |mut stream| async move {
             match stream.next().await {

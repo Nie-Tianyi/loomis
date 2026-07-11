@@ -19,7 +19,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use engine::{AgentError, AgentEvent, AgentHook, InterveneRequest, InterveneResponse, RunOutcome};
+use engine::{AgentError, AgentEvent, AgentHook, InterventionRequest, InterventionResponse, RunOutcome};
 use provider::ToolCall;
 use tokio::sync::mpsc;
 
@@ -32,7 +32,7 @@ pub struct SandboxHook {
     agent_tx: OnceLock<mpsc::UnboundedSender<AgentEvent>>,
     /// Blocking receive for the user's intervention response
     /// (same rendez-vous pattern as the original hook).
-    intervene_rx: Mutex<std::sync::mpsc::Receiver<InterveneResponse>>,
+    intervention_rx: Mutex<std::sync::mpsc::Receiver<InterventionResponse>>,
     /// Compiled command policy.
     shell_filter: ShellFilter,
     /// Per-session quota tracker.
@@ -48,12 +48,12 @@ impl SandboxHook {
         shell_filter: ShellFilter,
         resource_tracker: Arc<ResourceTracker>,
         audit_logger: Arc<AuditLogger>,
-    ) -> (Self, std::sync::mpsc::SyncSender<InterveneResponse>) {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<InterveneResponse>(0);
+    ) -> (Self, std::sync::mpsc::SyncSender<InterventionResponse>) {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<InterventionResponse>(0);
         (
             Self {
                 agent_tx: OnceLock::new(),
-                intervene_rx: Mutex::new(rx),
+                intervention_rx: Mutex::new(rx),
                 shell_filter,
                 resource_tracker,
                 audit_logger,
@@ -78,7 +78,7 @@ impl SandboxHook {
 
         // Notify the TUI to render an interactive intervention prompt.
         if let Some(tx) = self.agent_tx.get() {
-            let _ = tx.send(AgentEvent::NeedUserIntervene(InterveneRequest {
+            let _ = tx.send(AgentEvent::InterventionRequired(InterventionRequest {
                 request_id: request_id.clone(),
                 title: "Approve shell command?".into(),
                 description: command.to_string(),
@@ -88,13 +88,13 @@ impl SandboxHook {
 
         // Block until the TUI responds.
         let response = self
-            .intervene_rx
+            .intervention_rx
             .lock()
             .expect("lock poisoned")
             .recv()
             .unwrap_or({
                 // Channel closed — treat as deny.
-                InterveneResponse {
+                InterventionResponse {
                     chosen: Some(1), // "Deny"
                     custom_text: None,
                 }

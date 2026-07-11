@@ -24,8 +24,9 @@ impl std::error::Error for ToolError {}
 
 /// File-system operation error returned by [`WorkspaceFs`](crate::WorkspaceFs).
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum FsError {
-    PathEscapesWorkspace(String),
+    WorkspaceEscape(String),
     FileTooLarge { path: String, size: u64, max: u64 },
     BinaryContentDetected(String),
     HiddenFileBlocked(String),
@@ -34,14 +35,14 @@ pub enum FsError {
     NotAFile(String),
     NotADirectory(String),
     Io(std::io::Error),
-    Glob(String),
-    Regex(String),
+    GlobPatternError(String),
+    RegexError(String),
 }
 
 impl fmt::Display for FsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::PathEscapesWorkspace(path) => {
+            Self::WorkspaceEscape(path) => {
                 write!(f, "path escapes workspace: {path}")
             }
             Self::FileTooLarge { path, size, max } => {
@@ -63,8 +64,8 @@ impl fmt::Display for FsError {
             Self::NotAFile(path) => write!(f, "not a file: {path}"),
             Self::NotADirectory(path) => write!(f, "not a directory: {path}"),
             Self::Io(e) => write!(f, "I/O error: {e}"),
-            Self::Glob(msg) => write!(f, "glob error: {msg}"),
-            Self::Regex(msg) => write!(f, "regex error: {msg}"),
+            Self::GlobPatternError(msg) => write!(f, "glob error: {msg}"),
+            Self::RegexError(msg) => write!(f, "regex error: {msg}"),
         }
     }
 }
@@ -79,12 +80,12 @@ impl From<std::io::Error> for FsError {
 
 impl From<glob::PatternError> for FsError {
     fn from(e: glob::PatternError) -> Self {
-        Self::Glob(e.to_string())
+        Self::GlobPatternError(e.to_string())
     }
 }
 
 impl From<regex::Error> for FsError {
     fn from(e: regex::Error) -> Self {
-        Self::Regex(e.to_string())
+        Self::RegexError(e.to_string())
     }
 }

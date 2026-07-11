@@ -34,15 +34,15 @@ impl Parse for ToolArgs {
             match key.to_string().as_str() {
                 "name" => {
                     let val: LitStr = input.parse()?;
-                    set_or_dup(&mut name, val, "name")?;
+                    set_or_duplicate(&mut name, val, "name")?;
                 }
                 "description" => {
                     let val: LitStr = input.parse()?;
-                    set_or_dup(&mut description, val, "description")?;
+                    set_or_duplicate(&mut description, val, "description")?;
                 }
                 "args" => {
                     let val: Type = input.parse()?;
-                    set_or_dup(&mut args, val, "args")?;
+                    set_or_duplicate(&mut args, val, "args")?;
                 }
                 other => {
                     return Err(syn::Error::new_spanned(
@@ -73,7 +73,7 @@ impl Parse for ToolArgs {
     }
 }
 
-fn set_or_dup<T>(slot: &mut Option<T>, val: T, label: &str) -> syn::Result<()> {
+fn set_or_duplicate<T>(slot: &mut Option<T>, val: T, label: &str) -> syn::Result<()> {
     if slot.is_some() {
         Err(syn::Error::new(
             proc_macro2::Span::call_site(),
@@ -101,7 +101,7 @@ fn set_or_dup<T>(slot: &mut Option<T>, val: T, label: &str) -> syn::Result<()> {
 ///
 /// - `Tool::name()` returns `name`
 /// - `Tool::description()` returns `description`
-/// - `Tool::parameters()` lazily generates JSON Schema from `args` (cached via `OnceLock`)
+/// - `Tool::parameter_schema()` lazily generates JSON Schema from `args` (cached via `OnceLock`)
 /// - `Tool::execute_stream()` deserializes JSON into `args` and delegates to an inherent
 ///   `fn execute_stream(&self, args: ArgsType) -> Result<ProgressStream, ToolError>` method
 ///
@@ -154,7 +154,7 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #description
             }
 
-            fn parameters(&self) -> ::serde_json::Value {
+            fn parameter_schema(&self) -> ::serde_json::Value {
                 static SCHEMA: ::std::sync::OnceLock<::serde_json::Value> =
                     ::std::sync::OnceLock::new();
                 SCHEMA

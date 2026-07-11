@@ -242,7 +242,7 @@ impl App {
             }
 
             // ── Intervention ─────────────────────────────────────────
-            AgentEvent::NeedUserIntervene(req) => {
+            AgentEvent::InterventionRequired(req) => {
                 self.messages.push(ChatMessage::Intervene {
                     request_id: req.request_id,
                     title: req.title,

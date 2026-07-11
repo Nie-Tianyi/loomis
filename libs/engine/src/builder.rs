@@ -297,7 +297,7 @@ mod tests {
         fn description(&self) -> &str {
             "A mock tool for testing"
         }
-        fn parameters(&self) -> serde_json::Value {
+        fn parameter_schema(&self) -> serde_json::Value {
             serde_json::json!({"type": "object", "properties": {}})
         }
         fn execute_stream(&self, _args: &str) -> Result<tools::ProgressStream, tools::ToolError> {
@@ -329,7 +329,7 @@ mod tests {
             .system_prompt("You are a test bot.")
             .build();
         let mem = agent.memory().read().expect("memory lock poisoned");
-        assert_eq!(mem.message_count(), 1);
+        assert_eq!(mem.len(), 1);
         assert_eq!(mem.messages()[0].role, Role::System);
         assert!(mem.messages()[0].content.contains("test bot"));
     }
@@ -367,7 +367,7 @@ mod tests {
                 .memory()
                 .read()
                 .expect("memory lock poisoned")
-                .message_count(),
+                .len(),
             1
         );
     }
@@ -385,7 +385,7 @@ mod tests {
             .build();
 
         let messages = agent.memory().read().expect("memory lock poisoned");
-        assert_eq!(messages.message_count(), 2);
+        assert_eq!(messages.len(), 2);
         assert_eq!(messages.messages()[0].role, Role::User);
         assert_eq!(messages.messages()[1].role, Role::System);
     }

@@ -36,7 +36,7 @@ mod tests {
         fn description(&self) -> &str {
             "mock"
         }
-        fn parameters(&self) -> Value {
+        fn parameter_schema(&self) -> Value {
             serde_json::json!({})
         }
         fn execute_stream(&self, _args: &str) -> Result<ProgressStream, ToolError> {

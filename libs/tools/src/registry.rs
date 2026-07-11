@@ -110,7 +110,7 @@ mod tests {
             "mock tool for testing"
         }
 
-        fn parameters(&self) -> Value {
+        fn parameter_schema(&self) -> Value {
             serde_json::json!({"type": "object", "properties": {}})
         }
 

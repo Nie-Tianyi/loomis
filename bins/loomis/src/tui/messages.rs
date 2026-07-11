@@ -3,7 +3,7 @@
 //! Pure type definitions with no dependency on the `App` state machine.
 //! Separated from [`super::app`] so the file doesn't grow to 1500 lines.
 
-use engine::{CallOrigin, InterveneResponse};
+use engine::{CallOrigin, InterventionResponse};
 use std::time::SystemTime;
 
 // ── ChatMessage ──────────────────────────────────────────────────────────────────
@@ -96,9 +96,9 @@ pub enum TuiCommand {
     /// Reset conversation, preserving system prompt.
     ClearConversation,
     /// User responded to an intervention prompt.
-    InterveneResponse {
+    InterventionResponse {
         request_id: String,
-        response: InterveneResponse,
+        response: InterventionResponse,
     },
     /// Signal the agent thread to exit.
     Exit,

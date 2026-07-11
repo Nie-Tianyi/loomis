@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_parameters_schema() {
-        let params = CalculatorTool.parameters();
+        let params = CalculatorTool.parameter_schema();
         assert_eq!(params["type"], "object");
         assert!(params["properties"]["expression"]["type"] == "string");
         assert!(

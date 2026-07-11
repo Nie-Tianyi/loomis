@@ -81,8 +81,8 @@ impl App {
                 // Normal user message — generate auto-save thread name from
                 // the first message of this conversation.
                 if self.conversation_title.is_none() {
-                    let title = memory::generate_thread_name(&input);
-                    let _ = memory::write_current_thread(&title, &self.workspace_root);
+                    let title = memory::thread_name_from_message(&input);
+                    let _ = memory::write_current_thread_name(&title, &self.workspace_root);
                     self.conversation_title = Some(title);
                 }
 
@@ -322,7 +322,7 @@ impl App {
             let mem = self.memory.read().expect("memory lock poisoned");
             match memory::save_conversation(name, &self.workspace_root, &mem) {
                 Ok(()) => {
-                    let _ = memory::write_current_thread(name, &self.workspace_root);
+                    let _ = memory::write_current_thread_name(name, &self.workspace_root);
                     self.messages.push(ChatMessage::System {
                         content: format!("Saved conversation as \"{name}\"."),
                         timestamp: ChatMessage::now_timestamp(),
@@ -362,7 +362,7 @@ impl App {
                 }
                 self.conversation_title = None;
                 // Write fallback for the gap between /new and first message.
-                let _ = memory::write_current_thread("autosave", &self.workspace_root);
+                let _ = memory::write_current_thread_name("autosave", &self.workspace_root);
 
                 self.messages.clear();
                 self.messages.push(ChatMessage::System {
@@ -381,7 +381,7 @@ impl App {
                 let mem = self.memory.read().expect("memory lock poisoned");
                 let content = format!(
                     "Messages: {}  |  Characters: {}",
-                    mem.message_count(),
+                    mem.len(),
                     mem.total_chars(),
                 );
                 self.messages.push(ChatMessage::System {
@@ -491,7 +491,7 @@ impl App {
         match memory::load_conversation(name, &self.workspace_root) {
             Ok(loaded) => {
                 *self.memory.write().expect("memory lock poisoned") = loaded;
-                let _ = memory::write_current_thread(name, &self.workspace_root);
+                let _ = memory::write_current_thread_name(name, &self.workspace_root);
                 self.conversation_title = Some(name.to_string());
                 self.rebuild_messages_from_memory();
                 self.messages.insert(
@@ -588,6 +588,7 @@ impl App {
                         timestamp: ts.clone(),
                     });
                 }
+                _ => {}
             }
         }
 
@@ -783,14 +784,14 @@ impl App {
     }
 
     /// Marks the last unresponded intervention as completed and returns
-    /// the [`TuiCommand::InterveneResponse`].
+    /// the [`TuiCommand::InterventionResponse`].
     fn complete_intervene(
         &mut self,
         chosen: Option<usize>,
         custom_text: Option<String>,
     ) -> Option<TuiCommand> {
         self.intervene_selection = None;
-        let response = engine::InterveneResponse {
+        let response = engine::InterventionResponse {
             chosen,
             custom_text,
         };
@@ -807,7 +808,7 @@ impl App {
                 *responded = true;
                 *chosen = response.chosen;
                 *custom_text = response.custom_text.clone();
-                return Some(TuiCommand::InterveneResponse {
+                return Some(TuiCommand::InterventionResponse {
                     request_id: request_id.clone(),
                     response,
                 });

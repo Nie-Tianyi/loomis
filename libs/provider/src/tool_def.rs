@@ -3,28 +3,38 @@ use serde::{Serialize, Serializer};
 /// A tool definition sent to the LLM as part of the request.
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolDef {
+    /// The kind of tool definition (currently only `Function`).
     #[serde(rename = "type")]
-    pub r#type: ToolDefType,
+    pub kind: ToolDefKind,
+    /// The function's name, description, and parameter schema.
     pub function: FunctionDef,
 }
 
+/// The kind of tool definition.
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ToolDefType {
+#[non_exhaustive]
+pub enum ToolDefKind {
+    /// A function-based tool definition.
     Function,
 }
 
+/// A function definition within a tool definition.
 #[derive(Clone, Debug, Serialize)]
 pub struct FunctionDef {
+    /// The function name (must match the tool's registered name).
     pub name: String,
+    /// Human-readable description of what the function does.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// JSON Schema describing the function's parameters.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<serde_json::Value>,
 }
 
 /// Controls how the model uses tools.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum ToolChoice {
     /// `"none"` — never call a tool.
     None,
@@ -34,7 +44,9 @@ pub enum ToolChoice {
     Required,
     /// `{"type": "function", "function": {"name": "..."}}` — force a specific function.
     Specific {
-        r#type: ToolDefType,
+        /// The kind of tool to force (currently only `Function`).
+        kind: ToolDefKind,
+        /// Reference to the specific function by name.
         function: ToolChoiceFunction,
     },
 }
@@ -46,9 +58,9 @@ impl Serialize for ToolChoice {
             Self::None => serializer.serialize_str("none"),
             Self::Auto => serializer.serialize_str("auto"),
             Self::Required => serializer.serialize_str("required"),
-            Self::Specific { r#type, function } => {
+            Self::Specific { kind, function } => {
                 let mut map = serializer.serialize_map(Some(2))?;
-                map.serialize_entry("type", r#type)?;
+                map.serialize_entry("type", kind)?;
                 map.serialize_entry("function", function)?;
                 map.end()
             }
@@ -84,7 +96,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(&ToolChoice::Specific {
-                r#type: ToolDefType::Function,
+                kind: ToolDefKind::Function,
                 function: ToolChoiceFunction { name: "f".into() },
             })
             .unwrap(),

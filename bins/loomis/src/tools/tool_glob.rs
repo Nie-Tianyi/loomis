@@ -71,7 +71,7 @@ impl GlobTool {
 
 fn map_fs_err(e: FsError) -> ToolError {
     match e {
-        FsError::Glob(_) => ToolError::InvalidArgs(e.to_string()),
+        FsError::GlobPatternError(_) => ToolError::InvalidArgs(e.to_string()),
         _ => ToolError::Execution(e.to_string()),
     }
 }
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn test_parameters_schema() {
         let (_dir, tool) = setup();
-        let params = tool.parameters();
+        let params = tool.parameter_schema();
         assert_eq!(params["type"], "object");
         assert_eq!(params["additionalProperties"], false);
     }

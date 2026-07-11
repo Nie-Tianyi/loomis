@@ -75,48 +75,50 @@ impl From<CompletionRequest> for DeepSeekRequest {
             stream: req.stream,
             tools: req.tools,
             tool_choice: req.tool_choice,
-            ..Self::default()
+            thinking: None,
+            reasoning_effort: None,
+            response_format: None,
+            stream_options: None,
+            logprobs: false,
+            top_logprobs: None,
         }
-    }
-}
-
-impl Default for DeepSeekRequest {
-    fn default() -> Self {
-        Self::new("", vec![])
     }
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Thinking {
     #[serde(rename = "type")]
-    pub r#type: ThinkingType,
+    pub kind: ThinkingMode,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ThinkingType {
+#[non_exhaustive]
+pub enum ThinkingMode {
     Enabled,
     Disabled,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ReasoningEffort {
     Low,
     Medium,
     High,
-    XHigh,
+    ExtraHigh,
     Max,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ResponseFormat {
     #[serde(rename = "type")]
-    pub r#type: ResponseFormatType,
+    pub kind: ResponseFormatType,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ResponseFormatType {
     Text,
     JsonObject,

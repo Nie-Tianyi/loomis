@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::message::ToolCall;
+use crate::message::{Role, ToolCall};
 
 /// Provider-agnostic completion response.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -15,13 +15,19 @@ pub struct CompletionResponse {
 
 /// The reason the model stopped generating tokens.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FinishReason {
+    /// The model reached a natural stopping point.
     Stop,
+    /// The model reached the maximum token limit.
     Length,
+    /// The model stopped because it wants to call tools.
     ToolCalls,
+    /// The content was filtered by the provider's safety system.
     ContentFilter,
+    /// The provider's system resources were exhausted.
     InsufficientSystemResource,
-    /// Forward-compatibility catch-all.
+    /// Forward-compatibility catch-all for unknown reasons.
     Other(String),
 }
 
@@ -56,26 +62,39 @@ impl<'de> Deserialize<'de> for FinishReason {
     }
 }
 
+/// A single choice in a completion response.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Choice {
+    /// The index of this choice in the response.
     pub index: u32,
+    /// The message content for this choice.
     pub message: ChoiceMessage,
+    /// The reason the model stopped generating (if known).
     #[serde(default)]
     pub finish_reason: Option<FinishReason>,
 }
 
+/// The message within a [`Choice`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChoiceMessage {
-    pub role: String,
+    /// The role of the message author (e.g. `Assistant`).
+    pub role: Role,
+    /// The text content (may be `None` when only tool calls are present).
     pub content: Option<String>,
+    /// Chain-of-thought / reasoning content (provider-specific).
     pub reasoning_content: Option<String>,
+    /// Tool calls requested by the model (when `role` is `Assistant`).
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
+/// Token-usage statistics for a completion.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Usage {
+    /// Tokens consumed by the input (prompt + context).
     pub prompt_tokens: u32,
+    /// Tokens generated in the completion.
     pub completion_tokens: u32,
+    /// Total tokens (prompt + completion).
     pub total_tokens: u32,
 }
 

@@ -77,11 +77,11 @@ Be specific in your description and prompt — the sub-agent works independently
 and reports back.
 ";
 
-// ── AgentEvent & InterveneResponse (re-exported from engine) ─────────────────
+// ── AgentEvent & InterventionResponse (re-exported from engine) ─────────────────
 
 /// Re-export the engine's event type for channel construction.
 pub use engine::AgentEvent;
-pub use engine::InterveneResponse;
+pub use engine::InterventionResponse;
 
 /// Product of [`build_coding_agent`] — everything needed to launch the TUI.
 pub struct AgentKit {
@@ -95,7 +95,7 @@ pub struct AgentKit {
     pub agent_tx: mpsc::UnboundedSender<AgentEvent>,
     /// The sender that unblocks the intervention hook when the user
     /// answers an intervention prompt.
-    pub intervene_tx: std::sync::mpsc::SyncSender<InterveneResponse>,
+    pub intervention_tx: std::sync::mpsc::SyncSender<InterventionResponse>,
 }
 
 /// Build a fully-wired coding agent with all channels and hooks.
@@ -168,14 +168,14 @@ pub fn build_coding_agent(
 
     // ── Hooks ─────────────────────────────────────────────────
     // SandboxHook — shell approval, resource tracking, audit logging
-    let (approval_hook, intervene_tx) =
+    let (approval_hook, intervention_tx) =
         SandboxHook::new(shell_filter, resource_tracker, audit_logger);
     approval_hook.set_agent_tx(agent_tx.clone());
 
     // MicroCompactHook — clears old tool output content
     let micro_compact = hooks::MicroCompactHook::new(
         hooks::DEFAULT_KEEP_RECENT_TOOL_OUTPUTS,
-        hooks::DEFAULT_COMPACTABLE_TOOLS
+        hooks::DEFAULT_COMPACT_ELIGIBLE_TOOLS
             .iter()
             .map(|s| s.to_string())
             .collect(),
@@ -185,7 +185,7 @@ pub fn build_coding_agent(
     // Blocks the agent task via Handle::block_on (separate thread from TUI).
     let macro_compact = hooks::MacroCompactHook::new(
         flash_model.to_string(),
-        hooks::DEFAULT_COMPACT_CHARS,
+        hooks::DEFAULT_COMPACT_CHAR_LIMIT,
         hooks::DEFAULT_KEEP_LAST_N,
         compact_client,
     );
@@ -219,6 +219,6 @@ pub fn build_coding_agent(
         model: model.to_string(),
         agent_rx,
         agent_tx,
-        intervene_tx,
+        intervention_tx,
     }
 }

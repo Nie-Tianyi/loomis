@@ -23,7 +23,7 @@ use super::progress::ProgressStream;
 /// |--------|---------|
 /// | [`name`](Tool::name) | Tool name, maps to `function.name` in API requests |
 /// | [`description`](Tool::description) | Human-readable description for the model |
-/// | [`parameters`](Tool::parameters) | JSON Schema for the tool's arguments |
+/// | [`parameter_schema`](Tool::parameter_schema) | JSON Schema for the tool's arguments |
 /// | [`execute_stream`](Tool::execute_stream) | Execute and return a [`ProgressStream`] |
 ///
 /// # Progress streaming
@@ -41,7 +41,7 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
 
     /// JSON Schema describing the tool's expected arguments.
-    fn parameters(&self) -> Value;
+    fn parameter_schema(&self) -> Value;
 
     /// Execute the tool and return a stream of progress events.
     ///
@@ -51,11 +51,11 @@ pub trait Tool: Send + Sync {
     /// Convert to a [`provider::ToolDef`] for API requests.
     fn to_def(&self) -> provider::ToolDef {
         provider::ToolDef {
-            r#type: provider::ToolDefType::Function,
+            kind: provider::ToolDefKind::Function,
             function: provider::FunctionDef {
                 name: self.name().to_owned(),
                 description: Some(self.description().to_owned()),
-                parameters: Some(self.parameters()),
+                parameters: Some(self.parameter_schema()),
             },
         }
     }

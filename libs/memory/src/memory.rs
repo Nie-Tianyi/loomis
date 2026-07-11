@@ -109,10 +109,6 @@ impl Memory {
     pub fn total_chars(&self) -> usize {
         self.messages.iter().map(|m| m.content.len()).sum()
     }
-
-    pub fn message_count(&self) -> usize {
-        self.messages.len()
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -140,7 +136,7 @@ mod tests {
     fn test_push_appends_message() {
         let mut mem = Memory::new();
         mem.push(user_msg("hello"));
-        assert_eq!(mem.message_count(), 1);
+        assert_eq!(mem.len(), 1);
     }
 
     #[test]
@@ -160,7 +156,7 @@ mod tests {
         }
         {
             let r = mem.read().expect("memory lock poisoned");
-            assert_eq!(r.message_count(), 1);
+            assert_eq!(r.len(), 1);
         }
     }
 
@@ -168,7 +164,7 @@ mod tests {
     fn test_from_vec() {
         let msgs = vec![user_msg("a"), assistant_msg("b")];
         let mem = Memory::from(msgs);
-        assert_eq!(mem.message_count(), 2);
+        assert_eq!(mem.len(), 2);
     }
 
     #[test]
@@ -176,7 +172,7 @@ mod tests {
         let mem = Memory::builder()
             .with_messages(vec![user_msg("preloaded")])
             .build();
-        assert_eq!(mem.message_count(), 1);
+        assert_eq!(mem.len(), 1);
     }
 
     #[test]

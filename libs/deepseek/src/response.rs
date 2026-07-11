@@ -3,7 +3,7 @@
 
 use serde::Deserialize;
 
-use provider::{Choice, ChoiceMessage, CompletionResponse, FinishReason, ToolCall, Usage};
+use provider::{Choice, ChoiceMessage, CompletionResponse, FinishReason, Role, ToolCall, Usage};
 
 /// DeepSeek-specific API response. Maps to [`CompletionResponse`] via [`From`].
 #[derive(Clone, Debug, Deserialize)]
@@ -30,7 +30,7 @@ pub struct DeepSeekChoice {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct DeepSeekChoiceMessage {
-    pub role: String,
+    pub role: Role,
     pub content: Option<String>,
     #[serde(default)]
     pub reasoning_content: Option<String>,

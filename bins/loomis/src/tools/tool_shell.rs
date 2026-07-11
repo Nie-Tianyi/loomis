@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn test_parameters_schema() {
         let tool = make_tool();
-        let params = tool.parameters();
+        let params = tool.parameter_schema();
         assert_eq!(params["type"], "object");
         assert!(params["properties"]["command"]["type"] == "string");
         assert!(params["required"][0] == "command");

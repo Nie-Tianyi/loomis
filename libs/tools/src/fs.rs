@@ -86,7 +86,7 @@ impl WorkspaceFs {
         };
 
         if !normalized.starts_with(&self.workspace_root) {
-            return Err(FsError::PathEscapesWorkspace(format!(
+            return Err(FsError::WorkspaceEscape(format!(
                 "'{}' resolves outside workspace",
                 path
             )));
@@ -102,7 +102,7 @@ impl WorkspaceFs {
         if let Ok(meta) = normalized.metadata() {
             let re_canon = normalized.canonicalize().map_err(FsError::Io)?;
             if !re_canon.starts_with(&self.workspace_root) {
-                return Err(FsError::PathEscapesWorkspace(format!(
+                return Err(FsError::WorkspaceEscape(format!(
                     "'{}' escapes workspace (TOCTOU re-check)",
                     path
                 )));
@@ -113,7 +113,7 @@ impl WorkspaceFs {
             if let Ok(re_meta) = re_canon.metadata()
                 && (meta.len() != re_meta.len() || meta.modified().ok() != re_meta.modified().ok())
             {
-                return Err(FsError::PathEscapesWorkspace(format!(
+                return Err(FsError::WorkspaceEscape(format!(
                     "'{}' file identity changed between checks — possible symlink swap",
                     path
                 )));
@@ -495,7 +495,7 @@ mod tests {
     fn test_path_escapes_workspace() {
         let (_dir, fs) = setup_fs();
         let result = fs.read("../outside_file.txt", None, None);
-        assert!(matches!(result, Err(FsError::PathEscapesWorkspace(_))));
+        assert!(matches!(result, Err(FsError::WorkspaceEscape(_))));
     }
 
     #[test]
