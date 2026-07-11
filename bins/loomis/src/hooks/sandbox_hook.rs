@@ -19,7 +19,9 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use engine::{AgentError, AgentEvent, AgentHook, InterventionRequest, InterventionResponse, RunOutcome};
+use engine::{
+    AgentError, AgentEvent, AgentHook, InterventionRequest, InterventionResponse, RunOutcome,
+};
 use provider::ToolCall;
 use tokio::sync::mpsc;
 

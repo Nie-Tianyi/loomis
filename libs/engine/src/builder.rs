@@ -363,11 +363,7 @@ mod tests {
 
         assert!(std::ptr::eq(Arc::as_ptr(agent.memory()), Arc::as_ptr(&mem)));
         assert_eq!(
-            agent
-                .memory()
-                .read()
-                .expect("memory lock poisoned")
-                .len(),
+            agent.memory().read().expect("memory lock poisoned").len(),
             1
         );
     }

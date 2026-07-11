@@ -905,7 +905,9 @@ mod tests {
 
     #[test]
     fn test_is_retryable() {
-        assert!(is_retryable(&ProviderError::Http { message: "timeout".into() }));
+        assert!(is_retryable(&ProviderError::Http {
+            message: "timeout".into()
+        }));
         assert!(is_retryable(&ProviderError::Api {
             status: 503,
             body: "".into()
@@ -914,6 +916,8 @@ mod tests {
             status: 400,
             body: "".into()
         }));
-        assert!(!is_retryable(&ProviderError::Parse { message: "oops".into() }));
+        assert!(!is_retryable(&ProviderError::Parse {
+            message: "oops".into()
+        }));
     }
 }

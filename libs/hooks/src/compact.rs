@@ -79,7 +79,11 @@ impl MicroCompactHook {
 impl AgentHook for MicroCompactHook {
     fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
         let mut mem = memory.write().expect("memory lock poisoned");
-        compact_messages(&mut mem.messages, self.keep_recent, &self.compact_eligible_tools);
+        compact_messages(
+            &mut mem.messages,
+            self.keep_recent,
+            &self.compact_eligible_tools,
+        );
     }
 }
 

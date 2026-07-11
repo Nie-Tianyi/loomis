@@ -70,9 +70,7 @@ impl WriteTool {
 
 fn map_fs_err(e: FsError) -> ToolError {
     match e {
-        FsError::NotAFile(_) | FsError::WorkspaceEscape(_) => {
-            ToolError::InvalidArgs(e.to_string())
-        }
+        FsError::NotAFile(_) | FsError::WorkspaceEscape(_) => ToolError::InvalidArgs(e.to_string()),
         _ => ToolError::Execution(e.to_string()),
     }
 }

@@ -33,7 +33,9 @@ impl std::error::Error for DeepSeekError {
 impl From<DeepSeekError> for ProviderError {
     fn from(e: DeepSeekError) -> Self {
         match e {
-            DeepSeekError::Http(err) => ProviderError::Http { message: err.to_string() },
+            DeepSeekError::Http(err) => ProviderError::Http {
+                message: err.to_string(),
+            },
             DeepSeekError::Api { status, body } => ProviderError::Api { status, body },
             DeepSeekError::Parse(msg) => ProviderError::Parse { message: msg },
             DeepSeekError::StreamNotSupported => ProviderError::StreamingNotSupported,
