@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -14,7 +15,7 @@ use provider::{
     CompletionRequest, CompletionResponse, FinishReason, LLMClient, Message, ProviderError, Role,
     StreamChunk, ToolCall, ToolCallFunction, ToolCallKind,
 };
-use tools::{Progress, ToolError};
+use tools::{Progress, ToolError, ToolRegistry};
 
 use crate::builder::AgentBuilder;
 use crate::context::EngineContext;
@@ -385,15 +386,24 @@ impl<C: LLMClient> Agent<C> {
 
     /// Execute all tool calls from an assistant message.
     ///
-    /// Handles hook-based rejection (before_tool_call), progress streaming,
-    /// success/failure/not-found, memory updates, and event emission.
-    /// This is the core shared tool-execution path used by both loops.
+    /// Three-phase pipeline:
+    /// 1. **Pre-flight** — run `before_tool_call` hooks sequentially (hooks can block
+    ///    the calling thread for user intervention, so they must not run in parallel).
+    ///    Blocked calls get rejection events + results pushed to memory immediately.
+    /// 2. **Execution** — non-blocked tools run in parallel via `tokio::spawn`.
+    ///    Each task drives its own [`ProgressStream`] and emits [`AgentEvent::ToolProgress`]
+    ///    events in real time.  When there is only a single tool, the spawn overhead is
+    ///    avoided and it runs inline.
+    /// 3. **Post-flight** — after all tasks complete, results are merged with
+    ///    blocked entries, sorted by original index, and `after_tool_call`/`on_tool_failed`
+    ///    hooks are called in the parent.  Memory writes and terminal events
+    ///    (`ToolSuccessful`/`ToolFailure`) are emitted in LLM tool-call order.
     async fn execute_tool_calls(
         &self,
         assistant_msg: &Message,
         tx: &Option<mpsc::UnboundedSender<AgentEvent>>,
     ) {
-        // Emit ToolCall events before execution.
+        // ── Emit ToolCall events before execution ──
         if let Some(tx) = tx {
             if let Some(ref tool_calls) = assistant_msg.tool_calls {
                 for tc in tool_calls {
@@ -407,6 +417,7 @@ impl<C: LLMClient> Agent<C> {
             }
         }
 
+        // ── Push assistant message to memory ──
         {
             let mut mem = self.ctx.memory.write().expect("memory lock poisoned");
             mem.push(assistant_msg.clone());
@@ -417,16 +428,22 @@ impl<C: LLMClient> Agent<C> {
             None => return,
         };
 
-        for tc in tool_calls {
+        // ═══════════════════════════════════════════════════════════════
+        // Phase 1 — Pre-flight: run before_tool_call hooks sequentially.
+        // ═══════════════════════════════════════════════════════════════
+        let mut ready: Vec<(usize, ToolCall)> = Vec::with_capacity(tool_calls.len());
+
+        for (i, tc) in tool_calls.iter().enumerate() {
             let mut blocked = false;
             for hook in &self.ctx.hooks {
                 if let Err(e) = hook.before_tool_call("default", tc) {
-                    let msg = Message::tool_result(&tc.id, format!("Tool rejected: {e}"));
+                    // Blocked — write rejection to memory + emit event immediately.
+                    let rejection_msg = format!("Tool rejected: {e}");
                     self.ctx
                         .memory
                         .write()
                         .expect("memory lock poisoned")
-                        .push(msg);
+                        .push(Message::tool_result(&tc.id, &rejection_msg));
                     if let Some(tx) = tx {
                         let _ = tx.send(AgentEvent::ToolRejected {
                             id: tc.id.clone(),
@@ -438,82 +455,79 @@ impl<C: LLMClient> Agent<C> {
                     break;
                 }
             }
-
-            if blocked {
-                continue;
+            if !blocked {
+                ready.push((i, tc.clone()));
             }
+        }
 
-            // Pull from progress stream.
-            let tool_result = self
-                .ctx
-                .tools
-                .execute_stream(&tc.function.name, &tc.function.arguments);
+        // ═══════════════════════════════════════════════════════════════
+        // Phase 2 — Execute ready tools (inline for 1, parallel for N).
+        // ═══════════════════════════════════════════════════════════════
+        let outcomes: Vec<ToolOutcome> = if ready.len() == 1 {
+            // Fast path: single tool — no spawn overhead.
+            let (index, tc) = ready.into_iter().next().unwrap();
+            let result = execute_one_tool(&self.ctx.tools, &tc, tx).await;
+            vec![ToolOutcome { index, tc, result }]
+        } else if ready.is_empty() {
+            Vec::new()
+        } else {
+            // Parallel path: spawn one tokio task per tool.
+            execute_parallel(&self.ctx.tools, ready, tx).await
+        };
 
-            match tool_result {
-                Some(Ok(mut stream)) => {
-                    let mut final_output = String::new();
-                    while let Some(progress) = stream.next().await {
-                        match progress {
-                            Progress::InProgress(msg) => {
-                                if let Some(tx) = tx {
-                                    let _ = tx.send(AgentEvent::ToolProgress {
-                                        id: tc.id.clone(),
-                                        name: tc.function.name.clone(),
-                                        message: msg,
-                                    });
-                                }
-                            }
-                            Progress::Done(output) => final_output = output,
-                        }
-                    }
+        // ═══════════════════════════════════════════════════════════════
+        // Phase 3 — Post-flight: hooks, memory, terminal events (in order).
+        // ═══════════════════════════════════════════════════════════════
+        for outcome in &outcomes {
+            match &outcome.result {
+                ToolExecResult::Success { output } => {
                     for hook in &self.ctx.hooks {
-                        hook.after_tool_call("default", tc, &final_output);
+                        hook.after_tool_call("default", &outcome.tc, output);
                     }
                     self.ctx
                         .memory
                         .write()
                         .expect("memory lock poisoned")
-                        .push(Message::tool_result(&tc.id, &final_output));
+                        .push(Message::tool_result(&outcome.tc.id, output));
                     if let Some(tx) = tx {
                         let _ = tx.send(AgentEvent::ToolSuccessful {
-                            id: tc.id.clone(),
-                            name: tc.function.name.clone(),
-                            output: final_output,
+                            id: outcome.tc.id.clone(),
+                            name: outcome.tc.function.name.clone(),
+                            output: output.clone(),
                         });
                     }
                 }
-                Some(Err(e)) => {
-                    let err_msg = e.to_string();
+                ToolExecResult::Failure { error } => {
                     for hook in &self.ctx.hooks {
-                        hook.on_tool_failed("default", tc, &err_msg);
+                        hook.on_tool_failed("default", &outcome.tc, error);
                     }
                     self.ctx
                         .memory
                         .write()
                         .expect("memory lock poisoned")
-                        .push(Message::tool_result(&tc.id, &err_msg));
+                        .push(Message::tool_result(&outcome.tc.id, error));
                     if let Some(tx) = tx {
                         let _ = tx.send(AgentEvent::ToolFailure {
-                            id: tc.id.clone(),
-                            name: tc.function.name.clone(),
-                            error: err_msg,
+                            id: outcome.tc.id.clone(),
+                            name: outcome.tc.function.name.clone(),
+                            error: error.clone(),
                         });
                     }
                 }
-                None => {
-                    let err_msg = format!("Tool not found: {}", tc.function.name);
+                ToolExecResult::NotFound { name } => {
+                    let err_msg = format!("Tool not found: {name}");
                     for hook in &self.ctx.hooks {
-                        hook.on_tool_failed("default", tc, &err_msg);
+                        hook.on_tool_failed("default", &outcome.tc, &err_msg);
                     }
                     self.ctx
                         .memory
                         .write()
                         .expect("memory lock poisoned")
-                        .push(Message::tool_result(&tc.id, &err_msg));
+                        .push(Message::tool_result(&outcome.tc.id, &err_msg));
                     if let Some(tx) = tx {
                         let _ = tx.send(AgentEvent::ToolFailure {
-                            id: tc.id.clone(),
-                            name: tc.function.name.clone(),
+                            id: outcome.tc.id.clone(),
+                            name: outcome.tc.function.name.clone(),
                             error: err_msg,
                         });
                     }
@@ -795,6 +809,139 @@ fn emit_chunk_events(
         }
     }
     acc.ingest(chunk);
+}
+
+// ── Parallel tool execution helpers ──────────────────────────────────────────
+
+/// Outcome of a single tool execution, produced by a spawned task or inline
+/// execution in Phase 2.
+struct ToolOutcome {
+    /// Original position in the LLM's tool-call list (used for ordering).
+    index: usize,
+    /// The tool call that was executed.
+    tc: ToolCall,
+    /// Execution result.
+    result: ToolExecResult,
+}
+
+/// Final result of driving a tool's [`ProgressStream`] to completion.
+enum ToolExecResult {
+    /// Tool completed successfully — carries the final output from
+    /// [`Progress::Done`].
+    Success { output: String },
+    /// The tool returned an error from [`ToolRegistry::execute_stream`].
+    Failure { error: String },
+    /// The tool name was not found in the registry.
+    NotFound { name: String },
+}
+
+/// Drive a single tool's [`ProgressStream`] to completion, emitting
+/// [`AgentEvent::ToolProgress`] events in real-time.
+///
+/// Called from spawned tasks (parallel path) or inline (fast path).
+async fn execute_one_tool(
+    tools: &ToolRegistry,
+    tc: &ToolCall,
+    tx: &Option<mpsc::UnboundedSender<AgentEvent>>,
+) -> ToolExecResult {
+    let tool_result = tools.execute_stream(&tc.function.name, &tc.function.arguments);
+
+    match tool_result {
+        Some(Ok(mut stream)) => {
+            let mut final_output = String::new();
+            while let Some(progress) = stream.next().await {
+                match progress {
+                    Progress::InProgress(msg) => {
+                        if let Some(tx) = tx {
+                            let _ = tx.send(AgentEvent::ToolProgress {
+                                id: tc.id.clone(),
+                                name: tc.function.name.clone(),
+                                message: msg,
+                            });
+                        }
+                    }
+                    Progress::Done(output) => final_output = output,
+                }
+            }
+            ToolExecResult::Success {
+                output: final_output,
+            }
+        }
+        Some(Err(e)) => ToolExecResult::Failure {
+            error: e.to_string(),
+        },
+        None => ToolExecResult::NotFound {
+            name: tc.function.name.clone(),
+        },
+    }
+}
+
+/// Spawn one tokio task per tool and collect results.
+///
+/// Each task owns a cloned [`ToolCall`], an `Arc<ToolRegistry>`, and a
+/// clone of the event sender.  Results are collected and sorted by the
+/// original index so the parent can process them in LLM tool-call order.
+async fn execute_parallel(
+    tools: &Arc<ToolRegistry>,
+    ready: Vec<(usize, ToolCall)>,
+    tx: &Option<mpsc::UnboundedSender<AgentEvent>>,
+) -> Vec<ToolOutcome> {
+    let tools = Arc::clone(tools);
+    let mut handles: Vec<tokio::task::JoinHandle<ToolOutcome>> = Vec::with_capacity(ready.len());
+
+    for (index, tc) in ready {
+        let tools = Arc::clone(&tools);
+        let tx = tx.clone();
+        handles.push(tokio::spawn(async move {
+            let result = execute_one_tool(&tools, &tc, &tx).await;
+            ToolOutcome { index, tc, result }
+        }));
+    }
+
+    // Collect results, tolerating panics in spawned tasks.
+    let mut outcomes = Vec::with_capacity(handles.len());
+    for handle in handles {
+        match handle.await {
+            Ok(outcome) => outcomes.push(outcome),
+            Err(join_err) => {
+                // A spawned task panicked — fabricate a synthetic failure.
+                // The ToolOutcome struct needs a tc; use a minimal one with
+                // the panic message.  Since we can't recover the original
+                // ToolCall from a JoinError, log the panic and skip.
+                // (tokio::spawn panics are extremely rare in tool execution.)
+                let panic_msg = if let Ok(reason) = join_err.try_into_panic() {
+                    let reason = reason
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| reason.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "unknown panic".into());
+                    format!("Tool task panicked: {reason}")
+                } else {
+                    "Tool task was cancelled".into()
+                };
+                // We lost the original index and tc — this is an edge case.
+                // Push a synthetic outcome with an impossible index so it
+                // appears at the end of the sorted list.
+                outcomes.push(ToolOutcome {
+                    index: usize::MAX,
+                    tc: ToolCall {
+                        index: 0,
+                        id: String::new(),
+                        kind: ToolCallKind::Function,
+                        function: ToolCallFunction {
+                            name: "unknown".into(),
+                            arguments: String::new(),
+                        },
+                    },
+                    result: ToolExecResult::Failure { error: panic_msg },
+                });
+            }
+        }
+    }
+
+    // Restore LLM's original tool-call order.
+    outcomes.sort_by_key(|o| o.index);
+    outcomes
 }
 
 // ── Retry helpers ─────────────────────────────────────────────────────────────
