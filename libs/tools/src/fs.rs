@@ -54,6 +54,28 @@ impl WorkspaceFs {
         &self.workspace_root
     }
 
+    /// Check whether a file's extension is in the blocked list (e.g. `.exe`, `.dll`).
+    fn is_extension_blocked(&self, path: &Path) -> bool {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| {
+                let dot_ext = format!(".{}", ext);
+                self.blocked_write_extensions
+                    .iter()
+                    .any(|blocked| blocked.eq_ignore_ascii_case(&dot_ext))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Heuristic: check whether raw bytes look like binary content.
+    ///
+    /// Scans the first 8 KiB for null bytes — a reliable indicator of binary
+    /// formats (executables, images, archives, etc.).
+    fn is_likely_binary(bytes: &[u8]) -> bool {
+        let check_len = bytes.len().min(8192);
+        bytes[..check_len].contains(&0)
+    }
+
     /// Resolve a relative path to an absolute path within the workspace.
     ///
     /// On success the returned path is guaranteed to start with
@@ -331,12 +353,27 @@ impl WorkspaceFs {
         let mut matches = Vec::new();
         for file_path in &files {
             let resolved = self.resolve(file_path)?;
+
+            // Skip files with blocked extensions (binary formats like .exe, .dll, .bin).
+            if self.is_extension_blocked(&resolved) {
+                continue;
+            }
+
             // Skip files too large to read (consistent with `read()` behavior).
             let metadata = resolved.metadata().map_err(FsError::Io)?;
             if metadata.len() > self.max_read_bytes as u64 {
                 continue;
             }
-            let content = fs::read_to_string(&resolved).map_err(FsError::Io)?;
+
+            // Read as raw bytes and convert to UTF-8 losslessly. Binary files
+            // (null bytes in first 8 KiB) are skipped — text search is only
+            // meaningful in text files.
+            let bytes = fs::read(&resolved).map_err(FsError::Io)?;
+            if Self::is_likely_binary(&bytes) {
+                continue;
+            }
+            let content = String::from_utf8_lossy(&bytes);
+
             for (line_num, line) in content.lines().enumerate() {
                 if re.is_match(line) {
                     matches.push(GrepMatch {
