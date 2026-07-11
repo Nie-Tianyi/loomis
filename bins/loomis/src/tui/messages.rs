@@ -76,6 +76,8 @@ pub enum ToolCallState {
     Running,
     /// Tool execution finished with this output.
     Complete(String),
+    /// Tool execution failed with this error.
+    Error(String),
 }
 
 // ── TuiCommand ───────────────────────────────────────────────────────────────────

@@ -19,7 +19,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use engine::{AgentError, AgentEvent, AgentHook, InterveneRequest, InterveneResponse};
+use engine::{AgentError, AgentEvent, AgentHook, InterveneRequest, InterveneResponse, RunOutcome};
 use provider::ToolCall;
 use tokio::sync::mpsc;
 
@@ -227,6 +227,41 @@ impl AgentHook for SandboxHook {
                 },
             });
         }
+    }
+
+    fn on_run_finish(&self, session_id: &str, outcome: &RunOutcome) {
+        let verdict = match outcome {
+            RunOutcome::Success { .. } => "success",
+            RunOutcome::Error { .. } => "error",
+            RunOutcome::Cancelled => "cancelled",
+        };
+        self.audit_logger.log(AuditEntry {
+            timestamp: chrono_now(),
+            session_id: session_id.to_string(),
+            tool: "__run_finish__".into(),
+            command: String::new(),
+            verdict: verdict.into(),
+            outcome: format!("run outcome: {verdict}"),
+        });
+    }
+
+    fn on_tool_failed(&self, session_id: &str, tool_call: &ToolCall, error: &str) {
+        // Record the failure in the resource tracker and audit log.
+        self.resource_tracker
+            .record(session_id, &tool_call.function.name);
+        self.audit_logger.log(AuditEntry {
+            timestamp: chrono_now(),
+            session_id: session_id.to_string(),
+            tool: tool_call.function.name.clone(),
+            command: tool_call.function.arguments.clone(),
+            verdict: "tool_failed".into(),
+            outcome: if error.len() > 100 {
+                let boundary = error.floor_char_boundary(100);
+                format!("{}...", &error[..boundary])
+            } else {
+                error.to_string()
+            },
+        });
     }
 }
 

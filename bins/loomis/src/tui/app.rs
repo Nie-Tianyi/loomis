@@ -121,6 +121,30 @@ impl App {
     /// events faster than the render frame rate, so the display stays current.
     pub fn apply_event(&mut self, event: AgentEvent) {
         match event {
+            // ── Run lifecycle ────────────────────────────────────────
+            AgentEvent::RunStarted { .. } => {
+                self.streaming = true;
+            }
+
+            AgentEvent::RunCompleted { .. } => {
+                self.streaming = false;
+            }
+
+            AgentEvent::RunFailed { error } => {
+                self.messages.push(ChatMessage::Error {
+                    content: error,
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+            }
+
+            AgentEvent::Cancelled => {
+                self.messages.push(ChatMessage::System {
+                    content: "[Cancelled]".into(),
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+            }
+
+            // ── LLM output ───────────────────────────────────────────
             AgentEvent::Token(text) => match self.messages.last_mut() {
                 Some(ChatMessage::Assistant { content, .. }) => {
                     content.push_str(&text);
@@ -145,6 +169,7 @@ impl App {
                 }
             },
 
+            // ── Tool lifecycle ───────────────────────────────────────
             AgentEvent::ToolCall {
                 id,
                 name,
@@ -171,8 +196,17 @@ impl App {
                         break;
                     }
                 }
-                // Tool results mean we're still between tool calls —
-                // keep `streaming = true` so the loop looks correct.
+            }
+
+            AgentEvent::ToolFailure { id, name: _, error } => {
+                for msg in self.messages.iter_mut().rev() {
+                    if let ChatMessage::ToolCall { id: mid, state, .. } = msg
+                        && *mid == id
+                    {
+                        *state = ToolCallState::Error(error);
+                        break;
+                    }
+                }
             }
 
             AgentEvent::ToolProgress { id, message, .. } => {
@@ -192,10 +226,7 @@ impl App {
                 }
             }
 
-            AgentEvent::Done => {
-                self.streaming = false;
-            }
-
+            // ── Intervention ─────────────────────────────────────────
             AgentEvent::NeedUserIntervene(req) => {
                 self.messages.push(ChatMessage::Intervene {
                     request_id: req.request_id,
@@ -207,6 +238,11 @@ impl App {
                     custom_text: None,
                     timestamp: ChatMessage::now_timestamp(),
                 });
+            }
+
+            // ── Terminal sentinel ────────────────────────────────────
+            AgentEvent::Done => {
+                self.streaming = false;
             }
         }
 
@@ -338,6 +374,7 @@ mod tests {
                 match state {
                     ToolCallState::Complete(out) => assert_eq!(out, "src/\nCargo.toml"),
                     ToolCallState::Running => panic!("expected Complete"),
+                    ToolCallState::Error(_) => panic!("expected Complete, got Error"),
                 }
             }
             other => panic!("expected ToolCall, got {other:?}"),
@@ -576,6 +613,7 @@ mod tests {
                 match state {
                     ToolCallState::Complete(output) => assert!(output.contains("test")),
                     ToolCallState::Running => panic!("expected Complete"),
+                    ToolCallState::Error(_) => panic!("expected Complete, got Error"),
                 }
             }
             other => panic!("expected ToolCall, got {other:?}"),

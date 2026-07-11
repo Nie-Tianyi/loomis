@@ -18,6 +18,7 @@ use tools::{Progress, ToolError};
 
 use crate::builder::AgentBuilder;
 use crate::context::EngineContext;
+use crate::hooks::AgentHook;
 
 // ── AgentError ────────────────────────────────────────────────────────────────
 
@@ -100,6 +101,28 @@ pub struct InterveneResponse {
     pub custom_text: Option<String>,
 }
 
+// ── RunOutcome ────────────────────────────────────────────────────────────────
+
+/// Describes how an agent run terminated.
+///
+/// Passed to [`AgentHook::on_run_finish`](crate::AgentHook::on_run_finish) so
+/// hooks can distinguish success, error, and cancellation.
+#[derive(Debug, Clone)]
+pub enum RunOutcome {
+    /// Agent completed successfully with the final answer text.
+    Success {
+        /// The final assistant text returned to the caller.
+        answer: String,
+    },
+    /// Agent terminated with an error (provider, tool, max-steps, etc.).
+    Error {
+        /// Human-readable error message from [`AgentError::to_string`].
+        error: String,
+    },
+    /// The user cancelled the run (e.g. Ctrl+C in the TUI).
+    Cancelled,
+}
+
 // ── AgentEvent ────────────────────────────────────────────────────────────────
 
 /// Streaming events produced during an agent run.
@@ -110,6 +133,13 @@ pub struct InterveneResponse {
 /// need to define their own custom event type.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
+    /// An agent run has started — the TUI should enter "streaming" mode.
+    RunStarted {
+        /// Opaque session identifier (currently `"default"`).
+        session_id: String,
+        /// The user input that triggered this run.
+        user_input: String,
+    },
     /// A text token from the LLM response stream.
     Token(String),
     /// A reasoning / chain-of-thought token.
@@ -124,11 +154,18 @@ pub enum AgentEvent {
         /// Who initiated this call — the LLM or the user.
         origin: CallOrigin,
     },
-    /// Result from a completed tool or user-command execution.
+    /// Result from a completed tool or user-command execution (success).
     ToolResult {
         id: String,
         name: String,
         output: String,
+    },
+    /// Tool execution failed — emitted instead of [`ToolResult`](AgentEvent::ToolResult)
+    /// when the tool returns an error or is not found.
+    ToolFailure {
+        id: String,
+        name: String,
+        error: String,
     },
     /// Real-time progress update from a running tool.
     ToolProgress {
@@ -140,7 +177,23 @@ pub enum AgentEvent {
     /// The application should render the request, collect an answer, and
     /// send back an [`InterveneResponse`] via the intervention channel.
     NeedUserIntervene(InterveneRequest),
-    /// The agent has finished the current run.
+    /// The agent completed the run successfully — carries the final answer.
+    /// Emitted before [`Done`](AgentEvent::Done).
+    RunCompleted {
+        /// The final assistant text returned by the model.
+        answer: String,
+    },
+    /// The agent run terminated with an error.
+    /// Emitted before [`Done`](AgentEvent::Done).
+    RunFailed {
+        /// Human-readable error message.
+        error: String,
+    },
+    /// The user cancelled the agent run (e.g. Ctrl+C).
+    /// Emitted before [`Done`](AgentEvent::Done).
+    Cancelled,
+    /// The agent has finished the current run — reset streaming state.
+    /// Always the final event, regardless of success, failure, or cancellation.
     Done,
 }
 
@@ -247,12 +300,42 @@ impl<C: LLMClient> Agent<C> {
             hook.on_run_start("default", user_input);
         }
 
+        // Notify the application that a run has started.
+        if let Some(ref tx) = tx {
+            let _ = tx.send(AgentEvent::RunStarted {
+                session_id: "default".into(),
+                user_input: user_input.to_string(),
+            });
+        }
+
         let mut steps = 0;
         loop {
             if steps >= self.ctx.max_steps {
-                return Err(AgentError::MaxStepsReached(self.ctx.max_steps));
+                let err = AgentError::MaxStepsReached(self.ctx.max_steps);
+                if let Some(ref tx) = tx {
+                    let _ = tx.send(AgentEvent::RunFailed {
+                        error: err.to_string(),
+                    });
+                }
+                for hook in &self.ctx.hooks {
+                    hook.on_run_finish(
+                        "default",
+                        &RunOutcome::Error {
+                            error: err.to_string(),
+                        },
+                    );
+                }
+                if let Some(ref tx) = tx {
+                    let _ = tx.send(AgentEvent::Done);
+                }
+                return Err(err);
             }
             steps += 1;
+
+            // Step-level hooks — called before on_llm_start each iteration.
+            for hook in &self.ctx.hooks {
+                hook.on_step_start("default", steps, self.ctx.max_steps);
+            }
 
             // Run pre-LLM hooks (compaction, etc.).
             for hook in &self.ctx.hooks {
@@ -269,13 +352,62 @@ impl<C: LLMClient> Agent<C> {
                 .with_stream(true)
                 .with_tools(tools);
 
-            let mut stream =
-                stream_with_retry(&self.ctx.llm, request.clone(), self.ctx.max_retries).await?;
+            let mut stream = match stream_with_retry(
+                &self.ctx.llm,
+                request.clone(),
+                self.ctx.max_retries,
+                &self.ctx.hooks,
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(AgentEvent::RunFailed {
+                            error: e.to_string(),
+                        });
+                    }
+                    for hook in &self.ctx.hooks {
+                        hook.on_run_finish(
+                            "default",
+                            &RunOutcome::Error {
+                                error: e.to_string(),
+                            },
+                        );
+                    }
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(AgentEvent::Done);
+                    }
+                    return Err(e);
+                }
+            };
 
             let mut acc = StreamAccumulator::new();
 
             while let Some(chunk_result) = stream.next().await {
-                let chunk = chunk_result?;
+                let chunk = match chunk_result {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let agent_err = AgentError::Provider(e);
+                        if let Some(ref tx) = tx {
+                            let _ = tx.send(AgentEvent::RunFailed {
+                                error: agent_err.to_string(),
+                            });
+                        }
+                        for hook in &self.ctx.hooks {
+                            hook.on_run_finish(
+                                "default",
+                                &RunOutcome::Error {
+                                    error: agent_err.to_string(),
+                                },
+                            );
+                        }
+                        if let Some(ref tx) = tx {
+                            let _ = tx.send(AgentEvent::Done);
+                        }
+                        return Err(agent_err);
+                    }
+                };
 
                 if let Some(ref tx) = tx {
                     emit_chunk_events(tx, &chunk, &mut acc);
@@ -292,6 +424,19 @@ impl<C: LLMClient> Agent<C> {
 
             if let Some(tool_calls) = &assistant_msg.tool_calls {
                 if tool_calls.is_empty() {
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(AgentEvent::RunCompleted {
+                            answer: assistant_msg.content.clone(),
+                        });
+                    }
+                    for hook in &self.ctx.hooks {
+                        hook.on_run_finish(
+                            "default",
+                            &RunOutcome::Success {
+                                answer: assistant_msg.content.clone(),
+                            },
+                        );
+                    }
                     if let Some(ref tx) = tx {
                         let _ = tx.send(AgentEvent::Done);
                     }
@@ -341,11 +486,12 @@ impl<C: LLMClient> Agent<C> {
                     }
 
                     // ── Pull from progress stream ────────────────────
-                    let observation = match self
+                    let tool_result = self
                         .ctx
                         .tools
-                        .execute_stream(&tc.function.name, &tc.function.arguments)
-                    {
+                        .execute_stream(&tc.function.name, &tc.function.arguments);
+
+                    let _observation = match tool_result {
                         Some(Ok(mut stream)) => {
                             let mut final_output = String::new();
                             while let Some(progress) = stream.next().await {
@@ -362,33 +508,78 @@ impl<C: LLMClient> Agent<C> {
                                     Progress::Done(output) => final_output = output,
                                 }
                             }
+                            // Success path: notify hooks, push to memory, emit ToolResult.
+                            for hook in &self.ctx.hooks {
+                                hook.after_tool_call("default", tc, &final_output);
+                            }
+                            {
+                                let mut mem = self.ctx.memory.write().unwrap();
+                                mem.push(Message::tool_result(&tc.id, &final_output));
+                            }
+                            if let Some(ref tx) = tx {
+                                let _ = tx.send(AgentEvent::ToolResult {
+                                    id: tc.id.clone(),
+                                    name: tc.function.name.clone(),
+                                    output: final_output.clone(),
+                                });
+                            }
                             final_output
                         }
-                        Some(Err(e)) => e.to_string(),
-                        None => format!("Tool not found: {}", tc.function.name),
+                        Some(Err(e)) => {
+                            let err_msg = e.to_string();
+                            for hook in &self.ctx.hooks {
+                                hook.on_tool_failed("default", tc, &err_msg);
+                            }
+                            {
+                                let mut mem = self.ctx.memory.write().unwrap();
+                                mem.push(Message::tool_result(&tc.id, &err_msg));
+                            }
+                            if let Some(ref tx) = tx {
+                                let _ = tx.send(AgentEvent::ToolFailure {
+                                    id: tc.id.clone(),
+                                    name: tc.function.name.clone(),
+                                    error: err_msg.clone(),
+                                });
+                            }
+                            err_msg
+                        }
+                        None => {
+                            let err_msg = format!("Tool not found: {}", tc.function.name);
+                            for hook in &self.ctx.hooks {
+                                hook.on_tool_failed("default", tc, &err_msg);
+                            }
+                            {
+                                let mut mem = self.ctx.memory.write().unwrap();
+                                mem.push(Message::tool_result(&tc.id, &err_msg));
+                            }
+                            if let Some(ref tx) = tx {
+                                let _ = tx.send(AgentEvent::ToolFailure {
+                                    id: tc.id.clone(),
+                                    name: tc.function.name.clone(),
+                                    error: err_msg.clone(),
+                                });
+                            }
+                            err_msg
+                        }
                     };
-
-                    for hook in &self.ctx.hooks {
-                        hook.after_tool_call("default", tc, &observation);
-                    }
-
-                    {
-                        let mut mem = self.ctx.memory.write().unwrap();
-                        mem.push(Message::tool_result(&tc.id, &observation));
-                    }
-
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(AgentEvent::ToolResult {
-                            id: tc.id.clone(),
-                            name: tc.function.name.clone(),
-                            output: observation,
-                        });
-                    }
                 }
             } else {
                 {
                     let mut mem = self.ctx.memory.write().unwrap();
                     mem.push(assistant_msg.clone());
+                }
+                if let Some(ref tx) = tx {
+                    let _ = tx.send(AgentEvent::RunCompleted {
+                        answer: assistant_msg.content.clone(),
+                    });
+                }
+                for hook in &self.ctx.hooks {
+                    hook.on_run_finish(
+                        "default",
+                        &RunOutcome::Success {
+                            answer: assistant_msg.content.clone(),
+                        },
+                    );
                 }
                 if let Some(ref tx) = tx {
                     let _ = tx.send(AgentEvent::Done);
@@ -407,12 +598,42 @@ impl<C: LLMClient> Agent<C> {
             hook.on_run_start("default", user_input);
         }
 
+        // Notify the application that a run has started.
+        if let Some(ref tx) = tx {
+            let _ = tx.send(AgentEvent::RunStarted {
+                session_id: "default".into(),
+                user_input: user_input.to_string(),
+            });
+        }
+
         let mut steps = 0;
         loop {
             if steps >= self.ctx.max_steps {
-                return Err(AgentError::MaxStepsReached(self.ctx.max_steps));
+                let err = AgentError::MaxStepsReached(self.ctx.max_steps);
+                if let Some(ref tx) = tx {
+                    let _ = tx.send(AgentEvent::RunFailed {
+                        error: err.to_string(),
+                    });
+                }
+                for hook in &self.ctx.hooks {
+                    hook.on_run_finish(
+                        "default",
+                        &RunOutcome::Error {
+                            error: err.to_string(),
+                        },
+                    );
+                }
+                if let Some(ref tx) = tx {
+                    let _ = tx.send(AgentEvent::Done);
+                }
+                return Err(err);
             }
             steps += 1;
+
+            // Step-level hooks — called before on_llm_start each iteration.
+            for hook in &self.ctx.hooks {
+                hook.on_step_start("default", steps, self.ctx.max_steps);
+            }
 
             // Run pre-LLM hooks (compaction, etc.).
             for hook in &self.ctx.hooks {
@@ -429,14 +650,59 @@ impl<C: LLMClient> Agent<C> {
                 .with_stream(false)
                 .with_tools(tools);
 
-            let response =
-                generate_with_retry(&self.ctx.llm, request, self.ctx.max_retries).await?;
+            let response = match generate_with_retry(
+                &self.ctx.llm,
+                request,
+                self.ctx.max_retries,
+                &self.ctx.hooks,
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(AgentEvent::RunFailed {
+                            error: e.to_string(),
+                        });
+                    }
+                    for hook in &self.ctx.hooks {
+                        hook.on_run_finish(
+                            "default",
+                            &RunOutcome::Error {
+                                error: e.to_string(),
+                            },
+                        );
+                    }
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(AgentEvent::Done);
+                    }
+                    return Err(e);
+                }
+            };
 
-            let choice = response
-                .choices
-                .into_iter()
-                .next()
-                .ok_or(AgentError::NoChoices)?;
+            let choice = match response.choices.into_iter().next() {
+                Some(c) => c,
+                None => {
+                    let err = AgentError::NoChoices;
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(AgentEvent::RunFailed {
+                            error: err.to_string(),
+                        });
+                    }
+                    for hook in &self.ctx.hooks {
+                        hook.on_run_finish(
+                            "default",
+                            &RunOutcome::Error {
+                                error: err.to_string(),
+                            },
+                        );
+                    }
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(AgentEvent::Done);
+                    }
+                    return Err(err);
+                }
+            };
             let content = choice.message.content.unwrap_or_default();
             let tool_calls = choice.message.tool_calls;
             let reasoning = choice.message.reasoning_content;
@@ -464,6 +730,19 @@ impl<C: LLMClient> Agent<C> {
 
             if let Some(tool_calls) = tool_calls {
                 if tool_calls.is_empty() {
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(AgentEvent::RunCompleted {
+                            answer: content.clone(),
+                        });
+                    }
+                    for hook in &self.ctx.hooks {
+                        hook.on_run_finish(
+                            "default",
+                            &RunOutcome::Success {
+                                answer: content.clone(),
+                            },
+                        );
+                    }
                     if let Some(ref tx) = tx {
                         let _ = tx.send(AgentEvent::Done);
                     }
@@ -498,11 +777,12 @@ impl<C: LLMClient> Agent<C> {
                     }
 
                     // ── Pull from progress stream ────────────────────
-                    let observation = match self
+                    let tool_result = self
                         .ctx
                         .tools
-                        .execute_stream(&tc.function.name, &tc.function.arguments)
-                    {
+                        .execute_stream(&tc.function.name, &tc.function.arguments);
+
+                    match tool_result {
                         Some(Ok(mut stream)) => {
                             let mut final_output = String::new();
                             while let Some(progress) = stream.next().await {
@@ -519,22 +799,64 @@ impl<C: LLMClient> Agent<C> {
                                     Progress::Done(output) => final_output = output,
                                 }
                             }
-                            final_output
+                            for hook in &self.ctx.hooks {
+                                hook.after_tool_call("default", tc, &final_output);
+                            }
+                            {
+                                let mut mem = self.ctx.memory.write().unwrap();
+                                mem.push(Message::tool_result(&tc.id, &final_output));
+                            }
                         }
-                        Some(Err(e)) => e.to_string(),
-                        None => format!("Tool not found: {}", tc.function.name),
-                    };
-
-                    for hook in &self.ctx.hooks {
-                        hook.after_tool_call("default", tc, &observation);
-                    }
-
-                    {
-                        let mut mem = self.ctx.memory.write().unwrap();
-                        mem.push(Message::tool_result(&tc.id, &observation));
+                        Some(Err(e)) => {
+                            let err_msg = e.to_string();
+                            for hook in &self.ctx.hooks {
+                                hook.on_tool_failed("default", tc, &err_msg);
+                            }
+                            {
+                                let mut mem = self.ctx.memory.write().unwrap();
+                                mem.push(Message::tool_result(&tc.id, &err_msg));
+                            }
+                            if let Some(ref tx) = tx {
+                                let _ = tx.send(AgentEvent::ToolFailure {
+                                    id: tc.id.clone(),
+                                    name: tc.function.name.clone(),
+                                    error: err_msg,
+                                });
+                            }
+                        }
+                        None => {
+                            let err_msg = format!("Tool not found: {}", tc.function.name);
+                            for hook in &self.ctx.hooks {
+                                hook.on_tool_failed("default", tc, &err_msg);
+                            }
+                            {
+                                let mut mem = self.ctx.memory.write().unwrap();
+                                mem.push(Message::tool_result(&tc.id, &err_msg));
+                            }
+                            if let Some(ref tx) = tx {
+                                let _ = tx.send(AgentEvent::ToolFailure {
+                                    id: tc.id.clone(),
+                                    name: tc.function.name.clone(),
+                                    error: err_msg,
+                                });
+                            }
+                        }
                     }
                 }
             } else {
+                if let Some(ref tx) = tx {
+                    let _ = tx.send(AgentEvent::RunCompleted {
+                        answer: content.clone(),
+                    });
+                }
+                for hook in &self.ctx.hooks {
+                    hook.on_run_finish(
+                        "default",
+                        &RunOutcome::Success {
+                            answer: content.clone(),
+                        },
+                    );
+                }
                 if let Some(ref tx) = tx {
                     let _ = tx.send(AgentEvent::Done);
                 }
@@ -658,6 +980,7 @@ async fn generate_with_retry(
     client: &impl LLMClient,
     request: CompletionRequest,
     max_retries: usize,
+    hooks: &[Box<dyn AgentHook>],
 ) -> Result<CompletionResponse, AgentError> {
     let mut last_err = None;
     for attempt in 0..=max_retries {
@@ -668,6 +991,10 @@ async fn generate_with_retry(
         match client.generate(request.clone()).await {
             Ok(resp) => return Ok(resp),
             Err(e) => {
+                let will_retry = is_retryable(&e) && attempt < max_retries;
+                for hook in hooks {
+                    hook.on_llm_error("default", &e, attempt, will_retry);
+                }
                 if !is_retryable(&e) {
                     return Err(AgentError::Provider(e));
                 }
@@ -682,6 +1009,7 @@ async fn stream_with_retry(
     client: &impl LLMClient,
     request: CompletionRequest,
     max_retries: usize,
+    hooks: &[Box<dyn AgentHook>],
 ) -> Result<futures_util::stream::BoxStream<'static, Result<StreamChunk, ProviderError>>, AgentError>
 {
     let mut last_err = None;
@@ -693,6 +1021,10 @@ async fn stream_with_retry(
         match client.stream(request.clone()).await {
             Ok(stream) => return Ok(stream),
             Err(e) => {
+                let will_retry = is_retryable(&e) && attempt < max_retries;
+                for hook in hooks {
+                    hook.on_llm_error("default", &e, attempt, will_retry);
+                }
                 if !is_retryable(&e) {
                     return Err(AgentError::Provider(e));
                 }

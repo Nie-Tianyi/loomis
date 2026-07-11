@@ -32,7 +32,9 @@ mod builder;
 mod context;
 mod hooks;
 
-pub use agent::{Agent, AgentError, AgentEvent, CallOrigin, InterveneRequest, InterveneResponse};
+pub use agent::{
+    Agent, AgentError, AgentEvent, CallOrigin, InterveneRequest, InterveneResponse, RunOutcome,
+};
 pub use builder::AgentBuilder;
 pub use context::{EngineContext, EngineContextBuilder};
 pub use hooks::AgentHook;

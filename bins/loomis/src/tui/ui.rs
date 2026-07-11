@@ -370,6 +370,32 @@ fn message_to_lines(msg: &ChatMessage, area_width: u16) -> Vec<Line<'_>> {
                         }
                     }
                 }
+
+                ToolCallState::Error(error) => {
+                    // Header: ✗ + tool name — red.
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{timestamp} "), ts_style),
+                        Span::styled(
+                            "✗ ",
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            name.as_str(),
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                    // Error message — red, dimmed.
+                    let preview = truncate_output(error, area_width);
+                    if !preview.is_empty() {
+                        lines.push(Line::from(vec![
+                            Span::raw("       "),
+                            Span::styled(
+                                preview,
+                                Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
+                            ),
+                        ]));
+                    }
+                }
             }
 
             lines
@@ -988,6 +1014,9 @@ fn estimate_lines(msg: &ChatMessage, width: u16) -> usize {
                     } else {
                         format!("  ✓ {name} → {output}")
                     }
+                }
+                ToolCallState::Error(error) => {
+                    format!("  ✗ {name} → {error}")
                 }
             }
         }

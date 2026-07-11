@@ -238,11 +238,11 @@ async fn agent_handler(
 
                     match result {
                         Ok(_content) => {
-                            // Agent sends Done internally on success.
+                            // Agent loop already emitted RunCompleted + Done on success.
                         }
-                        Err(e) => {
-                            let _ = tx.send(AgentEvent::Token(format!("\n✗ Error: {e}\n")));
-                            let _ = tx.send(AgentEvent::Done);
+                        Err(_e) => {
+                            // Agent loop already emitted RunFailed + Done on error.
+                            // Nothing extra needed — the TUI already received the events.
                         }
                     }
                 });
@@ -253,10 +253,11 @@ async fn agent_handler(
             TuiCommand::CancelGeneration => {
                 if let Some(h) = current_run.take() {
                     h.abort();
+                    // The agent task is killed immediately — no hooks can run.
+                    // Emit cancellation events so the TUI shows proper feedback.
+                    let _ = agent_tx.send(AgentEvent::Cancelled);
+                    let _ = agent_tx.send(AgentEvent::Done);
                 }
-                // Send cancellation notice to the TUI.
-                let _ = agent_tx.send(AgentEvent::Token("\n[Cancelled]\n".to_string()));
-                let _ = agent_tx.send(AgentEvent::Done);
             }
 
             TuiCommand::ClearConversation => {
