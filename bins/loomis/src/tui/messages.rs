@@ -130,11 +130,12 @@ pub fn truncate_for_display(text: &str, max_len: usize) -> String {
     format!("{}...", &text[..boundary])
 }
 
-/// Returns `true` if `name` is a valid thread name (alphanumeric,
-/// hyphens, underscores, no whitespace or special chars).
+/// Returns `true` if `name` is a valid thread name.
+///
+/// Delegates to [`memory::sanitize_filename`] for the canonical check, so
+/// any name that passes validation will be preserved verbatim by the
+/// persistence layer.  Control characters and filesystem-illegal characters
+/// (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`) are rejected.
 pub fn is_valid_thread_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    !name.is_empty() && name == memory::sanitize_filename(name)
 }

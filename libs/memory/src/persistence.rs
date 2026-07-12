@@ -73,6 +73,7 @@ pub fn save_conversation(
     memory: &Memory,
     config: &PersistenceConfig,
 ) -> io::Result<()> {
+    let name = sanitize_filename(name);
     let dir = workspace_root.join(&config.threads_dir);
     fs::create_dir_all(&dir)?;
 
@@ -96,6 +97,7 @@ pub fn load_conversation(
     workspace_root: &Path,
     config: &PersistenceConfig,
 ) -> io::Result<Memory> {
+    let name = sanitize_filename(name);
     let path = workspace_root
         .join(&config.threads_dir)
         .join(format!("{name}.json"));
@@ -181,42 +183,93 @@ pub fn default_thread_name(workspace_root: &Path, config: &PersistenceConfig) ->
         .unwrap_or_else(|| config.default_thread_name.clone())
 }
 
-/// Maximum length of the first-message snippet used for thread name generation.
-const MAX_THREAD_NAME_CHARS: usize = 60;
+/// Maximum length of a thread name (in bytes). Must leave headroom for the
+/// directory prefix, `.json` extension, and Windows MAX_PATH (260) limits.
+const MAX_THREAD_NAME_CHARS: usize = 120;
 
-pub fn thread_name_from_message(first_message: &str) -> String {
-    let end = first_message.floor_char_boundary(MAX_THREAD_NAME_CHARS.min(first_message.len()));
-    let snippet = &first_message[..end];
+/// Windows reserved DOS device names. If a sanitized filename matches one of
+/// these (case-insensitive), an underscore is appended to avoid filesystem issues.
+const RESERVED_DOS_NAMES: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
 
-    let mut slug = String::with_capacity(snippet.len());
+/// Transform any string into a filesystem-safe filename.
+///
+/// Preserves Unicode characters (CJK, accented Latin, etc.) and only replaces
+/// characters that are illegal in filenames on Windows / macOS / Linux:
+///
+/// - Control characters (0x00–0x1F) are **stripped**.
+/// - `/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|` are **replaced** with `_`.
+/// - Everything else (letters, digits, CJK, spaces, most punctuation) passes through.
+///
+/// Additionally:
+/// - The result is truncated to [`MAX_THREAD_NAME_CHARS`] at a `char` boundary.
+/// - Consecutive `_` and spaces are collapsed into a single `_`.
+/// - Leading / trailing `.`, ` `, and `_` are trimmed.
+/// - Windows reserved DOS names (`CON`, `PRN`, …) get a trailing `_` appended.
+/// - If the result is empty, a timestamp-based fallback is returned.
+///
+/// This function is idempotent: applying it to its own output is a no-op.
+pub fn sanitize_filename(name: &str) -> String {
+    // 1. Truncate to MAX_THREAD_NAME_CHARS at a char boundary.
+    let end = name.floor_char_boundary(MAX_THREAD_NAME_CHARS.min(name.len()));
+    let snippet = &name[..end];
+
+    // 2. Map characters: keep Unicode, replace illegal chars, strip control chars.
+    let mut mapped = String::with_capacity(snippet.len());
     for ch in snippet.chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
+        if ch.is_control() {
+            // strip silently
+            continue;
+        } else if matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+            mapped.push('_');
         } else {
-            slug.push('-');
+            mapped.push(ch);
         }
     }
 
-    let mut collapsed = String::with_capacity(slug.len());
-    let mut last_was_hyphen = false;
-    for ch in slug.chars() {
-        if ch == '-' {
-            if !last_was_hyphen {
-                collapsed.push('-');
+    // 3. Collapse consecutive '_' (from illegal-char replacement) into a single '_'.
+    //    Spaces are legal on all major filesystems and are preserved as-is.
+    let mut collapsed = String::with_capacity(mapped.len());
+    let mut last_was_underscore = false;
+    for ch in mapped.chars() {
+        if ch == '_' {
+            if !last_was_underscore {
+                collapsed.push('_');
             }
-            last_was_hyphen = true;
+            last_was_underscore = true;
         } else {
             collapsed.push(ch);
-            last_was_hyphen = false;
+            last_was_underscore = false;
         }
     }
 
-    let trimmed = collapsed.trim_matches('-');
-    if trimmed.is_empty() {
-        format!("conversation-{}", iso8601_now().replace([':', 'T'], "-"))
+    // 4. Trim leading / trailing dots, spaces, underscores.
+    let trimmed = collapsed.trim_matches(&['.', ' ', '_'][..]);
+
+    // 5. Guard against reserved DOS names (case-insensitive).
+    let lower = trimmed.to_ascii_lowercase();
+    let guarded = if RESERVED_DOS_NAMES.contains(&lower.as_str()) {
+        format!("{trimmed}_")
     } else {
         trimmed.to_string()
+    };
+
+    // 6. Fallback if empty after all processing.
+    if guarded.is_empty() {
+        format!("conversation-{}", iso8601_now().replace([':', 'T'], "-"))
+    } else {
+        guarded
     }
+}
+
+/// Generate a filesystem-safe thread name from the user's first message.
+///
+/// This is a convenience wrapper around [`sanitize_filename`] for the most
+/// common use-case: turning a raw user query into a stable thread name.
+pub fn thread_name_from_message(first_message: &str) -> String {
+    sanitize_filename(first_message)
 }
 
 // ── Internal Helpers ───────────────────────────────────────────────────────────
@@ -374,21 +427,109 @@ mod tests {
         );
     }
 
+    // ── sanitize_filename / thread_name_from_message ───────────────────────
+
     #[test]
-    fn test_generate_thread_name_english() {
+    fn test_thread_name_english_preserved() {
         let name = thread_name_from_message("Help me research quantum computing");
-        assert_eq!(name, "help-me-research-quantum-computing");
+        assert_eq!(name, "Help me research quantum computing");
     }
 
     #[test]
-    fn test_generate_thread_name_collapses_hyphens() {
-        let name = thread_name_from_message("Hello!!! World???");
-        assert_eq!(name, "hello-world");
-    }
-
-    #[test]
-    fn test_generate_thread_name_chinese_fallback() {
+    fn test_thread_name_chinese_preserved() {
         let name = thread_name_from_message("你好世界");
-        assert!(name.starts_with("conversation-"));
+        assert_eq!(name, "你好世界");
+    }
+
+    #[test]
+    fn test_thread_name_mixed_cjk_ascii() {
+        let name = thread_name_from_message("帮我写一个Python脚本");
+        assert_eq!(name, "帮我写一个Python脚本");
+    }
+
+    #[test]
+    fn test_thread_name_illegal_chars_replaced() {
+        let name = thread_name_from_message("Hello? foo:bar*<baz>");
+        assert_eq!(name, "Hello_ foo_bar_baz");
+    }
+
+    #[test]
+    fn test_thread_name_all_illegal_fallback() {
+        let name = thread_name_from_message("***");
+        assert!(name.starts_with("conversation-"), "got: {name}");
+    }
+
+    #[test]
+    fn test_thread_name_control_chars_stripped() {
+        let name = thread_name_from_message("hello\x00\x01world");
+        assert_eq!(name, "helloworld");
+    }
+
+    #[test]
+    fn test_thread_name_max_length_truncation() {
+        let long = "a".repeat(200);
+        let name = thread_name_from_message(&long);
+        // Should be ≤120 chars, and must be valid UTF-8 (it is — all 'a's).
+        assert!(name.len() <= 120);
+        assert_eq!(name, "a".repeat(120));
+    }
+
+    #[test]
+    fn test_thread_name_leading_trailing_dot_trimmed() {
+        let name = thread_name_from_message(".hidden.");
+        assert_eq!(name, "hidden");
+    }
+
+    #[test]
+    fn test_thread_name_trailing_dot_stripped() {
+        let name = thread_name_from_message("name.");
+        assert_eq!(name, "name");
+    }
+
+    #[test]
+    fn test_thread_name_reserved_dos_name() {
+        let name = thread_name_from_message("con");
+        assert_eq!(name, "con_");
+    }
+
+    #[test]
+    fn test_thread_name_reserved_dos_name_case_insensitive() {
+        let name = thread_name_from_message("CON");
+        assert_eq!(name, "CON_");
+    }
+
+    #[test]
+    fn test_thread_name_empty_fallback() {
+        let name = thread_name_from_message("");
+        assert!(name.starts_with("conversation-"), "got: {name}");
+    }
+
+    #[test]
+    fn test_sanitize_filename_idempotent() {
+        let inputs = [
+            "Hello world",
+            "你好世界",
+            "foo/bar:baz*qux?",
+            ".hidden.",
+            "con",
+            "normal-name",
+        ];
+        for input in &inputs {
+            let once = sanitize_filename(input);
+            let twice = sanitize_filename(&once);
+            assert_eq!(once, twice, "not idempotent for input: {input}");
+        }
+    }
+
+    #[test]
+    fn test_sanitize_filename_spaces_preserved() {
+        let name = sanitize_filename("hello   world");
+        assert_eq!(name, "hello   world");
+    }
+
+    #[test]
+    fn test_sanitize_filename_underscores_collapsed() {
+        let name = sanitize_filename("a__b");
+        assert_eq!(name, "a_b");
     }
 }

@@ -337,7 +337,7 @@ impl App {
             let name = name.trim();
             if name.is_empty() || !is_valid_thread_name(name) {
                 self.messages.push(ChatMessage::System {
-                    content: "Usage: /save <name>  —  name must use only letters, digits, hyphens, and underscores.".into(),
+                    content: "Usage: /save <name>  —  name must not contain control characters or any of: / \\ : * ? \" < > |".into(),
                     timestamp: ChatMessage::now_timestamp(),
                 });
                 return Some(None);
