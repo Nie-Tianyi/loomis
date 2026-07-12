@@ -54,8 +54,15 @@ impl App {
                 // ── Inject mode: agent is running ──────────────────
                 if self.streaming {
                     {
-                        let mut mem = self.memory.write().expect("memory lock poisoned");
-                        mem.push(Message::new(Role::User, input.clone()));
+                        // Queue hint in pending_hints instead of pushing
+                        // directly to memory — avoids inserting a user
+                        // message between an assistant tool_calls message
+                        // and its tool results (API contract violation).
+                        let mut pending = self
+                            .pending_hints
+                            .lock()
+                            .expect("pending hints lock poisoned");
+                        pending.push(Message::new(Role::User, input.clone()));
                     }
                     self.messages.push(ChatMessage::User {
                         content: input,

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use deepseek::DeepSeekClient;
 use engine::{Agent, EngineContext};
 use hooks;
-use memory::{Memory, SharedMemory};
+use memory::{Memory, PendingHints, SharedMemory};
 use provider::{Message, Role};
 use subagent::{self, SubagentConfig};
 use tokio::sync::mpsc;
@@ -98,6 +98,9 @@ pub struct AgentKit {
     /// Routes intervention responses to the correct requester
     /// (SandboxHook, AskUserQuestionTool, …).
     pub response_router: Arc<ResponseRouter>,
+    /// Queue for user hints injected during active agent runs.
+    /// Drained by the agent loop before each LLM call.
+    pub pending_hints: PendingHints,
 }
 
 /// Build a fully-wired coding agent with all channels and hooks.
@@ -124,6 +127,12 @@ pub fn build_coding_agent(
     // ── Shared intervention response router ───────────────────
     // Must be created before tools — AskUserQuestionTool needs it.
     let response_router = Arc::new(ResponseRouter::new());
+
+    // ── Pending hints queue ────────────────────────────────────
+    // Decouples user hint injection from memory mutation so hints
+    // never land between an assistant tool_calls message and its
+    // tool results (which violates the provider API contract).
+    let pending_hints = PendingHints::default();
 
     // ── Tool registry ────────────────────────────────────────
     let mut registry = ToolRegistry::new();
@@ -217,6 +226,7 @@ pub fn build_coding_agent(
         .max_steps(50)
         .max_retries(3)
         .streaming(true)
+        .pending_hints(pending_hints.clone())
         .build();
 
     let agent = Agent::new(ctx);
@@ -235,5 +245,6 @@ pub fn build_coding_agent(
         agent_rx,
         agent_tx,
         response_router,
+        pending_hints,
     }
 }

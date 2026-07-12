@@ -17,6 +17,15 @@ pub struct Memory {
 
 pub type SharedMemory = Arc<RwLock<Memory>>;
 
+/// Queue for user hints injected during an active agent run.
+///
+/// Hints are drained into the conversation at the start of each
+/// ReAct loop iteration to avoid breaking the API message-ordering
+/// constraint: an assistant message with `tool_calls` must be
+/// immediately followed by tool-result messages for every
+/// `tool_call_id`.  No other role message may appear between them.
+pub type PendingHints = Arc<std::sync::Mutex<Vec<Message>>>;
+
 // ── Builder ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]

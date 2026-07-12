@@ -50,6 +50,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         agent_rx,
         agent_tx,
         response_router,
+        pending_hints,
     } = kit;
 
     // ── Create command channel ────────────────────────────────────
@@ -86,7 +87,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
     }));
 
     // ── App state ────────────────────────────────────────────────────
-    let mut app = App::new(model, memory, tool_names, workspace_root);
+    let mut app = App::new(model, memory, tool_names, workspace_root, pending_hints);
 
     // ── Event loop ───────────────────────────────────────────────────
     let result = run_event_loop(&mut terminal, &mut app, agent_rx, &cmd_tx);

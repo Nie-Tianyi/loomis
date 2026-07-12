@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use engine::AgentEvent;
-use memory::SharedMemory;
+use memory::{PendingHints, SharedMemory};
 
 use super::messages::{ChatMessage, ToolCallState};
 
@@ -52,6 +52,9 @@ pub struct App {
     pub tool_names: Vec<String>,
     /// Workspace root directory for `!` shell commands.
     pub workspace_root: PathBuf,
+    /// Queue for user hints injected during active agent runs.
+    /// Drained by the agent loop before each LLM call.
+    pub pending_hints: PendingHints,
 
     // ── Input history ──
     pub history: Vec<String>,
@@ -91,6 +94,7 @@ impl App {
         memory: SharedMemory,
         tool_names: Vec<String>,
         workspace_root: PathBuf,
+        pending_hints: PendingHints,
     ) -> Self {
         let model = model.into();
         Self {
@@ -108,6 +112,7 @@ impl App {
             memory,
             tool_names,
             workspace_root,
+            pending_hints,
             history: Vec::new(),
             history_index: None,
             draft_input: String::new(),
@@ -297,11 +302,13 @@ mod tests {
 
     fn make_app() -> App {
         let memory = std::sync::Arc::new(std::sync::RwLock::new(memory::Memory::new()));
+        let pending_hints = PendingHints::default();
         App::new(
             "test-model",
             memory,
             vec!["echo".into(), "ls".into()],
             PathBuf::from("."),
+            pending_hints,
         )
     }
 

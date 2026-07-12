@@ -669,6 +669,26 @@ impl<C: LLMClient> Agent<C> {
             }
             steps += 1;
 
+            // ── Drain any user hints queued during tool execution. ──
+            // Must happen here — after the previous step's tool results
+            // are committed to memory, but before building the context
+            // vector for the next LLM call.  Inserting a user message
+            // between an assistant tool_calls message and its tool
+            // results violates the provider API contract.
+            {
+                let mut pending = self
+                    .ctx
+                    .pending_hints
+                    .lock()
+                    .expect("pending hints lock poisoned");
+                if !pending.is_empty() {
+                    let mut mem = self.ctx.memory.write().expect("memory lock poisoned");
+                    for msg in pending.drain(..) {
+                        mem.push(msg);
+                    }
+                }
+            }
+
             // ── Build context: run on_step_start + on_llm_start hooks, then
             //    snapshot the full conversation history from memory.  The
             //    context includes the system prompt, all prior user/assistant
@@ -776,6 +796,21 @@ impl<C: LLMClient> Agent<C> {
                 return self.fail_run(AgentError::MaxStepsReached(self.ctx.max_steps), &tx);
             }
             steps += 1;
+
+            // ── Drain any user hints queued during tool execution. ──
+            {
+                let mut pending = self
+                    .ctx
+                    .pending_hints
+                    .lock()
+                    .expect("pending hints lock poisoned");
+                if !pending.is_empty() {
+                    let mut mem = self.ctx.memory.write().expect("memory lock poisoned");
+                    for msg in pending.drain(..) {
+                        mem.push(msg);
+                    }
+                }
+            }
 
             let messages = self.prepare_llm_call(steps);
             let tools = self.ctx.tools.to_tool_defs();

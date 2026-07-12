@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use memory::SharedMemory;
+use memory::{PendingHints, SharedMemory};
 use provider::LLMClient;
 use tools::ToolRegistry;
 
@@ -34,6 +34,9 @@ pub struct EngineContext<C: LLMClient> {
     pub max_retries: usize,
     /// Whether to use SSE streaming.
     pub streaming: bool,
+    /// Queue for user hints injected during active runs.
+    /// Drained at the start of each ReAct loop iteration.
+    pub pending_hints: PendingHints,
 }
 
 impl<C: LLMClient> EngineContext<C> {
@@ -73,6 +76,7 @@ impl<C: LLMClient> EngineContext<C> {
             max_steps: 50,
             max_retries: 3,
             streaming: true,
+            pending_hints: PendingHints::default(),
         }
     }
 }
@@ -92,6 +96,7 @@ pub struct EngineContextBuilder<C: LLMClient> {
     pub(crate) max_steps: usize,
     pub(crate) max_retries: usize,
     pub(crate) streaming: bool,
+    pub(crate) pending_hints: PendingHints,
 }
 
 impl<C: LLMClient> EngineContextBuilder<C> {
@@ -125,6 +130,17 @@ impl<C: LLMClient> EngineContextBuilder<C> {
         self
     }
 
+    /// Provide a shared pending-hints queue for user messages injected
+    /// during active agent runs (default: empty queue).
+    ///
+    /// Hints are drained into memory at the start of each ReAct loop
+    /// iteration — after tool results from the previous step are
+    /// committed, before building context for the next LLM call.
+    pub fn pending_hints(mut self, pending_hints: PendingHints) -> Self {
+        self.pending_hints = pending_hints;
+        self
+    }
+
     /// Consume the builder and produce an [`EngineContext`].
     pub fn build(self) -> EngineContext<C> {
         EngineContext {
@@ -136,6 +152,7 @@ impl<C: LLMClient> EngineContextBuilder<C> {
             max_steps: self.max_steps,
             max_retries: self.max_retries,
             streaming: self.streaming,
+            pending_hints: self.pending_hints,
         }
     }
 }
