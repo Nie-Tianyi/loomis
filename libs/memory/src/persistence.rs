@@ -1,7 +1,7 @@
 //! # Conversation Persistence
 //!
-//! Saves and loads conversation threads to `.loomis/threads/` under the
-//! workspace root.
+//! Saves and loads conversation threads under the workspace root using
+//! [`PersistenceConfig`] to determine paths.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,11 +13,37 @@ use crate::memory::Memory;
 use std::path::Path;
 use std::{fs, io};
 
-// ── Constants ──────────────────────────────────────────────────────────────────
+// ── PersistenceConfig ──────────────────────────────────────────────────────────
 
-const THREADS_DIR: &str = ".loomis/threads";
-const CURRENT_THREAD_FILE: &str = ".loomis/current";
-const DEFAULT_THREAD_NAME: &str = "autosave";
+/// Configuration for conversation persistence — storage layout and naming.
+///
+/// The [`Default`] impl provides generic values; applications should override
+/// with their own paths (e.g. `.loomis/threads` for the Loomis binary).
+#[derive(Debug, Clone)]
+pub struct PersistenceConfig {
+    /// Subdirectory under `workspace_root` where thread files are stored.
+    pub threads_dir: String,
+    /// Path (relative to `workspace_root`) for the current-thread marker file.
+    pub current_thread_file: String,
+    /// Fallback thread name when no current thread is recorded.
+    pub default_thread_name: String,
+    /// Title used in the markdown export header.
+    pub markdown_title: String,
+}
+
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self {
+            threads_dir: ".agent/threads".into(),
+            current_thread_file: ".agent/current".into(),
+            default_thread_name: "autosave".into(),
+            markdown_title: "Agent Conversation".into(),
+        }
+    }
+}
+
+// ── Framework-level constants ──────────────────────────────────────────────────
+
 const CURRENT_VERSION: u32 = 1;
 
 // ── ThreadInfo ─────────────────────────────────────────────────────────────────
@@ -41,8 +67,13 @@ struct ConversationFile {
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
-pub fn save_conversation(name: &str, workspace_root: &Path, memory: &Memory) -> io::Result<()> {
-    let dir = workspace_root.join(THREADS_DIR);
+pub fn save_conversation(
+    name: &str,
+    workspace_root: &Path,
+    memory: &Memory,
+    config: &PersistenceConfig,
+) -> io::Result<()> {
+    let dir = workspace_root.join(&config.threads_dir);
     fs::create_dir_all(&dir)?;
 
     let cf = ConversationFile {
@@ -54,15 +85,19 @@ pub fn save_conversation(name: &str, workspace_root: &Path, memory: &Memory) -> 
     let json = serde_json::to_string_pretty(&cf).map_err(io::Error::other)?;
     fs::write(dir.join(format!("{name}.json")), &json)?;
 
-    let md = format_conversation_md(&cf);
+    let md = format_conversation_md(&cf, config);
     fs::write(dir.join(format!("{name}.md")), &md)?;
 
     Ok(())
 }
 
-pub fn load_conversation(name: &str, workspace_root: &Path) -> io::Result<Memory> {
+pub fn load_conversation(
+    name: &str,
+    workspace_root: &Path,
+    config: &PersistenceConfig,
+) -> io::Result<Memory> {
     let path = workspace_root
-        .join(THREADS_DIR)
+        .join(&config.threads_dir)
         .join(format!("{name}.json"));
     let json = fs::read_to_string(&path)?;
     let cf: ConversationFile =
@@ -71,8 +106,11 @@ pub fn load_conversation(name: &str, workspace_root: &Path) -> io::Result<Memory
     Ok(Memory::from(cf.messages))
 }
 
-pub fn list_threads(workspace_root: &Path) -> io::Result<Vec<ThreadInfo>> {
-    let dir = workspace_root.join(THREADS_DIR);
+pub fn list_threads(
+    workspace_root: &Path,
+    config: &PersistenceConfig,
+) -> io::Result<Vec<ThreadInfo>> {
+    let dir = workspace_root.join(&config.threads_dir);
 
     if !dir.exists() {
         return Ok(Vec::new());
@@ -116,23 +154,31 @@ pub fn list_threads(workspace_root: &Path) -> io::Result<Vec<ThreadInfo>> {
     Ok(threads)
 }
 
-pub fn read_current_thread_name(workspace_root: &Path) -> Option<String> {
-    let path = workspace_root.join(CURRENT_THREAD_FILE);
+pub fn read_current_thread_name(
+    workspace_root: &Path,
+    config: &PersistenceConfig,
+) -> Option<String> {
+    let path = workspace_root.join(&config.current_thread_file);
     let content = fs::read_to_string(&path).ok()?;
     let name = content.trim().to_string();
     if name.is_empty() { None } else { Some(name) }
 }
 
-pub fn write_current_thread_name(name: &str, workspace_root: &Path) -> io::Result<()> {
-    let path = workspace_root.join(CURRENT_THREAD_FILE);
+pub fn write_current_thread_name(
+    name: &str,
+    workspace_root: &Path,
+    config: &PersistenceConfig,
+) -> io::Result<()> {
+    let path = workspace_root.join(&config.current_thread_file);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(&path, name)
 }
 
-pub fn default_thread_name(workspace_root: &Path) -> String {
-    read_current_thread_name(workspace_root).unwrap_or_else(|| DEFAULT_THREAD_NAME.to_string())
+pub fn default_thread_name(workspace_root: &Path, config: &PersistenceConfig) -> String {
+    read_current_thread_name(workspace_root, config)
+        .unwrap_or_else(|| config.default_thread_name.clone())
 }
 
 /// Maximum length of the first-message snippet used for thread name generation.
@@ -223,9 +269,9 @@ const fn is_leap_year(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
-fn format_conversation_md(cf: &ConversationFile) -> String {
+fn format_conversation_md(cf: &ConversationFile, config: &PersistenceConfig) -> String {
     let mut md = String::new();
-    md.push_str("# Loomis Conversation\n\n");
+    md.push_str(&format!("# {}\n\n", config.markdown_title));
     md.push_str(&format!("- **Saved**: {}\n", cf.saved_at));
     md.push_str(&format!("- **Version**: {}\n", cf.version));
     md.push_str(&format!("- **Messages**: {}\n", cf.messages.len()));
@@ -275,20 +321,33 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn test_config() -> PersistenceConfig {
+        PersistenceConfig {
+            threads_dir: ".loomis/threads".into(),
+            current_thread_file: ".loomis/current".into(),
+            default_thread_name: "autosave".into(),
+            markdown_title: "Loomis Conversation".into(),
+        }
+    }
+
     #[test]
     fn test_round_trip_save_and_load() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
+        let config = test_config();
         let mem = Memory::from(vec![
             Message::new(Role::System, "You are helpful."),
             Message::new(Role::User, "Hello"),
             Message::new(Role::Assistant, "Hi there!"),
         ]);
 
-        save_conversation("test-thread", root, &mem).unwrap();
-        assert!(root.join(".loomis/threads/test-thread.json").exists());
+        save_conversation("test-thread", root, &mem, &config).unwrap();
+        assert!(root
+            .join(&config.threads_dir)
+            .join("test-thread.json")
+            .exists());
 
-        let loaded = load_conversation("test-thread", root).unwrap();
+        let loaded = load_conversation("test-thread", root, &config).unwrap();
         assert_eq!(loaded.len(), 3);
         let msgs = loaded.to_context_vec();
         assert_eq!(msgs[0].role, Role::System);
@@ -298,16 +357,21 @@ mod tests {
     #[test]
     fn test_load_nonexistent_thread() {
         let tmp = TempDir::new().unwrap();
-        assert!(load_conversation("no-such-thread", tmp.path()).is_err());
+        let config = test_config();
+        assert!(load_conversation("no-such-thread", tmp.path(), &config).is_err());
     }
 
     #[test]
     fn test_current_thread_read_write() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        assert!(read_current_thread_name(root).is_none());
-        write_current_thread_name("my-session", root).unwrap();
-        assert_eq!(read_current_thread_name(root).unwrap(), "my-session");
+        let config = test_config();
+        assert!(read_current_thread_name(root, &config).is_none());
+        write_current_thread_name("my-session", root, &config).unwrap();
+        assert_eq!(
+            read_current_thread_name(root, &config).unwrap(),
+            "my-session"
+        );
     }
 
     #[test]

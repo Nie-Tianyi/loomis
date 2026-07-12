@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use engine::AgentEvent;
-use memory::{PendingHints, SharedMemory};
+use memory::{PendingHints, PersistenceConfig, SharedMemory};
 
 use super::messages::{ChatMessage, ToolCallState};
 
@@ -85,6 +85,9 @@ pub struct App {
 
     // ── Exit signal ──
     pub should_quit: bool,
+
+    // ── Persistence ──
+    pub persistence_config: PersistenceConfig,
 }
 
 impl App {
@@ -95,6 +98,7 @@ impl App {
         tool_names: Vec<String>,
         workspace_root: PathBuf,
         pending_hints: PendingHints,
+        persistence_config: PersistenceConfig,
     ) -> Self {
         let model = model.into();
         Self {
@@ -123,6 +127,7 @@ impl App {
             intervene_saved_input: String::new(),
             intervene_saved_cursor: 0,
             should_quit: false,
+            persistence_config,
         }
     }
 }
@@ -309,6 +314,7 @@ mod tests {
             vec!["echo".into(), "ls".into()],
             PathBuf::from("."),
             pending_hints,
+            PersistenceConfig::default(),
         )
     }
 

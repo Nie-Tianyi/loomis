@@ -51,6 +51,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         agent_tx,
         response_router,
         pending_hints,
+        persistence_config,
     } = kit;
 
     // ── Create command channel ────────────────────────────────────
@@ -64,6 +65,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         agent_tx,
         workspace_root.clone(),
         response_router,
+        persistence_config.clone(),
     ));
 
     // ── Terminal setup ───────────────────────────────────────────────
@@ -87,7 +89,14 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
     }));
 
     // ── App state ────────────────────────────────────────────────────
-    let mut app = App::new(model, memory, tool_names, workspace_root, pending_hints);
+    let mut app = App::new(
+        model,
+        memory,
+        tool_names,
+        workspace_root,
+        pending_hints,
+        persistence_config,
+    );
 
     // ── Event loop ───────────────────────────────────────────────────
     let result = run_event_loop(&mut terminal, &mut app, agent_rx, &cmd_tx);
@@ -201,6 +210,7 @@ async fn agent_handler(
     agent_tx: UnboundedSender<AgentEvent>,
     workspace_root: PathBuf,
     response_router: Arc<engine::ResponseRouter>,
+    persistence_config: memory::PersistenceConfig,
 ) {
     let mut current_run: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -221,6 +231,7 @@ async fn agent_handler(
                 let agent = Arc::clone(&agent);
                 let ws = workspace_root.clone();
                 let mem_for_save = memory.clone();
+                let pc = persistence_config.clone();
 
                 let handle = tokio::spawn(async move {
                     let result = agent.run_with_events(&input, tx.clone()).await;
@@ -228,8 +239,8 @@ async fn agent_handler(
                     // Auto-save conversation after each agent turn.
                     {
                         let mem = mem_for_save.read().expect("memory lock poisoned");
-                        let name = memory::default_thread_name(&ws);
-                        let _ = memory::save_conversation(&name, &ws, &mem);
+                        let name = memory::default_thread_name(&ws, &pc);
+                        let _ = memory::save_conversation(&name, &ws, &mem, &pc);
                     }
 
                     match result {
@@ -278,8 +289,13 @@ async fn agent_handler(
                 // Persist the cleared state.
                 {
                     let mem = memory.read().expect("memory lock poisoned");
-                    let name = memory::default_thread_name(&workspace_root);
-                    let _ = memory::save_conversation(&name, &workspace_root, &mem);
+                    let name = memory::default_thread_name(&workspace_root, &persistence_config);
+                    let _ = memory::save_conversation(
+                        &name,
+                        &workspace_root,
+                        &mem,
+                        &persistence_config,
+                    );
                 }
             }
 
@@ -356,8 +372,13 @@ async fn agent_handler(
                 // Save conversation before exiting.
                 {
                     let mem = memory.read().expect("memory lock poisoned");
-                    let name = memory::default_thread_name(&workspace_root);
-                    let _ = memory::save_conversation(&name, &workspace_root, &mem);
+                    let name = memory::default_thread_name(&workspace_root, &persistence_config);
+                    let _ = memory::save_conversation(
+                        &name,
+                        &workspace_root,
+                        &mem,
+                        &persistence_config,
+                    );
                 }
 
                 if let Some(h) = current_run.take() {

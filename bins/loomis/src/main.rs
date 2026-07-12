@@ -36,7 +36,15 @@ async fn main() {
         }
     };
 
-    let kit = loomis::build_coding_agent(&api_key, &cwd, &model, &flash_model, &sandbox_config);
+    let mut kit = loomis::build_coding_agent(&api_key, &cwd, &model, &flash_model, &sandbox_config);
+
+    // Override generic defaults with loomis-specific paths.
+    kit.persistence_config = memory::PersistenceConfig {
+        threads_dir: ".loomis/threads".into(),
+        current_thread_file: ".loomis/current".into(),
+        markdown_title: "Loomis Conversation".into(),
+        ..Default::default()
+    };
 
     if use_tui {
         let model = kit.model.clone();

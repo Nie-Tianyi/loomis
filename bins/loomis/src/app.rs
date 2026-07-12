@@ -6,7 +6,7 @@ use std::sync::Arc;
 use deepseek::DeepSeekClient;
 use engine::{Agent, EngineContext};
 use hooks;
-use memory::{Memory, PendingHints, SharedMemory};
+use memory::{Memory, PendingHints, PersistenceConfig, SharedMemory};
 use provider::{Message, Role};
 use subagent::{self, SubagentConfig};
 use tokio::sync::mpsc;
@@ -101,6 +101,8 @@ pub struct AgentKit {
     /// Queue for user hints injected during active agent runs.
     /// Drained by the agent loop before each LLM call.
     pub pending_hints: PendingHints,
+    /// Persistence config — directory layout and naming for thread storage.
+    pub persistence_config: PersistenceConfig,
 }
 
 /// Build a fully-wired coding agent with all channels and hooks.
@@ -246,5 +248,6 @@ pub fn build_coding_agent(
         agent_tx,
         response_router,
         pending_hints,
+        persistence_config: PersistenceConfig::default(),
     }
 }
