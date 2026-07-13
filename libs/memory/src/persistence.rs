@@ -266,10 +266,25 @@ pub fn sanitize_filename(name: &str) -> String {
 
 /// Generate a filesystem-safe thread name from the user's first message.
 ///
-/// This is a convenience wrapper around [`sanitize_filename`] for the most
-/// common use-case: turning a raw user query into a stable thread name.
+/// Appends a `_YYYY-MM-DD` date suffix so that identical queries on different
+/// days produce distinct filenames and don't overwrite each other.
+///
+/// If [`sanitize_filename`] already produced a timestamp-based fallback
+/// (i.e. the message contained no usable characters), the fallback is
+/// returned as-is — it already embeds a full timestamp.
 pub fn thread_name_from_message(first_message: &str) -> String {
-    sanitize_filename(first_message)
+    let base = sanitize_filename(first_message);
+    // Fallback names already carry a full UTC timestamp; don't double-suffix.
+    if base.starts_with("conversation-") {
+        return base;
+    }
+    // `iso8601_now()` → "YYYY-MM-DDTHH:MM:SSZ"; take just the date portion.
+    let date = &iso8601_now()[..10];
+    // "_" + "YYYY-MM-DD" = 11 chars.  Keep the total under MAX_THREAD_NAME_CHARS.
+    let max_base = MAX_THREAD_NAME_CHARS.saturating_sub(11);
+    let end = base.floor_char_boundary(max_base.min(base.len()));
+    let base = &base[..end];
+    format!("{base}_{date}")
 }
 
 // ── Internal Helpers ───────────────────────────────────────────────────────────
@@ -429,28 +444,36 @@ mod tests {
 
     // ── sanitize_filename / thread_name_from_message ───────────────────────
 
+    /// Current date in YYYY-MM-DD for use in `thread_name_from_message` assertions.
+    fn today_date() -> String {
+        iso8601_now()[..10].to_string()
+    }
+
     #[test]
     fn test_thread_name_english_preserved() {
         let name = thread_name_from_message("Help me research quantum computing");
-        assert_eq!(name, "Help me research quantum computing");
+        assert_eq!(
+            name,
+            format!("Help me research quantum computing_{}", today_date())
+        );
     }
 
     #[test]
     fn test_thread_name_chinese_preserved() {
         let name = thread_name_from_message("你好世界");
-        assert_eq!(name, "你好世界");
+        assert_eq!(name, format!("你好世界_{}", today_date()));
     }
 
     #[test]
     fn test_thread_name_mixed_cjk_ascii() {
         let name = thread_name_from_message("帮我写一个Python脚本");
-        assert_eq!(name, "帮我写一个Python脚本");
+        assert_eq!(name, format!("帮我写一个Python脚本_{}", today_date()));
     }
 
     #[test]
     fn test_thread_name_illegal_chars_replaced() {
         let name = thread_name_from_message("Hello? foo:bar*<baz>");
-        assert_eq!(name, "Hello_ foo_bar_baz");
+        assert_eq!(name, format!("Hello_ foo_bar_baz_{}", today_date()));
     }
 
     #[test]
@@ -462,40 +485,44 @@ mod tests {
     #[test]
     fn test_thread_name_control_chars_stripped() {
         let name = thread_name_from_message("hello\x00\x01world");
-        assert_eq!(name, "helloworld");
+        assert_eq!(name, format!("helloworld_{}", today_date()));
     }
 
     #[test]
     fn test_thread_name_max_length_truncation() {
         let long = "a".repeat(200);
         let name = thread_name_from_message(&long);
-        // Should be ≤120 chars, and must be valid UTF-8 (it is — all 'a's).
-        assert!(name.len() <= 120);
-        assert_eq!(name, "a".repeat(120));
+        // Base (120) gets date suffix → truncation ensures total ≤ 120 chars.
+        assert!(name.len() <= 120, "too long: {} chars", name.len());
+        let prefix = "a".repeat(109); // 120 - 11 (date overhead)
+        assert!(
+            name.starts_with(&prefix),
+            "expected prefix of {prefix}..., got: {name}"
+        );
     }
 
     #[test]
     fn test_thread_name_leading_trailing_dot_trimmed() {
         let name = thread_name_from_message(".hidden.");
-        assert_eq!(name, "hidden");
+        assert_eq!(name, format!("hidden_{}", today_date()));
     }
 
     #[test]
     fn test_thread_name_trailing_dot_stripped() {
         let name = thread_name_from_message("name.");
-        assert_eq!(name, "name");
+        assert_eq!(name, format!("name_{}", today_date()));
     }
 
     #[test]
     fn test_thread_name_reserved_dos_name() {
         let name = thread_name_from_message("con");
-        assert_eq!(name, "con_");
+        assert_eq!(name, format!("con__{}", today_date()));
     }
 
     #[test]
     fn test_thread_name_reserved_dos_name_case_insensitive() {
         let name = thread_name_from_message("CON");
-        assert_eq!(name, "CON_");
+        assert_eq!(name, format!("CON__{}", today_date()));
     }
 
     #[test]
