@@ -24,60 +24,227 @@ use crate::tools::{
 };
 use engine::ResponseRouter;
 
-/// System prompt used as the initial seed for every conversation.
-pub const SYSTEM_PROMPT: &str = "\
-You are Loomis, a helpful, accurate coding assistant. You have tools for file operations \
-(read, write, edit, glob, grep, ls) and calculations.
+/// Build the main system prompt with tool list injected dynamically.
+///
+/// Replaces the old flat `SYSTEM_PROMPT` const.  The prompt is organised into
+/// five numbered sections matching the Claude Code system-prompt structure:
+///
+/// 1. Identity & Capabilities
+/// 2. Tool Usage Norms
+/// 3. Safety Boundaries
+/// 4. Behavior Norms
+/// 5. Memory & Persistence
+pub fn build_system_prompt(tool_names: &[String]) -> String {
+    let tool_list = tool_names
+        .iter()
+        .map(|n| format!("`{n}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
 
-## Core rules — follow strictly
+    // Loaded from prompts/system.md at compile time via include_str!().
+    // Only {tool_list} is dynamic — a simple str::replace handles it.
+    include_str!("../prompts/system.md").replace("{tool_list}", &tool_list)
+}
 
-1. **Ground everything in tools.** Before making ANY claim about file paths, \
-code contents, directory structure, or the codebase: verify with the \
-appropriate tool (glob to find files, grep to search content, read to read, \
-ls to list). Never guess. If a tool returns nothing or errors, report that \
-honestly — do not fabricate a result.
+// ── Environment Context ─────────────────────────────────────────────────────────
 
-2. **Express uncertainty.** If you don't know something or can't verify it, \
-say so. It is better to admit uncertainty than to give a confident wrong \
-answer. If the user \
-asks something ambiguous, ask for clarification.
+/// Build a System message with runtime environment information.
+///
+/// Injected as a separate `Role::System` message so it can be updated or
+/// removed independently (e.g. on `/new`).
+pub fn build_environment_context(workspace_root: &Path) -> String {
+    let platform = format!(
+        "{} ({})",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
 
-3. **Quote, don't summarise from memory.** When referencing code, always read \
-the file first and quote the actual content. Never invent function signatures, \
-variable names, or line numbers.
+    let os_ver = detect_os_version();
 
-4. **Verify before editing.** Before writing or editing a file, read it first. \
-Before running a glob, check the directory exists. Before claiming a fix works, \
-explain what you verified.
+    let shell = detect_shell();
 
-5. **No phantom files or features.** If the user mentions a file that doesn't \
-exist, say so. If they ask you to implement something, only write code that \
-actually compiles and uses real APIs.
+    let cwd = workspace_root.display().to_string();
 
-6. **Use the right tool for the job.** grep to search content, glob to find \
-files by name, ls to list directories, read to view contents, write to create, \
-edit to modify. Don't try to use read where grep is appropriate. Only use shell \
-when necessary.
+    let date = memory::iso8601_now();
 
-7. **Be concise and accurate.** Short, factual responses are better than long, \
-speculative ones. Respond in the same language the user uses.
+    let git_info = detect_git_info(workspace_root);
 
-8. **Readability over Performance**: Code readability takes precedence over \
-performance. User expect code of pedagogical quality: make clear the purpose \
-of every variable name and every struct. If there are two algorithms A and B, \
-where A is easier to understand but B is harder yet offers better performance, \
-always prefer algorithm A unless B is significantly faster than A (at least three \
-times as fast). When algorithm B is chosen, it must be accompanied by thorough \
-documentation, including but not limited to its purpose, inputs, outputs, underlying \
-principles, etc. When necessary, educate your users—do not assume they have any \
-background of the field.
+    let mut block = format!(
+        "\
+## Environment
 
-9. **Delegate complex work.** Use the `task` tool to spawn multiple sub-agents for \
-multi-step investigation, code analysis, or refactoring that can run in parallel. The sub-agent has \
-read-only tools (read, ls, glob, grep, calculator) and works independently. \
-Be specific in your description and prompt — the sub-agent works independently \
-and reports back.
-";
+- Platform: {platform}
+- OS version: {os_ver}
+- Shell: {shell}
+- Workspace: {cwd}
+- Date: {date}"
+    );
+
+    if let Some(git) = git_info {
+        block.push_str(&format!("\n- Git: {git}"));
+    }
+
+    block
+}
+
+/// Best-effort OS version string.
+fn detect_os_version() -> String {
+    if cfg!(windows) {
+        // PowerShell first — Unicode-native, no code-page issues on
+        // non-English Windows.  cmd /C ver is the fallback because it
+        // emits OEM-codepage bytes that turn into mojibake with UTF-8.
+        for (cmd, args) in [
+            (
+                "powershell",
+                &[
+                    "-NoProfile",
+                    "-Command",
+                    "[System.Environment]::OSVersion.VersionString",
+                ] as &[_],
+            ),
+            ("cmd", &["/C", "ver"] as &[_]),
+        ] {
+            if let Ok(out) = std::process::Command::new(cmd)
+                .args(args)
+                .output()
+                && out.status.success()
+            {
+                let s = String::from_utf8_lossy(&out.stdout);
+                let s = s.trim().to_string();
+                if !s.is_empty() {
+                    return s;
+                }
+            }
+        }
+        std::env::consts::OS.to_string()
+    } else {
+        match std::process::Command::new("uname").args(["-srm"]).output() {
+            Ok(out) => {
+                let s = String::from_utf8_lossy(&out.stdout);
+                s.trim().to_string()
+            }
+            Err(_) => format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        }
+    }
+}
+
+/// Detect which shell the user is running under.
+fn detect_shell() -> String {
+    // Environment-variable check (cheap).
+    if std::env::var("MSYSTEM").is_ok() || std::env::var("MINGW_PREFIX").is_ok() {
+        return "Git Bash (MSYS2 / MinGW)".to_string();
+    }
+    #[cfg(windows)]
+    {
+        if std::env::var("PSModulePath").is_ok() {
+            return "PowerShell".to_string();
+        }
+        if let Ok(comspec) = std::env::var("ComSpec") {
+            return comspec;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Ok(shell) = std::env::var("SHELL") {
+            return shell;
+        }
+    }
+    "unknown".to_string()
+}
+
+/// Best-effort git branch and dirty-status string.
+///
+/// Returns `None` when git is not installed or we're not inside a repo.
+fn detect_git_info(workspace_root: &Path) -> Option<String> {
+    let branch = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(workspace_root)
+        .output()
+        .ok()
+        .and_then(|out| {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                let s = s.trim().to_string();
+                if !s.is_empty() {
+                    Some(s)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })?;
+
+    let dirty = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(workspace_root)
+        .output()
+        .ok()
+        .map(|out| !String::from_utf8_lossy(&out.stdout).trim().is_empty())
+        .unwrap_or(false);
+
+    let status = if dirty { "dirty" } else { "clean" };
+    Some(format!("branch `{branch}`, {status}"))
+}
+
+// ── Project Rules ───────────────────────────────────────────────────────────────
+
+/// Project-level rules file candidates, in priority order.
+const PROJECT_RULES_FILES: &[&str] = &["LOOMIS.md", "AGENTS.md", "CLAUDE.md"];
+
+/// Maximum bytes to load from a project-rules file before truncating.
+const PROJECT_RULES_MAX_BYTES: usize = 10_000;
+
+/// Try to load project-level rules from the workspace root.
+///
+/// Resolution priority: `LOOMIS.md` → `AGENTS.md` → `CLAUDE.md`.
+/// Only the **first found** file is returned.  If no file exists or all
+/// reads fail, returns `None`.
+pub fn try_load_project_rules(workspace_root: &Path) -> Option<String> {
+    for filename in PROJECT_RULES_FILES {
+        let path = workspace_root.join(filename);
+        match std::fs::read_to_string(&path) {
+            Ok(content) if !content.trim().is_empty() => {
+                let truncated = if content.len() > PROJECT_RULES_MAX_BYTES {
+                    let boundary = content
+                        .char_indices()
+                        .take(PROJECT_RULES_MAX_BYTES)
+                        .last()
+                        .map(|(i, _)| i)
+                        .unwrap_or(PROJECT_RULES_MAX_BYTES);
+                    format!(
+                        "{}…\n\n[Truncated from {} bytes — original file is {} bytes]",
+                        &content[..boundary],
+                        PROJECT_RULES_MAX_BYTES,
+                        content.len()
+                    )
+                } else {
+                    content
+                };
+                return Some(format!(
+                    "## Project Rules ({filename})\n\n{truncated}"
+                ));
+            }
+            Ok(_) => {
+                // File is empty — skip to next candidate.
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Expected — try the next candidate.
+                continue;
+            }
+            Err(e) => {
+                // Permission denied, etc. — log and skip.
+                eprintln!(
+                    "WARNING: Cannot read {}: {e}",
+                    path.display()
+                );
+                continue;
+            }
+        }
+    }
+    None
+}
 
 // ── AgentEvent & InterventionResponse (re-exported from engine) ─────────────────
 
@@ -233,10 +400,23 @@ pub fn build_coding_agent(
 
     let agent = Agent::new(ctx);
 
-    // ── Seed system prompt ────────────────────────────────────
+    // ── Seed system messages ──────────────────────────────────
     {
         let mut mem = memory.write().expect("memory lock poisoned");
-        mem.push(Message::new(Role::System, SYSTEM_PROMPT));
+        // 1. Main system prompt (5 sections, dynamic tool list)
+        mem.push(Message::new(
+            Role::System,
+            build_system_prompt(&tool_names),
+        ));
+        // 2. Environment context (platform, shell, cwd, date, git)
+        mem.push(Message::new(
+            Role::System,
+            build_environment_context(workspace_root),
+        ));
+        // 3. Project rules (LOOMIS.md → AGENTS.md → CLAUDE.md)
+        if let Some(rules) = try_load_project_rules(workspace_root) {
+            mem.push(Message::new(Role::System, rules));
+        }
     }
 
     AgentKit {

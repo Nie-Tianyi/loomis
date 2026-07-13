@@ -3,4 +3,5 @@
 .env
 .claude
 .loomis
+.agent
 .DS_Store
