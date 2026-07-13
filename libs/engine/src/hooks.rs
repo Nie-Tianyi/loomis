@@ -39,14 +39,14 @@ pub trait AgentHook: Send + Sync {
     // ── Run lifecycle ─────────────────────────────────────────────────────────
 
     /// Called when a new user input begins a full task run.
-    fn on_run_start(&self, _session_id: &str, _user_input: &str) {}
+    fn on_run_start(&self, _session_id: &str, _user_input: &str, _memory: &SharedMemory) {}
 
     /// Called when the task terminates — success, error, or cancellation.
     ///
     /// The [`RunOutcome`] discriminates the three cases.  This is the single
     /// place to hook run-level teardown (audit trail closure, resource summary,
     /// persistence triggers, cleanup).
-    fn on_run_finish(&self, _session_id: &str, _outcome: &RunOutcome) {}
+    fn on_run_finish(&self, _session_id: &str, _outcome: &RunOutcome, _memory: &SharedMemory) {}
 
     // ── Step lifecycle ───────────────────────────────────────────────────────
 

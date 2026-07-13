@@ -343,7 +343,12 @@ impl App {
                 return Some(None);
             }
             let mem = self.memory.read().expect("memory lock poisoned");
-            match memory::save_conversation(name, &self.workspace_root, &mem, &self.persistence_config) {
+            match memory::save_conversation(
+                name,
+                &self.workspace_root,
+                &mem,
+                &self.persistence_config,
+            ) {
                 Ok(()) => {
                     let _ = memory::write_current_thread_name(
                         name,

@@ -222,36 +222,16 @@ async fn agent_handler(
                     h.abort();
                 }
 
-                // Spawn the agent in a background task. We clone the
+                // Spawn the agent in a background task.
                 // (`run_with_events` pushes the user message to memory internally)
-                // sender so the task owns its own — when the task
-                // completes, its sender is dropped, freeing the channel
-                // for the next run.
+                // Auto-save is handled by PersistenceHook::on_run_finish.
                 let tx = agent_tx.clone();
                 let agent = Arc::clone(&agent);
-                let ws = workspace_root.clone();
-                let mem_for_save = memory.clone();
-                let pc = persistence_config.clone();
 
                 let handle = tokio::spawn(async move {
-                    let result = agent.run_with_events(&input, tx.clone()).await;
-
-                    // Auto-save conversation after each agent turn.
-                    {
-                        let mem = mem_for_save.read().expect("memory lock poisoned");
-                        let name = memory::default_thread_name(&ws, &pc);
-                        let _ = memory::save_conversation(&name, &ws, &mem, &pc);
-                    }
-
-                    match result {
-                        Ok(_content) => {
-                            // Agent loop already emitted RunCompleted + Done on success.
-                        }
-                        Err(_e) => {
-                            // Agent loop already emitted RunFailed + Done on error.
-                            // Nothing extra needed — the TUI already received the events.
-                        }
-                    }
+                    let _result = agent.run_with_events(&input, tx.clone()).await;
+                    // PersistenceHook already saved the conversation in on_run_finish.
+                    // Agent loop already emitted RunCompleted/RunFailed + Done events.
                 });
 
                 current_run = Some(handle);

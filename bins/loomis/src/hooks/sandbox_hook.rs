@@ -23,6 +23,7 @@ use std::time::Duration;
 use engine::{
     AgentError, AgentEvent, AgentHook, InterventionRequest, InterventionResponse, RunOutcome,
 };
+use memory::SharedMemory;
 use provider::ToolCall;
 use tokio::sync::mpsc;
 
@@ -255,7 +256,7 @@ impl AgentHook for SandboxHook {
         }
     }
 
-    fn on_run_finish(&self, session_id: &str, outcome: &RunOutcome) {
+    fn on_run_finish(&self, session_id: &str, outcome: &RunOutcome, _memory: &SharedMemory) {
         let verdict = match outcome {
             RunOutcome::Success { .. } => "success",
             RunOutcome::Error { .. } => "error",

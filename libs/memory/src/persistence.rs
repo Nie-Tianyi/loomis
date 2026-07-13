@@ -410,10 +410,11 @@ mod tests {
         ]);
 
         save_conversation("test-thread", root, &mem, &config).unwrap();
-        assert!(root
-            .join(&config.threads_dir)
-            .join("test-thread.json")
-            .exists());
+        assert!(
+            root.join(&config.threads_dir)
+                .join("test-thread.json")
+                .exists()
+        );
 
         let loaded = load_conversation("test-thread", root, &config).unwrap();
         assert_eq!(loaded.len(), 3);

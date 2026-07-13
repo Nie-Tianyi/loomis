@@ -305,7 +305,7 @@ impl<C: LLMClient> Agent<C> {
     /// Begin a run: notify hooks, emit RunStarted, push user message.
     fn begin_run(&self, user_input: &str, tx: &Option<mpsc::UnboundedSender<AgentEvent>>) {
         for hook in &self.ctx.hooks {
-            hook.on_run_start("default", user_input);
+            hook.on_run_start("default", user_input, &self.ctx.memory);
         }
         if let Some(tx) = tx {
             let _ = tx.send(AgentEvent::RunStarted {
@@ -353,6 +353,7 @@ impl<C: LLMClient> Agent<C> {
                 &RunOutcome::Error {
                     error: err.to_string(),
                 },
+                &self.ctx.memory,
             );
         }
         if let Some(tx) = tx {
@@ -378,6 +379,7 @@ impl<C: LLMClient> Agent<C> {
                 &RunOutcome::Success {
                     answer: answer.clone(),
                 },
+                &self.ctx.memory,
             );
         }
         if let Some(tx) = tx {
