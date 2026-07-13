@@ -982,7 +982,27 @@ fn build_status_content(app: &App) -> (String, String, String) {
     let model = &app.model;
     let msgs = app.messages.len();
 
-    let left = format!(" {} | {} msgs ", model, msgs);
+    // Build todo progress snippet
+    let todo_part = {
+        let todos = app.todos.read().ok();
+        todos
+            .filter(|t| !t.is_empty())
+            .map(|todos| {
+                let total = todos.len();
+                let done = todos.iter().filter(|t| t.status == "completed").count();
+                let in_progress = todos
+                    .iter()
+                    .find(|t| t.status == "in_progress")
+                    .map(|t| t.active_form.as_str());
+                match in_progress {
+                    Some(active) => format!("☐ {done}/{total} · ✍ {active} | "),
+                    None => format!("☐ {done}/{total} | "),
+                }
+            })
+            .unwrap_or_default()
+    };
+
+    let left = format!(" {todo_part}{} | {} msgs ", model, msgs);
 
     let (accent, right) = if app.streaming {
         let indicator = " ⚡ STREAMING ";

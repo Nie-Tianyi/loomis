@@ -12,11 +12,13 @@
 //! | `app` (here) | `App` struct + event application + tests |
 
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use engine::AgentEvent;
 use memory::{PendingHints, PersistenceConfig, SharedMemory};
 
 use super::messages::{ChatMessage, ToolCallState};
+use crate::tools::TodoItem;
 
 // ── App ──────────────────────────────────────────────────────────────────────────
 
@@ -50,6 +52,8 @@ pub struct App {
     pub model: String,
     pub memory: SharedMemory,
     pub tool_names: Vec<String>,
+    /// Shared todo list — read-only from the TUI side (written by TodoTool).
+    pub todos: Arc<RwLock<Vec<TodoItem>>>,
     /// Workspace root directory for `!` shell commands.
     pub workspace_root: PathBuf,
     /// Queue for user hints injected during active agent runs.
@@ -96,6 +100,7 @@ impl App {
         model: impl Into<String>,
         memory: SharedMemory,
         tool_names: Vec<String>,
+        todos: Arc<RwLock<Vec<TodoItem>>>,
         workspace_root: PathBuf,
         pending_hints: PendingHints,
         persistence_config: PersistenceConfig,
@@ -115,6 +120,7 @@ impl App {
             model,
             memory,
             tool_names,
+            todos,
             workspace_root,
             pending_hints,
             history: Vec::new(),
@@ -308,10 +314,12 @@ mod tests {
     fn make_app() -> App {
         let memory = std::sync::Arc::new(std::sync::RwLock::new(memory::Memory::new()));
         let pending_hints = PendingHints::default();
+        let todos = Arc::new(RwLock::new(Vec::<TodoItem>::new()));
         App::new(
             "test-model",
             memory,
             vec!["echo".into(), "ls".into()],
+            todos,
             PathBuf::from("."),
             pending_hints,
             PersistenceConfig::default(),

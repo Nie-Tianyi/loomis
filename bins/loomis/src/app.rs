@@ -1,7 +1,7 @@
 //! Agent assembly — wires all components together.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use deepseek::DeepSeekClient;
 use engine::{Agent, EngineContext};
@@ -13,13 +13,13 @@ use tools::ToolRegistry;
 
 use tools::SandboxConfig;
 
-use crate::hooks::{PersistenceHook, SandboxHook, SystemPromptHook};
+use crate::hooks::{PersistenceHook, SandboxHook, SystemPromptHook, TodoListHook};
 use crate::sandbox::audit_logger::AuditLogger;
 use crate::sandbox::resource_tracker::ResourceTracker;
 use crate::sandbox::shell_filter::ShellFilter;
 use crate::tools::{
     AskUserQuestionTool, CalculatorTool, EditTool, GlobTool, GrepTool, LsTool, ReadTool, ShellTool,
-    WriteTool,
+    TodoItem, TodoTool, WriteTool,
 };
 use engine::ResponseRouter;
 
@@ -47,6 +47,8 @@ pub struct AgentKit {
     pub pending_hints: PendingHints,
     /// Persistence config — directory layout and naming for thread storage.
     pub persistence_config: PersistenceConfig,
+    /// Shared todo list state — written by [`TodoTool`], read by the TUI status bar.
+    pub todos: Arc<RwLock<Vec<TodoItem>>>,
 }
 
 /// Build a fully-wired coding agent with all channels and hooks.
@@ -82,6 +84,10 @@ pub fn build_coding_agent(
 
     // ── Tool registry ────────────────────────────────────────
     let mut registry = ToolRegistry::new();
+
+    // Shared todo-list state — the TodoTool writes it, the TUI reads it.
+    let todo_state = Arc::new(RwLock::new(Vec::<TodoItem>::new()));
+
     registry.register(Arc::new(CalculatorTool));
     registry.register(Arc::new(ReadTool::new(workspace.clone())));
     registry.register(Arc::new(EditTool::new(workspace.clone())));
@@ -124,6 +130,10 @@ pub fn build_coding_agent(
     ask_tool.set_agent_tx(agent_tx.clone());
     registry.register(Arc::new(ask_tool));
 
+    // TodoTool — lets the LLM manage a structured task list (plan).
+    let todo_tool = TodoTool::new(todo_state.clone());
+    registry.register(Arc::new(todo_tool));
+
     let tool_names: Vec<String> = registry.iter().map(|(n, _)| n.to_string()).collect();
     let registry = Arc::new(registry);
 
@@ -161,9 +171,13 @@ pub fn build_coding_agent(
     );
 
     // SystemPromptHook — seeds the three initial system messages on first run.
-    // Moves system prompt injection out of ad-hoc assembly code into the hook lifecycle.
     let system_prompt_hook =
         SystemPromptHook::new(workspace_root.to_path_buf(), tool_names.clone());
+
+    // TodoListHook — maintains the [TODO] System message from the shared
+    // todo state.  Runs before compaction hooks so the message is present
+    // in memory before any summarisation or clearing.
+    let todo_list_hook = TodoListHook::new(todo_state.clone());
 
     // PersistenceHook — auto-saves conversation after each agent run.
     // Replaces the ad-hoc save in the TUI agent_handler's tokio::spawn block.
@@ -174,9 +188,10 @@ pub fn build_coding_agent(
     let hooks: Vec<Box<dyn engine::AgentHook>> = vec![
         Box::new(system_prompt_hook), // 0. Seed system prompts on run start
         Box::new(persistence_hook),   // 1. Save conversation after each run
-        Box::new(macro_compact),      // 2. LLM summarisation
-        Box::new(micro_compact),      // 3. Tool output clearing
-        Box::new(approval_hook),      // 4. Security sandbox
+        Box::new(todo_list_hook),     // 2. Maintain [TODO] System message
+        Box::new(macro_compact),      // 3. LLM summarisation
+        Box::new(micro_compact),      // 4. Tool output clearing
+        Box::new(approval_hook),      // 5. Security sandbox
     ];
 
     // ── Engine context (via builder) ─────────────────────────
@@ -200,5 +215,6 @@ pub fn build_coding_agent(
         response_router,
         pending_hints,
         persistence_config,
+        todos: todo_state,
     }
 }

@@ -98,3 +98,35 @@ messages intact. Both run transparently — you don't need to manage this.
 **/new** clears the conversation but preserves all System messages (these
 instructions, environment context, and project rules), so your core
 configuration persists across conversation resets.
+
+## 6. Planning
+
+**Plan before you code.** Before writing or editing files, use the `todo`
+tool to create a structured task list. Break the work into concrete,
+verifiable steps. Update the list as you progress — mark completed items,
+activate the next one. This helps you stay organized and lets the user
+see your progress in the status bar.
+
+**Always send the full list.** Each `todo` call REPLACES the entire list.
+Include ALL items (pending, in_progress, and completed) so the plan stays
+complete and accurate.
+
+**At most one in_progress.** Work on one task at a time. Use
+`active_form` to provide a short present-tense label for the current task
+(e.g. "Implementing TodoTool", "Writing tests").
+
+Example:
+```json
+{"todos": [
+  {"content": "Explore the codebase", "status": "completed", "active_form": "Exploring codebase"},
+  {"content": "Design the solution", "status": "completed", "active_form": "Designing solution"},
+  {"content": "Implement the change", "status": "in_progress", "active_form": "Implementing change"},
+  {"content": "Write tests", "status": "pending", "active_form": "Writing tests"},
+  {"content": "Verify with cargo test", "status": "pending", "active_form": "Running tests"}
+]}
+```
+
+When NOT to use the todo tool:
+- Single, trivial one-step requests
+- Purely conversational or informational questions
+- Tasks completable with a single tool call

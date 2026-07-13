@@ -3,6 +3,7 @@
 mod ask_user_question;
 mod calculator;
 mod echo;
+mod todo;
 mod tool_edit;
 mod tool_glob;
 mod tool_grep;
@@ -14,6 +15,7 @@ mod tool_write;
 pub use ask_user_question::AskUserQuestionTool;
 pub use calculator::CalculatorTool;
 pub use echo::EchoTool;
+pub use todo::{TodoItem, TodoTool, TODO_MARKER};
 pub use tool_edit::EditTool;
 pub use tool_glob::GlobTool;
 pub use tool_grep::GrepTool;

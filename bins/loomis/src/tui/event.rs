@@ -52,6 +52,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         response_router,
         pending_hints,
         persistence_config,
+        todos,
     } = kit;
 
     // ── Create command channel ────────────────────────────────────
@@ -93,6 +94,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         model,
         memory,
         tool_names,
+        todos,
         workspace_root,
         pending_hints,
         persistence_config,
