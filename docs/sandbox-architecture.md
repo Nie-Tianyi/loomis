@@ -55,7 +55,7 @@
 ![Shell调用权限检查](./assets/shellexe.png)
 
 代码位置：
-- ShellTool: [`bins/loomis/src/tools/tool_shell.rs`](../bins/loomis/src/tools/tool_shell.rs)
+- ShellTool: [`bins/loomis/src/tools/shell.rs`](../bins/loomis/src/tools/shell.rs)
 - EnvSanitizer: [`bins/loomis/src/sandbox/env_sanitizer.rs`](../bins/loomis/src/sandbox/env_sanitizer.rs)
 
 ---

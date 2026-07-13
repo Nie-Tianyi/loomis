@@ -1672,7 +1672,7 @@ println!("Tool result: {result}");
 | AuditLogger | [`bins/loomis/src/sandbox/audit_logger.rs`](../bins/loomis/src/sandbox/audit_logger.rs) |
 | EnvSanitizer | [`bins/loomis/src/sandbox/env_sanitizer.rs`](../bins/loomis/src/sandbox/env_sanitizer.rs) |
 | 计算器工具 | [`bins/loomis/src/tools/calculator.rs`](../bins/loomis/src/tools/calculator.rs) |
-| 文件读取工具（WorkspaceFs） | [`bins/loomis/src/tools/tool_read.rs`](../bins/loomis/src/tools/tool_read.rs) |
-| Shell 工具 | [`bins/loomis/src/tools/tool_shell.rs`](../bins/loomis/src/tools/tool_shell.rs) |
+| 文件读取工具（WorkspaceFs） | [`bins/loomis/src/tools/read.rs`](../bins/loomis/src/tools/read.rs) |
+| Shell 工具 | [`bins/loomis/src/tools/shell.rs`](../bins/loomis/src/tools/shell.rs) |
 | TUI 集成 | [`bins/loomis/src/tui/mod.rs`](../bins/loomis/src/tui/mod.rs) |
 | 沙箱架构详解 | [`docs/sandbox-architecture.md`](./sandbox-architecture.md) |
