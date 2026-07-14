@@ -36,7 +36,8 @@ agent_oxide/
 │   ├── memory/             # Memory buffer, PendingHints, conversation persistence
 │   ├── hooks/              # MicroCompactHook + MacroCompactHook (AgentHook impls)
 │   ├── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent stream, ResponseRouter
-│   └── subagent/           # SubagentTool — spawn child agents as tools
+│   ├── subagent/           # SubagentTool — spawn child agents as tools
+│   └── observability/      # TraceEvent, TraceStore, RunMetrics — full-chain agent tracing
 ├── bins/
 │   └── loomis/             # Binary — concrete tools, hooks, sandbox, TUI, assembly
 └── docs/
@@ -57,7 +58,8 @@ agent_oxide/
 | `hooks` | Concrete hooks | `MicroCompactHook`, `MacroCompactHook<C>`, compaction constants |
 | `engine` | Core loop | `Agent`, `AgentBuilder`, `AgentHook` trait, `AgentEvent`, `AgentError`, `EngineContext`, `ResponseRouter`, `InterventionRequest`/`Response`, `RunOutcome`, `CallOrigin` |
 | `subagent` | Concrete | `SubagentTool<C>`, `SubagentConfig`, `filter_tools()` |
-| `loomis` | Binary | 11 concrete tools, 4 hooks (Sandbox, Persistence, SystemPrompt, TodoList), sandbox system, TUI, `AgentKit`, `build_coding_agent()` |
+| `observability` | Abstraction | `TraceEvent`, `TraceStore`, `RunMetrics`, `SubagentTrace`, `Timestamped<T>` |
+| `loomis` | Binary | 11 concrete tools, 5 hooks (Sandbox, Persistence, SystemPrompt, TodoList, Observability), sandbox system, TUI, `AgentKit`, `build_coding_agent()` |
 
 ### Dependency graph
 
@@ -72,7 +74,9 @@ provider (no internal deps)
     │       ↑
     ├── hooks ─────────── (uses provider + memory + engine)
     │       ↑
-    ├── subagent ──────── (uses provider + tools + engine + memory)
+    ├── subagent ──────── (uses provider + tools + engine + memory + observability)
+    │       ↑
+    ├── observability ─── (uses provider)
     │       ↑
     └── loomis (bin) ──── (uses all libs)
 ```
@@ -100,7 +104,7 @@ Hooks run in registration order. For async work inside sync hooks (e.g. LLM summ
 
 Concrete hooks:
 - **`hooks` crate**: `MicroCompactHook` (tool-output clearing), `MacroCompactHook<C>` (LLM summarisation)
-- **`loomis` crate**: `SandboxHook` (security), `PersistenceHook` (auto-save), `SystemPromptHook` (seed prompts), `TodoListHook` (sync todo state)
+- **`loomis` crate**: `SandboxHook` (security), `PersistenceHook` (auto-save), `SystemPromptHook` (seed prompts), `TodoListHook` (sync todo state), `ObservabilityHook` (full-chain trace collection)
 
 ### `AgentEvent` stream
 Single `mpsc::unbounded_channel`. Variants:
@@ -109,6 +113,7 @@ Single `mpsc::unbounded_channel`. Variants:
 | --- | --- |
 | `RunStarted { session_id, user_input }` | New task begins |
 | `Token(String)` / `ReasoningToken(String)` | LLM output streaming |
+| `ToolCallStart { id, name }` | Tool name known before args — immediate UI feedback |
 | `ToolCall { id, name, arguments, origin }` | Before tool execution |
 | `ToolSuccessful { id, name, output }` | Tool completed |
 | `ToolRejected { id, name, reason }` | Hook blocked tool |
@@ -143,6 +148,24 @@ Both in the `hooks` crate:
 
 Config: `.loomis/config.toml` → `SandboxConfig` (safe defaults if missing).
 
+### Observability (full-chain tracing)
+
+`ObservabilityHook` implements all 9 `AgentHook` callbacks to capture lifecycle events with timing data and token counts. Events flow through a side channel (`Arc<TraceStore>`) shared between agent task and TUI — no changes to `AgentEvent` enum needed.
+
+| Component | Crate | Role |
+| --- | --- | --- |
+| `TraceEvent` | `observability` | 12 variants: `RunStarted`, `RunFinished`, `StepStarted`, `LlmCallStarted`, `LlmCallFinished`, `LlmCallFailed`, `ToolCallStarted`, `ToolCallFinished`, `ToolCallRejected`, `StreamingSummary`, `SubagentFinished` |
+| `TraceStore` | `observability` | Thread-safe ring buffer (4096 entries), lock-free `RunMetrics` atomics, `export_jsonl()` |
+| `RunMetrics` | `observability` | Aggregated counters (steps, LLM calls, tool calls, tokens, errors) — read by TUI status bar |
+| `ObservabilityHook` | `loomis` | Implements `AgentHook`, captures `Instant::now()` at each phase boundary, holds `SharedMemory` to read `last_usage` in `on_llm_end` |
+| `DebugOverlay` | `loomis` (TUI) | Toggleable via `Ctrl+O` or `/debug`, scrollable table of recent trace events, synced each frame |
+
+**Data flow**: Agent loop → `AgentHook` callbacks → `ObservabilityHook::emit(TraceEvent)` → `TraceStore` ring buffer (hot path, O(1), no alloc) → TUI drains at 20fps via `App::sync_trace()`.
+
+**Subagent tracing**: `SubagentTool` holds `Option<Arc<TraceStore>>`. On child completion, `emit_subagent_trace()` reads child memory's `usage_history` and emits a single `SubagentFinished` event to the parent's store.
+
+**Persistence**: `/trace-save` slash command exports buffered events as JSONL to `.loomis/traces/trace_{timestamp}.jsonl`.
+
 ### `ResponseRouter`
 Maps `request_id` → `SyncSender<InterventionResponse>`. Multiple components (SandboxHook, AskUserQuestionTool) can need user intervention simultaneously — each registers its own channel, sends an `InterventionRequired` event with its `request_id`, and blocks on its receiver. The TUI routes responses through the router.
 
@@ -158,8 +181,8 @@ Auto-saves to `.loomis/threads/{name}.json` + `.md` after each agent turn via `P
 ### Loomis concrete tools (11)
 `Calculator`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Ls`, `Shell`, `Subagent`, `AskUserQuestion`, `Todo`
 
-### Loomis concrete hooks (4)
-`SystemPromptHook` (seeds initial system messages), `PersistenceHook` (auto-save), `TodoListHook` (syncs [TODO] System message), `SandboxHook` (security)
+### Loomis concrete hooks (5)
+`SystemPromptHook` (seeds initial system messages), `ObservabilityHook` (full-chain trace collection), `PersistenceHook` (auto-save), `TodoListHook` (syncs [TODO] System message), `SandboxHook` (security)
 
 ### TUI module (`bins/loomis/src/tui/`)
 
@@ -172,8 +195,8 @@ cmd_tx ───────── TuiCommand ──────→ cmd_rx
 agent_rx ←────── AgentEvent ─────── agent_tx
 ```
 
-- **Keybindings**: Enter (submit), Ctrl+C (cancel), Esc (cancel), Ctrl+D (exit), PgUp/PgDown (scroll), Up/Down (history), Left/Right/Home/End (cursor). Intervention prompts: ↑/↓ (navigate), Enter (select), Esc (cancel)
-- **Slash commands**: `/exit`, `/new`, `/save <name>`, `/resume [name]`, `/threads`, `/stats`, `/tools`, `/help`
+- **Keybindings**: Enter (submit), Ctrl+C (cancel), Esc (cancel), Ctrl+D (exit), Ctrl+O (toggle trace debug overlay), PgUp/PgDown (scroll), Up/Down (history), Left/Right/Home/End (cursor). Intervention prompts: ↑/↓ (navigate), Enter (select), Esc (cancel)
+- **Slash commands**: `/exit`, `/new`, `/save <name>`, `/resume [name]`, `/threads`, `/stats`, `/tools`, `/debug`, `/trace-save`, `/help`
 - **Bang prefix**: `!command` — runs shell, output shared with agent
 
 ## Future work
@@ -181,4 +204,3 @@ agent_rx ←────── AgentEvent ─────── agent_tx
 - [ ] Publish lib crates to crates.io
 - [ ] Add `libs/openai/`, `libs/anthropic/` provider implementations
 - [ ] RAG/vector DB support
-- [ ] `tracing` observability

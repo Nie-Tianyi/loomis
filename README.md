@@ -79,6 +79,7 @@ cargo run -p loomis --release
 | `Enter` | 发送消息 |
 | `Ctrl+C` | 取消当前操作 / 退出 |
 | `Esc` | 取消 |
+| `Ctrl+O` | 切换链路追踪调试面板 |
 | `PgUp` / `PgDown` | 上下滚动对话 |
 | `↑` / `↓` | 浏览历史消息 |
 | `←` / `→` / `Home` / `End` | 移动光标 |
@@ -106,6 +107,8 @@ cargo run -p loomis --release
 | `/threads` | 列出所有已保存的对话 |
 | `/stats` | 查看对话统计 |
 | `/tools` | 列出可用工具 |
+| `/debug` | 切换链路追踪调试面板 |
+| `/trace-save` | 导出 trace 事件到 JSONL 文件 |
 | `/exit` | 退出 |
 
 ### 对话持久化
@@ -131,6 +134,16 @@ cargo run -p loomis --release
 ```
 
 你可以在 `.loomis/config.toml` 里调整安全策略——哪些命令自动放行、哪些永远拒绝。
+
+### 全链路追踪（Observability）
+
+Loomis 内置了全链路可观测性系统，能够追踪 Agent 内部的所有状态变化：
+
+- **状态栏实时指标** — 底部状态栏显示当前步数、LLM 调用次数、工具调用次数、Token 消耗量
+- **调试面板** — 按 `Ctrl+O` 或输入 `/debug` 打开可滚动的 trace 事件列表，查看每一步的详细耗时和资源消耗
+- **导出分析** — 输入 `/trace-save` 将所有 trace 事件导出为 JSONL 文件（`.loomis/traces/`），便于离线分析
+
+追踪覆盖的生命周期包括：Agent 运行启停、每个 ReAct 循环步、每次 LLM API 调用（含重试）、每次工具执行、子 Agent 委派等。所有时间数据精确到毫秒级。
 
 ---
 
@@ -173,7 +186,7 @@ cargo clippy --all         # 代码检查
 
 ## 给开发者
 
-Loomis 的引擎层是模块化的——8 个独立的 Rust crate 可以被其他 Agent 项目直接复用。
+Loomis 的引擎层是模块化的——9 个独立的 Rust crate 可以被其他 Agent 项目直接复用。
 
 如果你想：
 - **实现自己的工具** — 比如接入数据库、网页搜索
