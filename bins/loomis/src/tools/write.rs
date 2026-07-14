@@ -251,8 +251,7 @@ mod tests {
     #[tokio::test]
     async fn test_missing_file_path() {
         let (_dir, tool) = setup();
-        let err =
-            Tool::execute_stream(&tool, r#"{"content": "stuff"}"#).unwrap_err();
+        let err = Tool::execute_stream(&tool, r#"{"content": "stuff"}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 

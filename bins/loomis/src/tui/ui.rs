@@ -3,6 +3,8 @@
 //! All ratatui drawing for the three-panel layout: chat area, input area,
 //! and status bar.
 
+use std::sync::atomic::Ordering;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -1021,7 +1023,14 @@ fn build_status_content(app: &App) -> (String, String, String) {
         }
     };
 
-    let left = format!(" {todo_part}{trace_part}{model} | {msgs} msgs ");
+    // Plan mode indicator
+    let plan_part = if app.plan_mode.active.load(Ordering::SeqCst) {
+        " PLAN | ".to_string()
+    } else {
+        String::new()
+    };
+
+    let left = format!(" {plan_part}{todo_part}{trace_part}{model} | {msgs} msgs ");
 
     let (accent, right) = if app.streaming {
         let indicator = " ⚡ STREAMING ";

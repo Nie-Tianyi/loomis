@@ -102,6 +102,8 @@ cargo run -p loomis --release
 |------|------|
 | `/help` | 显示帮助 |
 | `/new` | 开始新对话（清空记忆） |
+| `/plan` | 切换 Plan Mode（只读研究 & 规划） |
+| `/approve` | 批准计划并退出 Plan Mode |
 | `/save <名字>` | 保存当前对话 |
 | `/resume [名字]` | 恢复历史对话（弹窗选择） |
 | `/threads` | 列出所有已保存的对话 |
@@ -144,6 +146,24 @@ Loomis 内置了全链路可观测性系统，能够追踪 Agent 内部的所有
 - **导出分析** — 输入 `/trace-save` 将所有 trace 事件导出为 JSONL 文件（`.loomis/traces/`），便于离线分析
 
 追踪覆盖的生命周期包括：Agent 运行启停、每个 ReAct 循环步、每次 LLM API 调用（含重试）、每次工具执行、子 Agent 委派等。所有时间数据精确到毫秒级。
+
+### Plan Mode（规划模式）
+
+Plan Mode 让你在动手改代码之前，先让 Loomis 做**只读研究**并写出计划，等你批准后再执行。
+
+**如何工作：**
+
+1. 输入 `/plan` 进入规划模式 — 底部状态栏会显示 `PLAN`
+2. Loomis 只能读文件、搜索代码、做调查 — **不能改任何代码**
+3. Loomis 会把计划写到 `.loomis/plan.md`（这是它唯一能写的文件）
+4. 你查看计划后，输入 `/approve`（或再次 `/plan`）退出规划模式
+5. Loomis 恢复完整权限，按计划执行
+
+**被限制的工具：** `edit`、`shell`、`write`（除 plan file 外全部拒绝）
+
+**可用的工具：** `read`、`glob`、`grep`、`ls`、`calculator`、`todo`、`ask_user_question`、`task`（子 Agent，已是只读）
+
+适合复杂的、多步骤的任务——先让 Loomis 研究代码库、设计方案，你审查通过后再让它动手。
 
 ---
 

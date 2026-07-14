@@ -3,6 +3,8 @@
 //! All input processing that was previously in the monolithic [`super::app`].
 //! These are [`super::app::App`] methods split into their own file for readability.
 
+use std::sync::atomic::Ordering;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use provider::{Message, Role};
@@ -426,6 +428,49 @@ impl App {
                 Some(Some(TuiCommand::ClearConversation))
             }
 
+            "/plan" => {
+                let new_state = !self.plan_mode.active.load(Ordering::SeqCst);
+                self.plan_mode.active.store(new_state, Ordering::SeqCst);
+
+                let plan_path = self.workspace_root.join(".loomis").join("plan.md");
+                let content = if new_state {
+                    // Ensure the .loomis directory exists.
+                    if let Some(parent) = plan_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    format!(
+                        "Plan mode activated. Plan file: {}\nUse /plan again to deactivate, or /approve to exit plan mode.",
+                        plan_path.display()
+                    )
+                } else {
+                    "Plan mode deactivated. Full access restored.".into()
+                };
+
+                self.messages.push(ChatMessage::System {
+                    content,
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+                Some(None)
+            }
+
+            "/approve" => {
+                if self.plan_mode.active.load(Ordering::SeqCst) {
+                    self.plan_mode.active.store(false, Ordering::SeqCst);
+                    self.messages.push(ChatMessage::System {
+                        content:
+                            "Plan approved! Plan mode deactivated. You can now execute the plan."
+                                .into(),
+                        timestamp: ChatMessage::now_timestamp(),
+                    });
+                } else {
+                    self.messages.push(ChatMessage::System {
+                        content: "Not in plan mode. Use /plan first to enter plan mode.".into(),
+                        timestamp: ChatMessage::now_timestamp(),
+                    });
+                }
+                Some(None)
+            }
+
             "/resume" | "/threads" => {
                 self.open_thread_picker();
                 Some(None)
@@ -468,6 +513,8 @@ impl App {
                     "Commands:",
                     "  /exit          — quit",
                     "  /new           — start a new conversation",
+                    "  /plan          — toggle plan mode (read-only research & planning)",
+                    "  /approve       — approve plan and exit plan mode",
                     "  /save <name>   — save conversation as a named thread",
                     "  /resume [name] — restore a thread (no name = picker)",
                     "  /threads       — open thread picker",
@@ -527,10 +574,7 @@ impl App {
                     .unwrap_or_else(|| self.workspace_root.join(".loomis").join("traces"));
                 // Ensure directory exists.
                 let _ = std::fs::create_dir_all(&traces_dir);
-                let filename = format!(
-                    "trace_{}.jsonl",
-                    memory::iso8601_now()
-                );
+                let filename = format!("trace_{}.jsonl", memory::iso8601_now());
                 let path = traces_dir.join(&filename);
                 match std::fs::File::create(&path) {
                     Ok(file) => {
@@ -631,9 +675,7 @@ impl App {
                 self.debug_overlay.scroll_down(10);
                 None
             }
-            KeyCode::Char('o')
-                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
+            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.debug_overlay.visible = false;
                 None
             }

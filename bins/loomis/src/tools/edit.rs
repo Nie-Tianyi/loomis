@@ -153,7 +153,11 @@ fn content_preview(content: &str) -> String {
     };
 
     if line_count > 1 {
-        format!("Replace with: {} (+{} more lines)", truncated, line_count - 1)
+        format!(
+            "Replace with: {} (+{} more lines)",
+            truncated,
+            line_count - 1
+        )
     } else {
         format!("Replace with: {}", truncated)
     }

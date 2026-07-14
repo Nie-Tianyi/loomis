@@ -84,7 +84,10 @@ impl AgentHook for ObservabilityHook {
         if let Ok(mut rs) = self.run_start.lock() {
             *rs = Some(now);
         }
-        self.store.metrics.is_streaming.store(true, Ordering::Relaxed);
+        self.store
+            .metrics
+            .is_streaming
+            .store(true, Ordering::Relaxed);
         self.store
             .metrics
             .run_started
@@ -102,8 +105,8 @@ impl AgentHook for ObservabilityHook {
         self.emit(TraceEvent::RunStarted {
             session_id: session_id.to_string(),
             user_input: truncated,
-            max_steps: 0,        // not available in this callback — set in finish
-            max_retries: 0,      // same
+            max_steps: 0,   // not available in this callback — set in finish
+            max_retries: 0, // same
         });
     }
 
@@ -171,10 +174,7 @@ impl AgentHook for ObservabilityHook {
 
     fn on_step_start(&self, _session_id: &str, step: usize, _max_steps: usize) {
         self.current_step.store(step, Ordering::Relaxed);
-        self.store
-            .metrics
-            .step_count
-            .store(step, Ordering::Relaxed);
+        self.store.metrics.step_count.store(step, Ordering::Relaxed);
         self.emit(TraceEvent::StepStarted { step });
     }
 
@@ -290,11 +290,7 @@ impl AgentHook for ObservabilityHook {
 
     // ── Tool lifecycle ─────────────────────────────────────────────────────────
 
-    fn before_tool_call(
-        &self,
-        _session_id: &str,
-        tool_call: &ToolCall,
-    ) -> Result<(), AgentError> {
+    fn before_tool_call(&self, _session_id: &str, tool_call: &ToolCall) -> Result<(), AgentError> {
         let step = self.current_step.load(Ordering::Relaxed);
 
         // Record start time for duration computation.

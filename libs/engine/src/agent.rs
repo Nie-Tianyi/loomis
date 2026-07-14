@@ -151,10 +151,7 @@ pub enum AgentEvent {
     /// is known from the SSE stream, before arguments are fully accumulated.
     /// This gives the UI immediate feedback rather than waiting for the full
     /// streaming response to finish.
-    ToolCallStart {
-        id: String,
-        name: String,
-    },
+    ToolCallStart { id: String, name: String },
     /// A tool or user-command invocation, emitted before execution begins.
     /// Use [`origin`](CallOrigin) to distinguish LLM tool calls from
     /// user-initiated commands (e.g. `!git status`).

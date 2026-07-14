@@ -14,13 +14,16 @@ use tools::ToolRegistry;
 
 use tools::SandboxConfig;
 
-use crate::hooks::{ObservabilityHook, PersistenceHook, SandboxHook, SystemPromptHook, TodoListHook};
+use crate::hooks::{
+    ObservabilityHook, PersistenceHook, PlanModeHook, PlanModeState, SandboxHook, SystemPromptHook,
+    TodoListHook,
+};
 use crate::sandbox::audit_logger::AuditLogger;
 use crate::sandbox::resource_tracker::ResourceTracker;
 use crate::sandbox::shell_filter::ShellFilter;
 use crate::tools::{
-    AskUserQuestionTool, CalculatorTool, EditTool, GlobTool, GrepTool, LsTool, ReadTool, ShellTool,
-    TodoItem, TodoTool, WriteTool,
+    AskUserQuestionTool, CalculatorTool, EditTool, EnterPlanModeTool, ExitPlanModeTool, GlobTool,
+    GrepTool, LsTool, ReadTool, ShellTool, TodoItem, TodoTool, WriteTool,
 };
 use engine::ResponseRouter;
 
@@ -52,6 +55,8 @@ pub struct AgentKit {
     pub todos: Arc<RwLock<Vec<TodoItem>>>,
     /// Shared trace store — written by [`ObservabilityHook`], read by the TUI.
     pub trace_store: Arc<TraceStore>,
+    /// Shared plan-mode toggle between TUI and [`PlanModeHook`].
+    pub plan_mode: Arc<PlanModeState>,
 }
 
 /// Build a fully-wired coding agent with all channels and hooks.
@@ -84,6 +89,12 @@ pub fn build_coding_agent(
     // never land between an assistant tool_calls message and its
     // tool results (which violates the provider API contract).
     let pending_hints = PendingHints::default();
+
+    // ── Plan mode state ───────────────────────────────────────
+    // Created before tools so EnterPlanModeTool / ExitPlanModeTool
+    // can be registered and included in tool_names.
+    let plan_mode = Arc::new(PlanModeState::new());
+    let plan_file_path = workspace_root.join(".loomis").join("plan.md");
 
     // ── Tool registry ────────────────────────────────────────
     let mut registry = ToolRegistry::new();
@@ -141,6 +152,20 @@ pub fn build_coding_agent(
     let todo_tool = TodoTool::new(todo_state.clone());
     registry.register(Arc::new(todo_tool));
 
+    // EnterPlanModeTool — lets the LLM activate plan mode autonomously.
+    let enter_plan_tool = EnterPlanModeTool::new(plan_mode.clone(), plan_file_path.clone());
+    registry.register(Arc::new(enter_plan_tool));
+
+    // ExitPlanModeTool — lets the LLM present the plan for user approval
+    // and deactivate plan mode.
+    let exit_plan_tool = ExitPlanModeTool::new(
+        plan_mode.clone(),
+        plan_file_path.clone(),
+        response_router.clone(),
+    );
+    exit_plan_tool.set_agent_tx(agent_tx.clone());
+    registry.register(Arc::new(exit_plan_tool));
+
     let tool_names: Vec<String> = registry.iter().map(|(n, _)| n.to_string()).collect();
     let registry = Arc::new(registry);
 
@@ -153,6 +178,13 @@ pub fn build_coding_agent(
 
     // ObservabilityHook — full-chain trace event collection.
     let observability_hook = ObservabilityHook::new(trace_store.clone(), memory.clone());
+
+    // PlanModeHook — restricts tools in plan mode, injects plan-mode prompt.
+    let plan_mode_hook = PlanModeHook::new(
+        plan_mode.clone(),
+        plan_file_path.clone(),
+        workspace_root.to_path_buf(),
+    );
 
     // SandboxHook — shell approval, resource tracking, audit logging
     let approval_hook = SandboxHook::new(
@@ -198,12 +230,13 @@ pub fn build_coding_agent(
 
     let hooks: Vec<Box<dyn engine::AgentHook>> = vec![
         Box::new(system_prompt_hook), // 0. Seed system prompts on run start
-        Box::new(observability_hook), // 1. Full-chain trace event collection
-        Box::new(persistence_hook),   // 2. Save conversation after each run
-        Box::new(todo_list_hook),     // 3. Maintain [TODO] System message
-        Box::new(macro_compact),      // 4. LLM summarisation
-        Box::new(micro_compact),      // 5. Tool output clearing
-        Box::new(approval_hook),      // 6. Security sandbox
+        Box::new(plan_mode_hook),     // 1. Plan mode filtering + prompt injection
+        Box::new(observability_hook), // 2. Full-chain trace event collection
+        Box::new(persistence_hook),   // 3. Save conversation after each run
+        Box::new(todo_list_hook),     // 4. Maintain [TODO] System message
+        Box::new(macro_compact),      // 5. LLM summarisation
+        Box::new(micro_compact),      // 6. Tool output clearing
+        Box::new(approval_hook),      // 7. Security sandbox
     ];
 
     // ── Engine context (via builder) ─────────────────────────
@@ -229,5 +262,6 @@ pub fn build_coding_agent(
         persistence_config,
         todos: todo_state,
         trace_store,
+        plan_mode,
     }
 }

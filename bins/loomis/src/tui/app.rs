@@ -19,6 +19,7 @@ use memory::{PendingHints, PersistenceConfig, SharedMemory};
 use observability::TraceStore;
 
 use super::messages::{ChatMessage, ToolCallState};
+use crate::hooks::PlanModeState;
 use crate::tools::TodoItem;
 
 // ── App ──────────────────────────────────────────────────────────────────────────
@@ -99,10 +100,15 @@ pub struct App {
     pub trace_store: Arc<TraceStore>,
     /// Debug overlay showing recent trace events.
     pub debug_overlay: super::debug::DebugOverlay,
+
+    // ── Plan mode ──
+    /// Shared plan-mode toggle between TUI and [`PlanModeHook`].
+    pub plan_mode: Arc<PlanModeState>,
 }
 
 impl App {
     /// Creates a fresh app with a welcome system message.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         model: impl Into<String>,
         memory: SharedMemory,
@@ -112,6 +118,7 @@ impl App {
         pending_hints: PendingHints,
         persistence_config: PersistenceConfig,
         trace_store: Arc<TraceStore>,
+        plan_mode: Arc<PlanModeState>,
     ) -> Self {
         let model = model.into();
         Self {
@@ -144,6 +151,7 @@ impl App {
             persistence_config,
             trace_store,
             debug_overlay: super::debug::DebugOverlay::new(),
+            plan_mode,
         }
     }
 }
@@ -360,6 +368,7 @@ mod tests {
         let pending_hints = PendingHints::default();
         let todos = Arc::new(RwLock::new(Vec::<TodoItem>::new()));
         let trace_store = Arc::new(TraceStore::new());
+        let plan_mode = Arc::new(PlanModeState::new());
         App::new(
             "test-model",
             memory,
@@ -369,6 +378,7 @@ mod tests {
             pending_hints,
             PersistenceConfig::default(),
             trace_store,
+            plan_mode,
         )
     }
 

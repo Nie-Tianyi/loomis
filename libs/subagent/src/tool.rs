@@ -217,7 +217,14 @@ async fn run_subagent<C: LLMClient + 'static>(
     };
 
     // 7. Emit subagent trace before the final result.
-    emit_subagent_trace(&trace_store, &description, start, &memory, tool_call_count, llm_call_count);
+    emit_subagent_trace(
+        &trace_store,
+        &description,
+        start,
+        &memory,
+        tool_call_count,
+        llm_call_count,
+    );
 
     // 8. Agent finished (or panicked).  Emit final result.
     match result {

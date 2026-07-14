@@ -89,10 +89,7 @@ pub fn draw_debug_overlay(frame: &mut Frame, area: Rect, overlay: &DebugOverlay)
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(
-            " Debug Trace — {} events ",
-            overlay.events.len()
-        ))
+        .title(format!(" Debug Trace — {} events ", overlay.events.len()))
         .border_style(Style::default().fg(Color::Cyan))
         .style(Style::default().bg(Color::Rgb(15, 18, 25)));
 
@@ -103,14 +100,12 @@ pub fn draw_debug_overlay(frame: &mut Frame, area: Rect, overlay: &DebugOverlay)
     let mut lines: Vec<Line<'_>> = Vec::new();
 
     // Header
-    lines.push(Line::from(vec![
-        Span::styled(
-            "  Event                 Dur     Tokens   Detail",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        ),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "  Event                 Dur     Tokens   Detail",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    )]));
 
     // Reverse iterate for display (newest at bottom).
     let total = overlay.events.len();
@@ -162,7 +157,11 @@ fn format_trace_event(ts: &Timestamped<TraceEvent>) -> Line<'_> {
     let style = Style::default().fg(Color::Rgb(200, 200, 210));
 
     match &ts.inner {
-        RunStarted { session_id: _, user_input, .. } => {
+        RunStarted {
+            session_id: _,
+            user_input,
+            ..
+        } => {
             let detail = if user_input.len() > 60 {
                 format!("{}…", &user_input[..60])
             } else {
@@ -170,26 +169,44 @@ fn format_trace_event(ts: &Timestamped<TraceEvent>) -> Line<'_> {
             };
             Line::from(vec![
                 Span::styled(" ▶ RunStarted           ", style),
-                Span::styled(format!("        {detail}"), Style::default().fg(Color::DarkGray)),
-            ])
-        }
-        RunFinished { outcome, total_duration, total_steps, total_llm_calls, total_tool_calls, cumulative_usage } => {
-            let dur = format_duration(*total_duration);
-            let tok = format_tokens_short(cumulative_usage.total_tokens);
-            Line::from(vec![
-                Span::styled(format!(" ✓ RunFinished          {dur:>6} {tok:>6}  "), Style::default().fg(Color::Green)),
                 Span::styled(
-                    format!("s={total_steps} llm={total_llm_calls} tools={total_tool_calls} {outcome}"),
+                    format!("        {detail}"),
                     Style::default().fg(Color::DarkGray),
                 ),
             ])
         }
-        StepStarted { step } => {
+        RunFinished {
+            outcome,
+            total_duration,
+            total_steps,
+            total_llm_calls,
+            total_tool_calls,
+            cumulative_usage,
+        } => {
+            let dur = format_duration(*total_duration);
+            let tok = format_tokens_short(cumulative_usage.total_tokens);
             Line::from(vec![
-                Span::styled(format!(" # Step {step:<61}"), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!(" ✓ RunFinished          {dur:>6} {tok:>6}  "),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(
+                    format!(
+                        "s={total_steps} llm={total_llm_calls} tools={total_tool_calls} {outcome}"
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ])
         }
-        LlmCallStarted { step, attempt, message_count } => {
+        StepStarted { step } => Line::from(vec![Span::styled(
+            format!(" # Step {step:<61}"),
+            Style::default().fg(Color::Cyan),
+        )]),
+        LlmCallStarted {
+            step,
+            attempt,
+            message_count,
+        } => {
             let label = if *attempt > 0 {
                 format!(" → LLM #{step} retry#{attempt}    ")
             } else {
@@ -197,57 +214,126 @@ fn format_trace_event(ts: &Timestamped<TraceEvent>) -> Line<'_> {
             };
             Line::from(vec![
                 Span::styled(label, Style::default().fg(Color::Yellow)),
-                Span::styled(format!("        {message_count} msgs"), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("        {message_count} msgs"),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ])
         }
-        LlmCallFinished { step: _, attempt: _, duration, usage, finish_reason } => {
+        LlmCallFinished {
+            step: _,
+            attempt: _,
+            duration,
+            usage,
+            finish_reason,
+        } => {
             let dur = format_duration(*duration);
             let tok = format_tokens_short(usage.total_tokens);
             let reason = finish_reason.as_deref().unwrap_or("-");
             Line::from(vec![
-                Span::styled(format!(" ← LLM done             {dur:>6} {tok:>6}  "), Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!(" ← LLM done             {dur:>6} {tok:>6}  "),
+                    Style::default().fg(Color::Green),
+                ),
                 Span::styled(reason, Style::default().fg(Color::DarkGray)),
             ])
         }
-        LlmCallFailed { step: _, attempt, error, will_retry, duration: _ } => {
-            let retry = if *will_retry { "will retry" } else { "terminal" };
+        LlmCallFailed {
+            step: _,
+            attempt,
+            error,
+            will_retry,
+            duration: _,
+        } => {
+            let retry = if *will_retry {
+                "will retry"
+            } else {
+                "terminal"
+            };
             Line::from(vec![
-                Span::styled(format!(" ✗ LLM fail (retry #{attempt})     "), Style::default().fg(Color::Red)),
-                Span::styled(format!("{retry}: {error}"), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" ✗ LLM fail (retry #{attempt})     "),
+                    Style::default().fg(Color::Red),
+                ),
+                Span::styled(
+                    format!("{retry}: {error}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ])
         }
-        ToolCallStarted { tool_call_id: _, tool_name, step } => {
-            Line::from(vec![
-                Span::styled(format!(" ◌ {tool_name:<17} (#{step})  "), Style::default().fg(Color::Yellow)),
-            ])
-        }
-        ToolCallFinished { tool_call_id: _, tool_name, duration, success, output_size_bytes } => {
+        ToolCallStarted {
+            tool_call_id: _,
+            tool_name,
+            step,
+        } => Line::from(vec![Span::styled(
+            format!(" ◌ {tool_name:<17} (#{step})  "),
+            Style::default().fg(Color::Yellow),
+        )]),
+        ToolCallFinished {
+            tool_call_id: _,
+            tool_name,
+            duration,
+            success,
+            output_size_bytes,
+        } => {
             let dur = format_duration(*duration);
             let marker = if *success { "✓" } else { "✗" };
             let color = if *success { Color::Green } else { Color::Red };
             Line::from(vec![
-                Span::styled(format!(" {marker} {tool_name:<17} {dur:>6}         "), Style::default().fg(color)),
-                Span::styled(format!("{output_size_bytes} bytes"), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" {marker} {tool_name:<17} {dur:>6}         "),
+                    Style::default().fg(color),
+                ),
+                Span::styled(
+                    format!("{output_size_bytes} bytes"),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ])
         }
-        ToolCallRejected { tool_call_id: _, tool_name, reason } => {
-            Line::from(vec![
-                Span::styled(format!(" ⊘ {tool_name:<17} REJECTED "), Style::default().fg(Color::Red)),
-                Span::styled(reason.as_str(), Style::default().fg(Color::DarkGray)),
-            ])
-        }
-        StreamingSummary { step, content_chunks, reasoning_chunks } => {
-            Line::from(vec![
-                Span::styled(format!(" ~ Stream step#{step:<52}"), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("content={content_chunks} reasoning={reasoning_chunks}"), Style::default().fg(Color::DarkGray)),
-            ])
-        }
-        SubagentFinished { description, steps, llm_calls, tool_calls, usage, duration } => {
+        ToolCallRejected {
+            tool_call_id: _,
+            tool_name,
+            reason,
+        } => Line::from(vec![
+            Span::styled(
+                format!(" ⊘ {tool_name:<17} REJECTED "),
+                Style::default().fg(Color::Red),
+            ),
+            Span::styled(reason.as_str(), Style::default().fg(Color::DarkGray)),
+        ]),
+        StreamingSummary {
+            step,
+            content_chunks,
+            reasoning_chunks,
+        } => Line::from(vec![
+            Span::styled(
+                format!(" ~ Stream step#{step:<52}"),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("content={content_chunks} reasoning={reasoning_chunks}"),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        SubagentFinished {
+            description,
+            steps,
+            llm_calls,
+            tool_calls,
+            usage,
+            duration,
+        } => {
             let dur = format_duration(*duration);
             let tok = format_tokens_short(usage.total_tokens);
             Line::from(vec![
-                Span::styled(format!(" 📦 Subagent            {dur:>6} {tok:>6}  "), Style::default().fg(Color::Magenta)),
-                Span::styled(format!("{description} s={steps} llm={llm_calls} tools={tool_calls}"), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" 📦 Subagent            {dur:>6} {tok:>6}  "),
+                    Style::default().fg(Color::Magenta),
+                ),
+                Span::styled(
+                    format!("{description} s={steps} llm={llm_calls} tools={tool_calls}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ])
         }
     }

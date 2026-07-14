@@ -59,7 +59,7 @@ agent_oxide/
 | `engine` | Core loop | `Agent`, `AgentBuilder`, `AgentHook` trait, `AgentEvent`, `AgentError`, `EngineContext`, `ResponseRouter`, `InterventionRequest`/`Response`, `RunOutcome`, `CallOrigin` |
 | `subagent` | Concrete | `SubagentTool<C>`, `SubagentConfig`, `filter_tools()` |
 | `observability` | Abstraction | `TraceEvent`, `TraceStore`, `RunMetrics`, `SubagentTrace`, `Timestamped<T>` |
-| `loomis` | Binary | 11 concrete tools, 5 hooks (Sandbox, Persistence, SystemPrompt, TodoList, Observability), sandbox system, TUI, `AgentKit`, `build_coding_agent()` |
+| `loomis` | Binary | 11 concrete tools, 6 hooks (Sandbox, Persistence, SystemPrompt, TodoList, Observability, PlanMode), sandbox system, TUI, `AgentKit`, `build_coding_agent()` |
 
 ### Dependency graph
 
@@ -166,6 +166,25 @@ Config: `.loomis/config.toml` → `SandboxConfig` (safe defaults if missing).
 
 **Persistence**: `/trace-save` slash command exports buffered events as JSONL to `.loomis/traces/trace_{timestamp}.jsonl`.
 
+### Plan Mode (read-only research & planning)
+
+Toggled via `/plan` slash command. When active, the agent switches to a read-only mode — it can explore the codebase but cannot make changes.
+
+| Component | Crate | Role |
+| --- | --- | --- |
+| `PlanModeState` | `loomis` (hooks) | `Arc<AtomicBool>` shared between TUI and `PlanModeHook` |
+| `PlanModeHook` | `loomis` (hooks) | Implements `AgentHook` — `before_tool_call` blocks write/edit/shell (except plan file), `on_llm_start` injects `[PLAN_MODE]` System message |
+| `/plan` | `loomis` (TUI) | Toggle slash command — flips `PlanModeState::active`, creates `.loomis/plan.md` |
+| `/approve` | `loomis` (TUI) | Exits plan mode with an "approved" message |
+
+**Hook order**: PlanModeHook runs at position 1 (after SystemPromptHook, before ObservabilityHook) so plan-mode rejections happen before compaction or sandbox evaluation.
+
+**Allowed tools in plan mode**: `read`, `ls`, `glob`, `grep`, `calculator`, `ask_user_question`, `todo`, `task`/`subagent`, `write` (only to `.loomis/plan.md`).
+
+**Blocked tools in plan mode**: `edit`, `shell`, `write` (any file other than the plan file).
+
+**Plan file**: `.loomis/plan.md` — the only writable file in plan mode. The LLM is instructed to write its plan here, then ask the user to review and toggle plan mode off.
+
 ### `ResponseRouter`
 Maps `request_id` → `SyncSender<InterventionResponse>`. Multiple components (SandboxHook, AskUserQuestionTool) can need user intervention simultaneously — each registers its own channel, sends an `InterventionRequired` event with its `request_id`, and blocks on its receiver. The TUI routes responses through the router.
 
@@ -181,8 +200,8 @@ Auto-saves to `.loomis/threads/{name}.json` + `.md` after each agent turn via `P
 ### Loomis concrete tools (11)
 `Calculator`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Ls`, `Shell`, `Subagent`, `AskUserQuestion`, `Todo`
 
-### Loomis concrete hooks (5)
-`SystemPromptHook` (seeds initial system messages), `ObservabilityHook` (full-chain trace collection), `PersistenceHook` (auto-save), `TodoListHook` (syncs [TODO] System message), `SandboxHook` (security)
+### Loomis concrete hooks (6)
+`SystemPromptHook` (seeds initial system messages), `PlanModeHook` (tool restriction + plan-mode prompt injection), `ObservabilityHook` (full-chain trace collection), `PersistenceHook` (auto-save), `TodoListHook` (syncs [TODO] System message), `SandboxHook` (security)
 
 ### TUI module (`bins/loomis/src/tui/`)
 
@@ -196,7 +215,7 @@ agent_rx ←────── AgentEvent ─────── agent_tx
 ```
 
 - **Keybindings**: Enter (submit), Ctrl+C (cancel), Esc (cancel), Ctrl+D (exit), Ctrl+O (toggle trace debug overlay), PgUp/PgDown (scroll), Up/Down (history), Left/Right/Home/End (cursor). Intervention prompts: ↑/↓ (navigate), Enter (select), Esc (cancel)
-- **Slash commands**: `/exit`, `/new`, `/save <name>`, `/resume [name]`, `/threads`, `/stats`, `/tools`, `/debug`, `/trace-save`, `/help`
+- **Slash commands**: `/exit`, `/new`, `/plan`, `/approve`, `/save <name>`, `/resume [name]`, `/threads`, `/stats`, `/tools`, `/debug`, `/trace-save`, `/help`
 - **Bang prefix**: `!command` — runs shell, output shared with agent
 
 ## Future work

@@ -1,7 +1,7 @@
 //! Thread-safe trace event storage with a lock-free ring buffer for the hot path.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use provider::Usage;
 
@@ -374,12 +374,23 @@ impl TraceEventRecord {
             detail: None,
         };
         match &ts.inner {
-            RunStarted { session_id, user_input, .. } => {
+            RunStarted {
+                session_id,
+                user_input,
+                ..
+            } => {
                 rec.event = "RunStarted".into();
                 rec.session_id = Some(session_id.clone());
                 rec.detail = Some(user_input.clone());
             }
-            RunFinished { outcome, total_duration, total_steps, total_llm_calls, total_tool_calls, cumulative_usage } => {
+            RunFinished {
+                outcome,
+                total_duration,
+                total_steps,
+                total_llm_calls,
+                total_tool_calls,
+                cumulative_usage,
+            } => {
                 rec.event = "RunFinished".into();
                 rec.duration_ms = Some(total_duration.as_millis() as u64);
                 rec.tokens_total = Some(cumulative_usage.total_tokens);
@@ -391,13 +402,23 @@ impl TraceEventRecord {
                 rec.event = "StepStarted".into();
                 rec.step = Some(*step);
             }
-            LlmCallStarted { step, attempt, message_count } => {
+            LlmCallStarted {
+                step,
+                attempt,
+                message_count,
+            } => {
                 rec.event = "LlmCallStarted".into();
                 rec.step = Some(*step);
                 rec.attempt = Some(*attempt);
                 rec.detail = Some(format!("msgs={message_count}"));
             }
-            LlmCallFinished { step, attempt, duration, usage, finish_reason } => {
+            LlmCallFinished {
+                step,
+                attempt,
+                duration,
+                usage,
+                finish_reason,
+            } => {
                 rec.event = "LlmCallFinished".into();
                 rec.step = Some(*step);
                 rec.attempt = Some(*attempt);
@@ -405,38 +426,73 @@ impl TraceEventRecord {
                 rec.tokens_total = Some(usage.total_tokens);
                 rec.detail = finish_reason.clone();
             }
-            LlmCallFailed { step, attempt, error, will_retry, duration } => {
+            LlmCallFailed {
+                step,
+                attempt,
+                error,
+                will_retry,
+                duration,
+            } => {
                 rec.event = "LlmCallFailed".into();
                 rec.step = Some(*step);
                 rec.attempt = Some(*attempt);
                 rec.duration_ms = Some(duration.as_millis() as u64);
                 rec.detail = Some(format!("error={error} retry={will_retry}"));
             }
-            ToolCallStarted { tool_call_id, tool_name, step } => {
+            ToolCallStarted {
+                tool_call_id,
+                tool_name,
+                step,
+            } => {
                 rec.event = "ToolCallStarted".into();
                 rec.step = Some(*step);
                 rec.tool_name = Some(tool_name.clone());
                 rec.tool_call_id = Some(tool_call_id.clone());
             }
-            ToolCallFinished { tool_call_id, tool_name, duration, success, output_size_bytes } => {
+            ToolCallFinished {
+                tool_call_id,
+                tool_name,
+                duration,
+                success,
+                output_size_bytes,
+            } => {
                 rec.event = "ToolCallFinished".into();
                 rec.tool_name = Some(tool_name.clone());
                 rec.tool_call_id = Some(tool_call_id.clone());
                 rec.duration_ms = Some(duration.as_millis() as u64);
-                rec.detail = Some(format!("success={success} output_bytes={output_size_bytes}"));
+                rec.detail = Some(format!(
+                    "success={success} output_bytes={output_size_bytes}"
+                ));
             }
-            ToolCallRejected { tool_call_id, tool_name, reason } => {
+            ToolCallRejected {
+                tool_call_id,
+                tool_name,
+                reason,
+            } => {
                 rec.event = "ToolCallRejected".into();
                 rec.tool_name = Some(tool_name.clone());
                 rec.tool_call_id = Some(tool_call_id.clone());
                 rec.detail = Some(reason.clone());
             }
-            StreamingSummary { step, content_chunks, reasoning_chunks } => {
+            StreamingSummary {
+                step,
+                content_chunks,
+                reasoning_chunks,
+            } => {
                 rec.event = "StreamingSummary".into();
                 rec.step = Some(*step);
-                rec.detail = Some(format!("content_chunks={content_chunks} reasoning_chunks={reasoning_chunks}"));
+                rec.detail = Some(format!(
+                    "content_chunks={content_chunks} reasoning_chunks={reasoning_chunks}"
+                ));
             }
-            SubagentFinished { description, steps, llm_calls, tool_calls, usage, duration } => {
+            SubagentFinished {
+                description,
+                steps,
+                llm_calls,
+                tool_calls,
+                usage,
+                duration,
+            } => {
                 rec.event = "SubagentFinished".into();
                 rec.duration_ms = Some(duration.as_millis() as u64);
                 rec.tokens_total = Some(usage.total_tokens);
