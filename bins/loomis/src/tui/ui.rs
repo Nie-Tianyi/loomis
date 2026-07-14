@@ -115,6 +115,9 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &App) {
     let max_scroll = total_lines.saturating_sub(visible_height);
     let scroll = (max_scroll.saturating_sub(app.scroll_offset)).min(max_scroll) as u16;
 
+    // Clear residual characters from previous frame before rendering.
+    frame.render_widget(Clear, para_area);
+
     let paragraph = Paragraph::new(Text::from(all_lines))
         .block(block)
         .scroll((scroll, 0));
@@ -131,6 +134,10 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &App) {
             width: 1,
             height: inner.height,
         };
+
+        // Clear residual text from the scrollbar column (e.g. when
+        // scrollbar first appears after full-width paragraph rendering).
+        frame.render_widget(Clear, scrollbar_area);
 
         let thumb_pos = if total_lines == 0 {
             0.0
@@ -738,7 +745,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     // Show a hint when the input is empty
     let lines: Vec<Line<'_>> = if app.input.is_empty() && has_intervene && app.intervene_text_mode {
         vec![
-            Line::from(Span::raw("")),
+            Line::from(Span::raw(" ")),
             Line::from(Span::styled(
                 " Type your response and press Enter. Esc to go back.",
                 Style::default()
@@ -748,7 +755,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
         ]
     } else if app.input.is_empty() && has_intervene {
         vec![
-            Line::from(Span::raw("")),
+            Line::from(Span::raw(" ")),
             Line::from(Span::styled(
                 " ↑↓ to navigate  ·  Enter to select  ·  Esc to cancel",
                 Style::default()
@@ -758,7 +765,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
         ]
     } else if app.input.is_empty() && app.streaming {
         vec![
-            Line::from(Span::raw("")),
+            Line::from(Span::raw(" ")),
             Line::from(Span::styled(
                 " Type to inject a hint while the agent is running. Enter to send.",
                 Style::default()
@@ -768,7 +775,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
         ]
     } else if app.input.is_empty() && !app.streaming {
         vec![
-            Line::from(Span::raw("")),
+            Line::from(Span::raw(" ")),
             Line::from(Span::styled(
                 " Type a message and press Enter. Shift+Enter for newline. /help for commands.",
                 Style::default()
@@ -779,6 +786,9 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         display_lines
     };
+
+    // Clear residual characters from previous frame before rendering.
+    frame.render_widget(Clear, area);
 
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
@@ -870,9 +880,9 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
 
     let (left, right, accent_text) = build_status_content(app);
 
-    let left_width = left.len();
-    let accent_width = accent_text.len();
-    let right_width = right.len();
+    let left_width = UnicodeWidthStr::width(left.as_str());
+    let accent_width = UnicodeWidthStr::width(accent_text.as_str());
+    let right_width = UnicodeWidthStr::width(right.as_str());
     let total_space = area.width as usize;
 
     let gap = if left_width + accent_width + right_width < total_space {
@@ -887,6 +897,9 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(accent_text, Style::default().fg(accent).bg(bg_color)),
         Span::styled(right, Style::default().fg(Color::DarkGray).bg(bg_color)),
     ]);
+
+    // Clear residual characters from previous frame before rendering.
+    frame.render_widget(Clear, area);
 
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);
