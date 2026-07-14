@@ -42,7 +42,7 @@ impl ShellFilter {
             .filter_map(|p| {
                 Regex::new(p)
                     .inspect_err(|e| {
-                        eprintln!("WARNING: invalid deny_pattern regex '{p}': {e}");
+                        tracing::warn!(pattern = %p, error = %e, "Invalid deny_pattern regex");
                     })
                     .ok()
             })

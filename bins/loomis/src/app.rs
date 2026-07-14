@@ -72,9 +72,10 @@ pub fn build_coding_agent(
 
     // ── Workspace filesystem ─────────────────────────────────
     let workspace = tools::WorkspaceFs::new(workspace_root, sandbox_config).unwrap_or_else(|e| {
-        eprintln!(
-            "ERROR: Cannot create workspace at {}: {e}",
-            workspace_root.display()
+        tracing::error!(
+            path = %workspace_root.display(),
+            error = %e,
+            "Cannot create workspace",
         );
         std::process::exit(1);
     });

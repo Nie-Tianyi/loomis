@@ -194,9 +194,9 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
                 // avoid retrying on every subsequent LLM call (which would
                 // burn API calls in a tight loop).
                 if !self.compaction_failed.swap(true, Ordering::Relaxed) {
-                    eprintln!(
-                        "WARNING: Macro-compaction summarisation failed: {e}\n  \
-                         Will not retry compaction until it succeeds once."
+                    tracing::warn!(
+                        error = %e,
+                        "Macro-compaction summarisation failed; will not retry until it succeeds once",
                     );
                 }
                 String::new()

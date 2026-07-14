@@ -244,7 +244,7 @@ fn try_load_project_rules(workspace_root: &Path) -> Option<String> {
                 continue;
             }
             Err(e) => {
-                eprintln!("WARNING: Cannot read {}: {e}", path.display());
+                tracing::warn!(path = %path.display(), error = %e, "Cannot read project rules file");
                 continue;
             }
         }
