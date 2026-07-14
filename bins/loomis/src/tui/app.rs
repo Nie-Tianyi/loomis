@@ -208,7 +208,7 @@ impl App {
                     args: arguments,
                     state: ToolCallState::Running,
                     origin,
-                    progress_line: None,
+                    progress_lines: Vec::new(),
                     timestamp: ChatMessage::now_timestamp(),
                 });
             }
@@ -255,13 +255,13 @@ impl App {
                     if let ChatMessage::ToolCall {
                         id: mid,
                         state,
-                        progress_line,
+                        progress_lines,
                         ..
                     } = msg
                         && *mid == id
                         && matches!(state, ToolCallState::Running)
                     {
-                        *progress_line = Some(message);
+                        progress_lines.push(message);
                         break;
                     }
                 }

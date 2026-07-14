@@ -1,15 +1,21 @@
 //! [`EditTool`] — 行级文件编辑工具。
 //!
 //! 替换文件中指定行范围的内容。支持删除行（传入空字符串）。
+//!
+//! 通过 [`Progress::InProgress`] 事件将替换内容流式预览到 TUI，
+//! 让用户在工具执行期间即时看到编辑的内容。
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc;
+
+use tools::WorkspaceFs;
+use tools::{FsError, Progress, ProgressStream, ToolError, tool};
 
 #[cfg(test)]
 use tools::SandboxConfig;
-use tools::WorkspaceFs;
-use tools::{FsError, ProgressStream, ToolError, tool};
 
 /// Edit 工具的参数。
 #[derive(JsonSchema, Deserialize)]
@@ -80,6 +86,7 @@ impl EditTool {
     }
 
     fn execute_stream(&self, args: EditArgs) -> Result<ProgressStream, ToolError> {
+        // Validate and edit synchronously first (errors surface immediately).
         let output = self
             .fs
             .edit_lines(
@@ -89,7 +96,66 @@ impl EditTool {
                 &args.new_content,
             )
             .map_err(map_fs_err)?;
-        Ok(ProgressStream::done(output))
+
+        let file_path = args.file_path.clone();
+        let start = args.start_line;
+        let end = args.end_line;
+        let range_label = if start == end {
+            format!("line {}", start)
+        } else {
+            format!("lines {}-{}", start, end)
+        };
+        let preview = content_preview(&args.new_content);
+
+        // Stream progress events with small delays so the TUI can render
+        // intermediate states before Done transitions to Complete.
+        let (tx, rx) = mpsc::unbounded_channel::<Progress>();
+
+        tokio::spawn(async move {
+            tx.send(Progress::InProgress(format!(
+                "Editing {}: {}...",
+                file_path, range_label
+            )))
+            .ok();
+            tokio::time::sleep(Duration::from_millis(80)).await;
+
+            if !preview.is_empty() {
+                tx.send(Progress::InProgress(preview)).ok();
+                tokio::time::sleep(Duration::from_millis(80)).await;
+            }
+
+            tx.send(Progress::Done(output)).ok();
+        });
+
+        let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|item| (item, rx))
+        });
+        Ok(ProgressStream::new(Box::pin(stream)))
+    }
+}
+
+/// Build a single-line content preview for progress display.
+///
+/// Shows the first non-empty line, truncated to 80 characters.
+/// Appends a line-count hint for multi-line content.
+fn content_preview(content: &str) -> String {
+    if content.is_empty() {
+        return String::new(); // empty replacement (delete): skip preview
+    }
+
+    let first_line = content.lines().next().unwrap_or("");
+    let line_count = content.lines().count();
+
+    let truncated = if first_line.len() > 80 {
+        format!("{}...", &first_line[..77])
+    } else {
+        first_line.to_string()
+    };
+
+    if line_count > 1 {
+        format!("Replace with: {} (+{} more lines)", truncated, line_count - 1)
+    } else {
+        format!("Replace with: {}", truncated)
     }
 }
 
@@ -105,7 +171,27 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::StreamExt;
     use tools::Tool;
+
+    /// Drive a progress stream to completion, collecting all messages.
+    /// Returns the final `Done` payload.
+    async fn stream_done(mut stream: ProgressStream) -> String {
+        let mut in_progress = vec![];
+        while let Some(progress) = stream.next().await {
+            match progress {
+                Progress::InProgress(msg) => in_progress.push(msg),
+                Progress::Done(output) => {
+                    assert!(
+                        !in_progress.is_empty(),
+                        "expected at least one InProgress before Done"
+                    );
+                    return output;
+                }
+            }
+        }
+        panic!("stream ended without Progress::Done");
+    }
 
     fn setup() -> (tempfile::TempDir, EditTool) {
         let dir = tempfile::tempdir().unwrap();
@@ -126,78 +212,86 @@ mod tests {
         std::fs::read_to_string(dir.path().join(path)).unwrap()
     }
 
-    #[test]
-    fn test_name() {
+    #[tokio::test]
+    async fn test_name() {
         let (_dir, tool) = setup();
         assert_eq!(tool.name(), "edit");
     }
 
-    #[test]
-    fn test_parameters_schema() {
+    #[tokio::test]
+    async fn test_parameters_schema() {
         let (_dir, tool) = setup();
         let params = tool.parameter_schema();
         assert_eq!(params["type"], "object");
         assert_eq!(params["additionalProperties"], false);
     }
 
-    #[test]
-    fn test_replace_single_line() {
+    #[tokio::test]
+    async fn test_replace_single_line() {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "line1\nline2\nline3\n");
 
-        let mut result = Tool::execute_stream(
+        let stream = Tool::execute_stream(
             &tool,
             r#"{"file_path": "f.txt", "start_line": 2, "end_line": 2, "new_content": "REPLACED"}"#,
         )
         .unwrap();
-        let output = result.poll_done();
+        let output = stream_done(stream).await;
         assert!(output.contains("Replaced"));
         assert_eq!(read_file(&dir, "f.txt"), "line1\nREPLACED\nline3\n");
     }
 
-    #[test]
-    fn test_replace_range() {
+    #[tokio::test]
+    async fn test_replace_range() {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "a\nb\nc\nd\ne\n");
 
-        Tool::execute_stream(
-            &tool,
-            r#"{"file_path": "f.txt", "start_line": 2, "end_line": 4, "new_content": "X\nY"}"#,
+        stream_done(
+            Tool::execute_stream(
+                &tool,
+                r#"{"file_path": "f.txt", "start_line": 2, "end_line": 4, "new_content": "X\nY"}"#,
+            )
+            .unwrap(),
         )
-        .unwrap()
-        .poll_done();
+        .await;
         assert_eq!(read_file(&dir, "f.txt"), "a\nX\nY\ne\n");
     }
 
-    #[test]
-    fn test_delete_lines() {
+    #[tokio::test]
+    async fn test_delete_lines() {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "a\nb\nc\n");
 
-        Tool::execute_stream(
-            &tool,
-            r#"{"file_path": "f.txt", "start_line": 2, "end_line": 2, "new_content": ""}"#,
+        stream_done(
+            Tool::execute_stream(
+                &tool,
+                r#"{"file_path": "f.txt", "start_line": 2, "end_line": 2, "new_content": ""}"#,
+            )
+            .unwrap(),
         )
-        .unwrap();
+        .await;
         assert_eq!(read_file(&dir, "f.txt"), "a\nc\n");
     }
 
-    #[test]
-    fn test_insert_at_end() {
+    #[tokio::test]
+    async fn test_insert_at_end() {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "a\nb\n");
 
         // 替换超出行范围的"append"行为（替换不存在的行就变成 append）
-        Tool::execute_stream(
-            &tool,
-            r#"{"file_path": "f.txt", "start_line": 3, "end_line": 3, "new_content": "c"}"#,
+        stream_done(
+            Tool::execute_stream(
+                &tool,
+                r#"{"file_path": "f.txt", "start_line": 3, "end_line": 3, "new_content": "c"}"#,
+            )
+            .unwrap(),
         )
-        .unwrap();
+        .await;
         assert_eq!(read_file(&dir, "f.txt"), "a\nb\nc\n");
     }
 
-    #[test]
-    fn test_missing_start_line() {
+    #[tokio::test]
+    async fn test_missing_start_line() {
         let (_dir, tool) = setup();
         let err = Tool::execute_stream(
             &tool,
@@ -207,8 +301,8 @@ mod tests {
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
-    #[test]
-    fn test_nonexistent_file() {
+    #[tokio::test]
+    async fn test_nonexistent_file() {
         let (_dir, tool) = setup();
         let err = Tool::execute_stream(
             &tool,
@@ -216,5 +310,24 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
+    }
+
+    #[tokio::test]
+    async fn test_content_preview_delete() {
+        // Empty content (delete) should return empty preview.
+        assert!(content_preview("").is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_content_preview_single_line() {
+        let preview = content_preview("hello world");
+        assert_eq!(preview, "Replace with: hello world");
+    }
+
+    #[tokio::test]
+    async fn test_content_preview_multi_line() {
+        let preview = content_preview("line1\nline2\nline3");
+        assert!(preview.contains("line1"));
+        assert!(preview.contains("+2 more lines"));
     }
 }

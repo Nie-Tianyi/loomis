@@ -237,7 +237,7 @@ fn message_to_lines(
             args,
             state,
             origin,
-            progress_line,
+            progress_lines,
             timestamp,
             ..
         } => {
@@ -300,8 +300,8 @@ fn message_to_lines(
                             ]));
                         }
                     }
-                    // Progress line (if the tool reports real-time output)
-                    if let Some(msg) = progress_line {
+                    // Accumulated progress lines (each ToolProgress appends one)
+                    for msg in progress_lines {
                         let display = msg.lines().next().unwrap_or(msg);
                         let truncated =
                             truncate_to_width(display, area_width.saturating_sub(8) as usize);

@@ -29,8 +29,10 @@ pub enum ChatMessage {
         args: String,
         state: ToolCallState,
         origin: CallOrigin,
-        /// Latest progress message while tool is Running (shown inline).
-        progress_line: Option<String>,
+        /// Accumulated progress messages while tool is Running.
+        /// Each [`ToolProgress`](engine::AgentEvent::ToolProgress) event
+        /// appends a new line; all are rendered indented under the header.
+        progress_lines: Vec<String>,
         timestamp: String,
     },
     /// System-level message (slash commands, info).
