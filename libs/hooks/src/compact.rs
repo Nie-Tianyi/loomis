@@ -24,7 +24,7 @@ use provider::{CompletionRequest, LLMClient, Message, Role};
 pub const COMPACTED_TOOL_OUTPUT_PLACEHOLDER: &str = "[Old tool result content cleared]";
 
 /// Default number of recent tool outputs to preserve during compaction.
-pub const DEFAULT_KEEP_RECENT_TOOL_OUTPUTS: usize = 5;
+pub const DEFAULT_KEEP_RECENT_TOOL_OUTPUTS: usize = 10;
 
 /// Default set of tool names whose outputs are eligible for compaction.
 pub const DEFAULT_COMPACT_ELIGIBLE_TOOLS: &[&str] =
