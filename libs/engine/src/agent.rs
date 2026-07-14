@@ -2,7 +2,7 @@
 //!
 //! Drives autonomous tool-using conversations with an LLM provider.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -147,6 +147,14 @@ pub enum AgentEvent {
     Token(String),
     /// A reasoning / chain-of-thought token.
     ReasoningToken(String),
+    /// A tool call has started streaming — emitted as soon as the tool name
+    /// is known from the SSE stream, before arguments are fully accumulated.
+    /// This gives the UI immediate feedback rather than waiting for the full
+    /// streaming response to finish.
+    ToolCallStart {
+        id: String,
+        name: String,
+    },
     /// A tool or user-command invocation, emitted before execution begins.
     /// Use [`origin`](CallOrigin) to distinguish LLM tool calls from
     /// user-initiated commands (e.g. `!git status`).
@@ -968,6 +976,10 @@ struct StreamAccumulator {
     /// Token usage from the terminal chunk (present only in the final
     /// SSE event alongside the non-null `finish_reason`).
     usage: Option<Usage>,
+    /// Indices of tool calls that have already been announced via a
+    /// [`ToolCallStart`](AgentEvent::ToolCallStart) event.  Prevents
+    /// duplicate announcements across multiple chunks for the same index.
+    announced: HashSet<u32>,
 }
 
 /// Buffers incremental fields for a single tool call during streaming.
@@ -989,6 +1001,7 @@ impl StreamAccumulator {
             tool_calls: BTreeMap::new(),
             finish_reason: None,
             usage: None,
+            announced: HashSet::new(),
         }
     }
 
@@ -1055,6 +1068,23 @@ impl StreamAccumulator {
         if let Some(ref u) = chunk.usage {
             self.usage = Some(u.clone());
         }
+    }
+
+    /// Drain newly-announced `(id, name)` pairs since the last call.
+    ///
+    /// Called after [`ingest`] in the streaming loop.  A tool call is
+    /// "announceable" when its name is non-empty and its index has not
+    /// yet been announced.  Once announced, an index is tracked in the
+    /// [`announced`](StreamAccumulator::announced) set to prevent duplicates.
+    fn take_announcements(&mut self) -> Vec<(String, String)> {
+        let mut announcements = Vec::new();
+        for (&idx, tc) in &self.tool_calls {
+            if !tc.name.is_empty() && !self.announced.contains(&idx) {
+                self.announced.insert(idx);
+                announcements.push((tc.id.clone(), tc.name.clone()));
+            }
+        }
+        announcements
     }
 
     /// Materialize all accumulated deltas into a single assistant [`Message`].
@@ -1144,6 +1174,13 @@ fn emit_chunk_events(
         }
     }
     acc.ingest(chunk);
+
+    // Emit ToolCallStart for tool calls whose name just became known.
+    // This gives the TUI immediate feedback — the tool name appears
+    // with a spinner while arguments are still streaming in.
+    for (id, name) in acc.take_announcements() {
+        let _ = tx.send(AgentEvent::ToolCallStart { id, name });
+    }
 }
 
 // ── Parallel tool execution helpers ──────────────────────────────────────────

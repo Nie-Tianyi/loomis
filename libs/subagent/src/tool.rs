@@ -261,6 +261,9 @@ fn forward_event_to_progress(event: engine::AgentEvent, tx: &mpsc::UnboundedSend
                 let _ = tx.send(Progress::InProgress(text));
             }
         }
+        AgentEvent::ToolCallStart { name, .. } => {
+            let _ = tx.send(Progress::InProgress(format!("🔧 {name}")));
+        }
         AgentEvent::ToolCall {
             name, arguments, ..
         } => {

@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use engine::AgentEvent;
+use engine::{AgentEvent, CallOrigin};
 use memory::{PendingHints, PersistenceConfig, SharedMemory};
 
 use super::messages::{ChatMessage, ToolCallState};
@@ -196,21 +196,45 @@ impl App {
             },
 
             // ── Tool lifecycle ───────────────────────────────────────
+            AgentEvent::ToolCallStart { id, name } => {
+                self.messages.push(ChatMessage::ToolCall {
+                    id,
+                    name,
+                    args: String::new(),
+                    state: ToolCallState::Running,
+                    origin: CallOrigin::Llm,
+                    progress_lines: Vec::new(),
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+            }
+
             AgentEvent::ToolCall {
                 id,
                 name,
                 arguments,
                 origin,
             } => {
-                self.messages.push(ChatMessage::ToolCall {
-                    id,
-                    name,
-                    args: arguments,
-                    state: ToolCallState::Running,
-                    origin,
-                    progress_lines: Vec::new(),
-                    timestamp: ChatMessage::now_timestamp(),
+                // Upsert: if ToolCallStart already created a Running entry
+                // for this id, update its args; otherwise create one.
+                let existing = self.messages.iter_mut().rev().find(|msg| {
+                    matches!(msg, ChatMessage::ToolCall { id: mid, state: ToolCallState::Running, .. } if *mid == id)
                 });
+                match existing {
+                    Some(ChatMessage::ToolCall { args, .. }) => {
+                        *args = arguments;
+                    }
+                    _ => {
+                        self.messages.push(ChatMessage::ToolCall {
+                            id,
+                            name,
+                            args: arguments,
+                            state: ToolCallState::Running,
+                            origin,
+                            progress_lines: Vec::new(),
+                            timestamp: ChatMessage::now_timestamp(),
+                        });
+                    }
+                }
             }
 
             AgentEvent::ToolSuccessful { id, output, .. } => {
