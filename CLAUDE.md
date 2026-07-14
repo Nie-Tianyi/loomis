@@ -19,9 +19,9 @@ Set `DEEPSEEK_API` in `.env` before running — `dotenvy` loads it at startup.
 
 ## Architecture
 
-This is a **Rust agent framework** (Rust 2024 edition, Tokio async). The project is organized as a Cargo workspace (`agent_oxide`).
+**Rust agent framework** (Rust 2024 edition, Tokio async). Cargo workspace named `agent_oxide`.
 
-**Rust edition**: The codebase uses Rust 2024 which has **native async fn in traits** (RPITIT). Do NOT bring in the `async-trait` crate — use `async fn` directly in trait definitions. `Box<dyn Trait>` with async methods requires dyn-compatibility; prefer sync traits for dyn dispatch and keep async work in dedicated components.
+**Rust edition**: Uses Rust 2024 with native async fn in traits (RPITIT). Do NOT use `async-trait` crate. Prefer sync traits for dyn-dispatch; keep async work in dedicated components.
 
 ### Workspace structure
 
@@ -33,39 +33,40 @@ agent_oxide/
 │   ├── deepseek/           # DeepSeekClient — implements LLMClient with SSE streaming
 │   ├── tools/              # Tool trait, ToolRegistry, WorkspaceFs sandbox, ProgressStream
 │   ├── tools-macros/       # #[tool] proc macro — generates Tool trait impls
-│   ├── memory/             # Memory (in-memory buffer), persistence
-│   ├── hooks/              # Ready-to-use AgentHook impls (MicroCompactHook, MacroCompactHook)
-│   ├── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent stream
+│   ├── memory/             # Memory buffer, PendingHints, conversation persistence
+│   ├── hooks/              # MicroCompactHook + MacroCompactHook (AgentHook impls)
+│   ├── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent stream, ResponseRouter
 │   └── subagent/           # SubagentTool — spawn child agents as tools
 ├── bins/
-│   └── loomis/             # Binary — concrete tools, sandbox, hooks, TUI, assembly, main.rs
+│   └── loomis/             # Binary — concrete tools, hooks, sandbox, TUI, assembly
 └── docs/
-    ├── developer-guide.md
+    ├── beginner-developer-guide.md
+    ├── senior-developer-guide.md
     └── sandbox-architecture.md
 ```
 
 ### Crate map
 
-| Crate | Location | Role | Key types |
-|-------|----------|------|-----------|
-| `provider` | `libs/` | Abstraction | `LLMClient` trait, `Message`, `Role`, `ToolCall`, `ToolDef`, `CompletionRequest`, `CompletionResponse`, `ProviderError`, `StreamChunk`, `Delta` |
-| `deepseek` | `libs/` | Concrete | `DeepSeekClient` (impl `LLMClient`), `DeepSeekStream` (SSE parser), `DeepSeekRequest`, `DeepSeekError` |
-| `tools` | `libs/` | Abstraction | `Tool` trait (sync, `Send+Sync`), `ToolRegistry`, `WorkspaceFs`, `SandboxConfig`, `Progress`, `ProgressStream`, `ToolError`, `FsError`, `generate_schema` |
-| `tools-macros` | `libs/` | Proc macro | `#[tool]` attribute — generates `Tool` trait impl from struct + attribute args |
-| `memory` | `libs/` | Abstraction | `Memory` (in-memory buffer, `pub messages: Vec<Message>`), `SharedMemory`, `save_conversation`/`load_conversation`/`list_threads` |
-| `hooks` | `libs/` | Concrete | `MicroCompactHook` (tool-output clearing in `on_llm_start`), `MacroCompactHook<C>` (LLM summarisation in `on_llm_start`), `DEFAULT_COMPACT_CHARS`, `DEFAULT_KEEP_LAST_N` |
-| `engine` | `libs/` | Abstraction | `Agent`, `AgentBuilder`, `AgentEvent`, `AgentError`, `AgentHook` trait, `EngineContext`, `EngineContextBuilder`, `CallOrigin`, `InterveneRequest`, `InterveneResponse`, `RunOutcome` |
-| `subagent` | `libs/` | Concrete | `SubagentTool<C>` (Tool impl that spawns child Agent), `SubagentConfig`, `filter_tools()` |
-| `loomis` | `bins/` | Binary + Lib | Concrete tools (CalculatorTool, ReadTool, ShellTool, ...), sandbox system (SandboxHook, ShellFilter, AuditLogger, ResourceTracker, EnvSanitizer), TUI (ratatui), `build_coding_agent()`, `main.rs` |
+| Crate | Role | Key types |
+| --- | --- | --- |
+| `provider` | Abstraction | `LLMClient` trait, `Message`, `Role`, `ToolCall`, `ToolCallKind`, `ToolDef`, `CompletionRequest`/`Response`, `ProviderError`, `StreamChunk`, `Delta`, `FinishReason`, `Usage` |
+| `deepseek` | Provider impl | `DeepSeekClient` (impl `LLMClient`), SSE streaming parser |
+| `tools` | Abstraction | `Tool` trait (sync, `Send+Sync`), `ToolRegistry`, `WorkspaceFs`, `SandboxConfig`, `Progress`, `ProgressStream`, `ToolError` |
+| `tools-macros` | Proc macro | `#[tool]` attribute — generates `Tool` trait impl |
+| `memory` | Abstraction | `Memory`, `SharedMemory`, `PendingHints`, `PersistenceConfig`, `ThreadInfo`, persistence fns |
+| `hooks` | Concrete hooks | `MicroCompactHook`, `MacroCompactHook<C>`, compaction constants |
+| `engine` | Core loop | `Agent`, `AgentBuilder`, `AgentHook` trait, `AgentEvent`, `AgentError`, `EngineContext`, `ResponseRouter`, `InterventionRequest`/`Response`, `RunOutcome`, `CallOrigin` |
+| `subagent` | Concrete | `SubagentTool<C>`, `SubagentConfig`, `filter_tools()` |
+| `loomis` | Binary | 11 concrete tools, 4 hooks (Sandbox, Persistence, SystemPrompt, TodoList), sandbox system, TUI, `AgentKit`, `build_coding_agent()` |
 
 ### Dependency graph
 
-```
+```text
 provider (no internal deps)
     ↑
-    ├── deepseek ──────── (implements provider::LLMClient)
-    ├── tools ─────────── (uses provider::ToolDef)
-    ├── memory ────────── (uses provider::Message)
+    ├── deepseek ──────── (impl LLMClient)
+    ├── tools ─────────── (uses ToolDef)
+    ├── memory ────────── (uses Message)
     ↑
     ├── engine ────────── (uses provider + tools + memory)
     │       ↑
@@ -76,27 +77,93 @@ provider (no internal deps)
     └── loomis (bin) ──── (uses all libs)
 ```
 
-### Key patterns
+## Key patterns
 
-- **`LLMClient` trait** — abstraction over LLM providers. Uses Rust 2024 native async fn (`impl Future<Output = ...> + Send`), NOT `#[async_trait]`. `DeepSeekClient` in `libs/deepseek/` is the reference implementation.
-- **`Tool` trait** — sync, object-safe (no `async_trait`). Returns `ProgressStream` from `execute_stream()` — short-lived tools emit a single `Progress::Done`, long-running tools (shell) emit `Progress::InProgress` updates followed by `Progress::Done`. Use `tokio::sync::mpsc` from a spawned thread for async I/O tools.
-- **Two-tier compaction** — both tiers live in the `hooks` crate as `AgentHook` impls: (1) **MicroCompact** (`MicroCompactHook`): `on_llm_start()` clears old tool outputs from high-volume tools (read, shell, grep, glob, edit, write, ls) in-place, replacing content with `[Old tool result content cleared]`. (2) **MacroCompact** (`MacroCompactHook<C>`): `on_llm_start()` checks `memory.total_chars()` against a threshold; when exceeded, drains old non-System messages (keeping the most recent N), calls the compact model for LLM summarisation via `tokio::runtime::Handle::block_on`, and inserts the summary as a System message. Register both hooks via `Agent::builder().hook(...)` or `EngineContext::builder().hook(...)`.
-- **`AgentHook` trait** — 10 lifecycle callbacks, all with default no-ops: `on_run_start`, `on_run_finish(&RunOutcome)`, `on_step_start`, `on_llm_start(&SharedMemory)`, `on_llm_end(&Message)`, `on_llm_error(&ProviderError, attempt, will_retry)`, `before_tool_call` (can return `Err` to block), `after_tool_call`, `on_tool_failed`. Hooks are called in registration order. Concrete hooks: `MicroCompactHook`, `MacroCompactHook` (in `hooks` crate), `SandboxHook` (in `loomis` crate).
-- **`AgentEvent` stream** — single `mpsc::unbounded_channel` for all events. `RunStarted`/`Token`/`ReasoningToken` for LLM output, `ToolCall { origin, .. }`/`ToolSuccessful`/`ToolRejected`/`ToolFailure`/`ToolProgress` for tools (with `CallOrigin::Llm` vs `CallOrigin::User`), `NeedUserIntervene(InterveneRequest)` for interactive user prompts, `RunCompleted`/`RunFailed`/`Cancelled` for run outcomes, `Done` sentinel. The TUI consumes this single channel for rendering — no separate hook-event channel.
-- **`Agent::builder()` vs `EngineContext::builder()`** — `Agent::builder(client, model)` is the simple API (auto-creates Memory, auto-seeds system prompt, collects tools into ToolRegistry). `EngineContext::builder(client, memory, tools, model)` is the advanced API (you supply Memory and ToolRegistry explicitly).
-- **`WorkspaceFs` sandbox** — all file paths canonicalized and checked against `workspace_root`. Enforces file-size caps, extension blocklist, hidden-file protection, binary-content detection, and TOCTOU re-checks. Policy driven by [`SandboxConfig`](libs/tools/src/sandbox/config.rs) (loaded from `.loomis/config.toml`).
-- **Multi-layered sandbox** — defense in depth: (1) `WorkspaceFs` path sandbox for file tools; (2) `ShellFilter` command classification (auto-approve / deny / prompt); (3) `SandboxHook` orchestrates permission checks, resource quotas, and audit logging; (4) `EnvSanitizer` clears dangerous env vars before spawning child processes; (5) Watchdog kills process tree on timeout (`taskkill /F /T` on Windows).
-- **Shell sandbox** — `ShellFilter` classifies commands: `auto_approve.prefixes` (e.g. `git`, `cargo`) run immediately; `deny_patterns` (e.g. `rm -rf /`, `sudo`) are blocked outright; everything else prompts the user via `SandboxHook` using `InterveneRequest`/`InterveneResponse` (navigable options: Approve/Deny/Other…). Strict allowlist mode available via `allowed_commands.binaries`. Environment variables are sanitized (cleared then restored from a safe allowlist) before child processes are spawned. ShellFilter runs in both `before_tool_call` (Hook layer) and `execute_stream` (Tool layer) as dual defense.
-- **SandboxHook** — unified `AgentHook` for sandbox enforcement. In `before_tool_call`: checks `ResourceTracker` quotas, classifies commands via `ShellFilter`, auto-approves/denies/prompts accordingly via `AgentEvent::NeedUserIntervene`. In `after_tool_call`: updates `ResourceTracker` counters, logs to `AuditLogger`. In `on_run_finish`: logs final outcome. Uses `SyncSender<InterveneResponse>` rendez-vous channel for blocking user approval.
-- **SSE streaming pipeline** — `DeepSeekStream` in `libs/deepseek/`: HTTP chunk → buffer → `find_event_end` (\n\n) → `extract_sse_data` (strip "data: ") → parse JSON → `StreamChunk`.
-- **Sandbox configuration** — `.loomis/config.toml` controls all sandbox policies (filesystem limits, shell filtering, resource quotas, audit). Missing file → safe defaults. See [`SandboxConfig`](libs/tools/src/sandbox/config.rs) for the full schema.
-- **`!command` shell execution** — user-typed `!` prefix in the TUI runs commands via `execute_shell_command()`, pushes output to `SharedMemory`, displays via unified `ToolCall { origin: User }` / `ToolSuccessful` events (same channel as LLM tool calls).
-- **Conversation persistence** — saves to `.loomis/threads/{name}.json` + `.md`. Functions take `workspace_root: &Path`. Auto-save after each agent turn. `/resume` with picker overlay.
-- **Subagent** — `SubagentTool<C>` in `libs/subagent/` wraps a child `Agent` as a `Tool`. When the parent LLM calls `task`, a child agent is spawned with a filtered (typically read-only) tool set and its own Memory. Results are streamed back as `Progress::InProgress`/`Progress::Done`. Configured via `SubagentConfig` (model, max_steps, timeout_secs, inherit_context_messages). `filter_tools()` creates a filtered `ToolRegistry` from the parent's.
+### `LLMClient` trait
+Abstraction over LLM providers. Uses Rust 2024 native async fn, NOT `#[async_trait]`. `DeepSeekClient` is the reference implementation.
+
+### `Tool` trait
+Sync and object-safe. `execute_stream()` returns `ProgressStream` — short tools emit a single `Progress::Done`, long-running tools (shell) emit `Progress::InProgress` updates then `Progress::Done`. Use `tokio::sync::mpsc` from a spawned thread for async I/O.
+
+### `AgentHook` trait
+10 lifecycle callbacks, all with default no-ops. Naming convention:
+
+| Prefix | Meaning |
+| --- | --- |
+| `on_<event>` | Pure notification — cannot intervene |
+| `before_<action>` | Can intervene — return `Err` to block |
+| `after_<action>` | Observe result — cannot intervene |
+
+Callbacks: `on_run_start`, `on_run_finish(&RunOutcome)`, `on_step_start`, `on_llm_start(&SharedMemory)`, `on_llm_end(&Message)`, `on_llm_error(&ProviderError, attempt, will_retry)`, `before_tool_call`, `after_tool_call`, `on_tool_failed`.
+
+Hooks run in registration order. For async work inside sync hooks (e.g. LLM summarisation), use `tokio::runtime::Handle::block_on` — the agent loop runs in a dedicated tokio task separate from the TUI thread.
+
+Concrete hooks:
+- **`hooks` crate**: `MicroCompactHook` (tool-output clearing), `MacroCompactHook<C>` (LLM summarisation)
+- **`loomis` crate**: `SandboxHook` (security), `PersistenceHook` (auto-save), `SystemPromptHook` (seed prompts), `TodoListHook` (sync todo state)
+
+### `AgentEvent` stream
+Single `mpsc::unbounded_channel`. Variants:
+
+| Event | When |
+| --- | --- |
+| `RunStarted { session_id, user_input }` | New task begins |
+| `Token(String)` / `ReasoningToken(String)` | LLM output streaming |
+| `ToolCall { id, name, arguments, origin }` | Before tool execution |
+| `ToolSuccessful { id, name, output }` | Tool completed |
+| `ToolRejected { id, name, reason }` | Hook blocked tool |
+| `ToolFailure { id, name, error }` | Tool execution failed |
+| `ToolProgress { id, name, message }` | Real-time progress from tool |
+| `InterventionRequired(InterventionRequest)` | Hook needs user decision |
+| `RunCompleted { answer }` | Success |
+| `RunFailed { error }` | Error |
+| `Cancelled` | User cancelled |
+| `Done` | Sentinel — always last |
+
+`CallOrigin::Llm` vs `CallOrigin::User` distinguishes LLM tool calls from user `!command` invocations.
+
+### `AgentBuilder` vs `EngineContextBuilder`
+- `Agent::builder(client, model)` — simple API: auto-creates Memory, seeds system prompt, collects tools into ToolRegistry.
+- `EngineContext::builder(client, memory, tools, model)` — advanced API: supply Memory and ToolRegistry explicitly, configure hooks, max_steps, max_retries, streaming, pending_hints.
+
+### Two-tier compaction
+Both in the `hooks` crate:
+1. **MicroCompact** — `on_llm_start()` clears old tool outputs from high-volume tools (read, shell, grep, glob, edit, write, ls) in-place.
+2. **MacroCompact** — `on_llm_start()` checks `total_chars()`; when over threshold, drains old non-System messages (keeping last N), calls a compact model for summarisation via `block_on`, inserts summary as System message.
+
+### Sandbox (defense in depth)
+
+| Layer | Component | Role |
+| --- | --- | --- |
+| 1 | `WorkspaceFs` | Path sandbox — canonicalization, file-size caps, extension blocklist, hidden-file protection, binary detection, TOCTOU re-check |
+| 2 | `ShellFilter` | Command classification — auto-approve (prefixes like `git`, `cargo`), deny (patterns like `rm -rf /`, `sudo`), prompt user for rest. Strict allowlist mode via `allowed_commands.binaries`. Runs in both `before_tool_call` and `execute_stream` |
+| 3 | `SandboxHook` | Orchestrator — checks quotas, classifies commands, prompts user via `InterventionRequired`, updates resource counters, logs to `AuditLogger`. Uses `ResponseRouter` + rendezvous channel for blocking approval |
+| 4 | `EnvSanitizer` | Clears dangerous env vars before spawning child processes |
+| 5 | Watchdog | Kills process tree on timeout (`taskkill /F /T` on Windows) |
+
+Config: `.loomis/config.toml` → `SandboxConfig` (safe defaults if missing).
+
+### `ResponseRouter`
+Maps `request_id` → `SyncSender<InterventionResponse>`. Multiple components (SandboxHook, AskUserQuestionTool) can need user intervention simultaneously — each registers its own channel, sends an `InterventionRequired` event with its `request_id`, and blocks on its receiver. The TUI routes responses through the router.
+
+### `!command` shell execution
+User-typed `!` prefix in TUI runs commands, pushes output to `SharedMemory`, emits unified `ToolCall { origin: User }` / `ToolSuccessful` events.
+
+### Conversation persistence
+Auto-saves to `.loomis/threads/{name}.json` + `.md` after each agent turn via `PersistenceHook`. Thread picker via `/resume`. Date suffixes on thread names for uniqueness.
+
+### Subagent
+`SubagentTool<C>` wraps a child `Agent` as a `Tool`. Spawned with filtered (typically read-only) tool set and its own Memory. Results streamed as `Progress::InProgress`/`Progress::Done`. Config: `SubagentConfig` (model, max_steps, timeout_secs, inherit_context_messages).
+
+### Loomis concrete tools (11)
+`Calculator`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Ls`, `Shell`, `Subagent`, `AskUserQuestion`, `Todo`
+
+### Loomis concrete hooks (4)
+`SystemPromptHook` (seeds initial system messages), `PersistenceHook` (auto-save), `TodoListHook` (syncs [TODO] System message), `SandboxHook` (security)
 
 ### TUI module (`bins/loomis/src/tui/`)
 
-ratatui + crossterm chat interface. Channel topology:
+ratatui + crossterm. Channel topology:
 
 ```text
 TUI thread                          Agent task (tokio::spawn)
@@ -105,24 +172,13 @@ cmd_tx ───────── TuiCommand ──────→ cmd_rx
 agent_rx ←────── AgentEvent ─────── agent_tx
 ```
 
-- **Keybindings**: Enter (submit), Ctrl+C (cancel), Esc (cancel), Ctrl+D (exit), PgUp/PgDown (scroll), Up/Down (history), Left/Right/Home/End (cursor). During intervention prompts: ↑/↓ (navigate options), Enter (select), Esc (cancel)
+- **Keybindings**: Enter (submit), Ctrl+C (cancel), Esc (cancel), Ctrl+D (exit), PgUp/PgDown (scroll), Up/Down (history), Left/Right/Home/End (cursor). Intervention prompts: ↑/↓ (navigate), Enter (select), Esc (cancel)
 - **Slash commands**: `/exit`, `/new`, `/save <name>`, `/resume [name]`, `/threads`, `/stats`, `/tools`, `/help`
-- **Bang prefix**: `!command` runs shell, output shared with agent via SharedMemory. Displayed with `$` prefix (unified `ToolCall` with `origin: User`)
+- **Bang prefix**: `!command` — runs shell, output shared with agent
 
-### Roadmap
+## Future work
 
-- [x] `libs/provider` — LLMClient trait + shared types
-- [x] `libs/deepseek` — DeepSeekClient with SSE streaming
-- [x] `libs/tools` — Tool trait + ToolRegistry + WorkspaceFs + SandboxConfig
-- [x] `libs/tools-macros` — `#[tool]` proc macro
-- [x] `libs/memory` — Memory + persistence
-- [x] `libs/engine` — Agent loop + AgentHook + AgentEvent
-- [x] `libs/hooks` — MicroCompactHook + MacroCompactHook
-- [x] `libs/subagent` — SubagentTool + SubagentConfig + filter_tools
-- [x] `bins/loomis` — Concrete tools, hooks, sandbox system, TUI, assembly
-- [x] Multi-layered sandbox — WorkspaceFs hardening + ShellFilter + SandboxHook + ResourceTracker + AuditLogger
-- [x] Two-tier compaction — MicroCompact (tool output clearing) + MacroCompact (LLM summarisation via hooks)
 - [ ] Publish lib crates to crates.io
 - [ ] Add `libs/openai/`, `libs/anthropic/` provider implementations
-- [ ] RAG/vector DB support (Phase 2)
-- [ ] `tracing` observability (Phase 3)
+- [ ] RAG/vector DB support
+- [ ] `tracing` observability
