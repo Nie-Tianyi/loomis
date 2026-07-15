@@ -13,6 +13,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use engine::CallOrigin;
+use serde_json;
 
 use super::app::App;
 use super::markdown::render_markdown;
@@ -280,8 +281,9 @@ fn message_to_lines(
                             ),
                         ]));
                     } else {
-                        // Header: spinner + tool name — yellow.
-                        lines.push(Line::from(vec![
+                        // Header: spinner + tool name + resource summary — yellow.
+                        let resource = tool_resource_summary(name, args);
+                        let mut header_spans = vec![
                             Span::styled(format!("{timestamp} "), ts_style),
                             Span::styled(
                                 "◌ ",
@@ -295,19 +297,21 @@ fn message_to_lines(
                                     .fg(Color::Yellow)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::raw(" "),
-                            Span::styled("(running…)", ts_style),
-                        ]));
-                        // Args line (if present)
-                        if !args.is_empty() {
-                            lines.push(Line::from(vec![
-                                Span::raw("       "),
-                                Span::styled(
-                                    truncate_args(args, area_width),
-                                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
-                                ),
-                            ]));
+                        ];
+                        // Show the primary resource inline when available,
+                        // e.g. "◌ read src/main.rs (running…)"
+                        if let Some(ref res) = resource {
+                            header_spans.push(Span::raw(" "));
+                            header_spans.push(Span::styled(
+                                res.to_owned(),
+                                Style::default()
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::DIM),
+                            ));
                         }
+                        header_spans.push(Span::raw(" "));
+                        header_spans.push(Span::styled("(running…)", ts_style));
+                        lines.push(Line::from(header_spans));
                     }
                     // Accumulated progress lines (each ToolProgress appends one)
                     for msg in progress_lines {
@@ -580,19 +584,6 @@ fn message_to_lines(
     }
 }
 
-/// Truncates streaming JSON args for compact inline display,
-/// using terminal display width so CJK characters are counted correctly.
-fn truncate_args(args: &str, width: u16) -> String {
-    let max = (width as usize).saturating_sub(8).max(10);
-    let one_line = args.replace('\n', " ");
-    let display_width = UnicodeWidthStr::width(one_line.as_str());
-    if display_width <= max {
-        one_line
-    } else {
-        truncate_to_width(&one_line, max)
-    }
-}
-
 /// Truncates tool output for compact inline display,
 /// using terminal display width so CJK characters are counted correctly.
 fn truncate_output(output: &str, width: u16) -> String {
@@ -628,6 +619,66 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
         "…".to_string()
     } else {
         format!("{}…", &text[..byte_end])
+    }
+}
+
+/// Extracts a short primary-resource summary from tool JSON arguments for
+/// inline display alongside the tool name during the Running state.
+///
+/// Returns `None` when args are empty, parse fails, or the tool name is
+/// unrecognised — the caller falls back to the current format.
+fn tool_resource_summary(name: &str, args_json: &str) -> Option<String> {
+    if args_json.is_empty() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(args_json).ok()?;
+    let obj = value.as_object()?;
+
+    let raw = match name {
+        // File-path tools
+        "read" | "write" | "edit" => obj.get("file_path")?.as_str()?.to_string(),
+
+        // Pattern tools
+        "glob" | "grep" => obj.get("pattern")?.as_str()?.to_string(),
+
+        // Shell
+        "shell" => obj.get("command")?.as_str()?.to_string(),
+
+        // LS: path is optional — show "root" when absent or null
+        "ls" => match obj.get("path") {
+            Some(v) if !v.is_null() => v.as_str()?.to_string(),
+            _ => "root".to_string(),
+        },
+
+        // Question tools
+        "ask_user_question" | "ask_user" => obj.get("question")?.as_str()?.to_string(),
+
+        // Calculator
+        "calculator" => obj.get("expression")?.as_str()?.to_string(),
+
+        // Todo: show item count
+        "todo" => {
+            let count = obj.get("todos")?.as_array()?.len();
+            return Some(format!("{} items", count));
+        }
+
+        // Echo
+        "echo" => obj.get("text")?.as_str()?.to_string(),
+
+        // Subagent / task
+        "subagent" | "task" => obj.get("description")?.as_str()?.to_string(),
+
+        // Unknown tool — no summary
+        _ => return None,
+    };
+
+    // Truncate very long values to ~40 display columns with "…" suffix
+    const MAX_SUMMARY_WIDTH: usize = 40;
+    let display_width = UnicodeWidthStr::width(raw.as_str());
+    if display_width > MAX_SUMMARY_WIDTH {
+        Some(truncate_to_width(&raw, MAX_SUMMARY_WIDTH))
+    } else {
+        Some(raw)
     }
 }
 
@@ -1396,5 +1447,158 @@ mod tests {
         let wrapped = wrap_to_width(lines, 5);
         // "short" fits, "abcdefghij" → 2 lines
         assert_eq!(wrapped.len(), 3);
+    }
+
+    // ── tool_resource_summary tests ──────────────────────────────
+
+    #[test]
+    fn test_tool_resource_summary_read() {
+        assert_eq!(
+            tool_resource_summary("read", r#"{"file_path": "src/main.rs"}"#),
+            Some("src/main.rs".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_shell() {
+        assert_eq!(
+            tool_resource_summary(
+                "shell",
+                r#"{"command": "cargo build", "timeout_secs": 60}"#
+            ),
+            Some("cargo build".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_grep() {
+        assert_eq!(
+            tool_resource_summary(
+                "grep",
+                r#"{"pattern": "fn main", "path_glob": "src/**/*.rs"}"#
+            ),
+            Some("fn main".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_ls_with_path() {
+        assert_eq!(
+            tool_resource_summary("ls", r#"{"path": "src/"}"#),
+            Some("src/".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_ls_without_path() {
+        assert_eq!(
+            tool_resource_summary("ls", r#"{}"#),
+            Some("root".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_ls_null_path() {
+        assert_eq!(
+            tool_resource_summary("ls", r#"{"path": null}"#),
+            Some("root".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_calculator() {
+        assert_eq!(
+            tool_resource_summary("calculator", r#"{"expression": "2 + 3 * 4"}"#),
+            Some("2 + 3 * 4".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_echo() {
+        assert_eq!(
+            tool_resource_summary("echo", r#"{"text": "hello world"}"#),
+            Some("hello world".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_todo() {
+        assert_eq!(
+            tool_resource_summary(
+                "todo",
+                r#"{"todos": [{"content": "a", "status": "pending", "active_form": "A"}]}"#
+            ),
+            Some("1 items".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_todo_multiple() {
+        assert_eq!(
+            tool_resource_summary(
+                "todo",
+                r#"{"todos": [{}, {}, {}]}"#
+            ),
+            Some("3 items".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_empty_args() {
+        assert_eq!(tool_resource_summary("read", ""), None);
+    }
+
+    #[test]
+    fn test_tool_resource_summary_malformed_json() {
+        assert_eq!(tool_resource_summary("read", "not json"), None);
+    }
+
+    #[test]
+    fn test_tool_resource_summary_unknown_tool() {
+        assert_eq!(
+            tool_resource_summary("unknown_tool", r#"{"x": "y"}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_truncation() {
+        let long = "a".repeat(50);
+        let json = format!(r#"{{"file_path": "{long}"}}"#);
+        let result = tool_resource_summary("read", &json);
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert!(result.len() < 50);
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn test_tool_resource_summary_write() {
+        assert_eq!(
+            tool_resource_summary(
+                "write",
+                r##"{"file_path": "output.md", "content": "# Hello"}"##
+            ),
+            Some("output.md".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_glob() {
+        assert_eq!(
+            tool_resource_summary("glob", r#"{"pattern": "**/*.rs"}"#),
+            Some("**/*.rs".into())
+        );
+    }
+
+    #[test]
+    fn test_tool_resource_summary_subagent() {
+        assert_eq!(
+            tool_resource_summary(
+                "subagent",
+                r#"{"description": "search for bugs", "prompt": "..."}"#
+            ),
+            Some("search for bugs".into())
+        );
     }
 }
