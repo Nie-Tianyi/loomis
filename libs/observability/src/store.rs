@@ -262,13 +262,24 @@ impl RunMetrics {
 
 // ── TraceStore ────────────────────────────────────────────────────────────────────
 
+/// Maximum number of events retained in the export log.
+/// Older entries are evicted to bound memory.
+const EXPORT_LOG_CAP: usize = 100_000;
+
 /// Central trace event collector.
 ///
 /// Shared between the agent task (writes) and the TUI loop (reads).
-/// Uses a ring buffer for low-overhead writes on the hot path and
-/// atomically-updated [`RunMetrics`] for lock-free metric reads.
+///
+/// Two channels:
+/// * [`ring`](RingBuf) — drained every frame by the TUI debug overlay
+///   (low overhead, O(1) per event).
+/// * `export_log` — append-only Vec that retains events for
+///   [`export_jsonl`](Self::export_jsonl) independent of TUI drains.
 pub struct TraceStore {
     ring: Mutex<RingBuf>,
+    /// Cumulative event log, never drained by the TUI.
+    /// Only cleared by [`export_jsonl`](Self::export_jsonl).
+    export_log: Mutex<Vec<Timestamped<TraceEvent>>>,
     pub metrics: RunMetrics,
 }
 
@@ -282,18 +293,27 @@ impl TraceStore {
     pub fn new() -> Self {
         Self {
             ring: Mutex::new(RingBuf::new()),
+            export_log: Mutex::new(Vec::new()),
             metrics: RunMetrics::new(),
         }
     }
 
     /// Emit a trace event.
     ///
-    /// This is called from hook methods on the agent task.  The ring buffer
-    /// is held briefly (no allocation).  O(1).
+    /// Pushes to both the ring buffer (for TUI display) and the export log
+    /// (for persistence). Both operations are O(1) under a brief lock.
     pub fn emit(&self, event: TraceEvent) {
         let ts = Timestamped::new(event);
         if let Ok(mut ring) = self.ring.lock() {
-            ring.push(ts);
+            ring.push(ts.clone());
+        }
+        if let Ok(mut log) = self.export_log.lock() {
+            // Evict oldest entries when over capacity.
+            if log.len() >= EXPORT_LOG_CAP {
+                let excess = log.len() - EXPORT_LOG_CAP + 1;
+                log.drain(0..excess);
+            }
+            log.push(ts);
         }
     }
 
@@ -308,9 +328,14 @@ impl TraceStore {
             .unwrap_or_default()
     }
 
-    /// Number of buffered (not yet drained) events.
+    /// Number of buffered (not yet drained) events in the ring buffer.
     pub fn buffered_len(&self) -> usize {
         self.ring.lock().map(|r| r.len()).unwrap_or(0)
+    }
+
+    /// Number of events in the export log (not yet exported).
+    pub fn export_log_len(&self) -> usize {
+        self.export_log.lock().map(|l| l.len()).unwrap_or(0)
     }
 
     /// Reset metrics for a new run.
@@ -318,12 +343,21 @@ impl TraceStore {
         self.metrics.reset();
     }
 
-    /// Export all currently-buffered events as JSONL.
+    /// Export all accumulated trace events as JSONL.
     ///
-    /// Drains the ring buffer and writes one JSON object per line.
-    /// Returns the number of events written.
+    /// Drains the export log (which is never touched by the TUI) and also
+    /// drains any events still in the ring buffer.  Events are written in
+    /// insertion order (oldest first).  Returns the number of events written.
     pub fn export_jsonl(&self, writer: &mut impl std::io::Write) -> std::io::Result<usize> {
-        let events = self.drain_events();
+        // Collect from both sources to catch everything.
+        let mut events = self.drain_events();
+        if let Ok(mut log) = self.export_log.lock() {
+            events.append(&mut log);
+        }
+        // Sort by capture time so output is chronological regardless of
+        // which source each event came from.
+        events.sort_by_key(|e| e.system_time);
+
         let count = events.len();
         for evt in &events {
             let json = serde_json::to_string(&TraceEventRecord::from(evt))
@@ -572,5 +606,25 @@ mod tests {
         // Second drain should be empty
         let events2 = store.drain_events();
         assert!(events2.is_empty());
+    }
+
+    /// The export log retains events even after the ring buffer is drained.
+    /// This is the bug fix for `/trace-save` producing empty files on Windows.
+    #[test]
+    fn test_export_log_persists_across_drains() {
+        let store = TraceStore::new();
+        store.emit(TraceEvent::StepStarted { step: 1 });
+        store.emit(TraceEvent::StepStarted { step: 2 });
+        store.emit(TraceEvent::StepStarted { step: 3 });
+
+        // Simulate the TUI draining the ring every frame.
+        let _ = store.drain_events();
+        let _ = store.drain_events();
+
+        // Export log should still have all 3 events.
+        let mut buf = Vec::new();
+        let count = store.export_jsonl(&mut buf).unwrap();
+        assert_eq!(count, 3, "export log should survive TUI ring drains");
+        assert!(!buf.is_empty(), "exported output should not be empty");
     }
 }
