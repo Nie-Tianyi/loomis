@@ -770,10 +770,9 @@ impl App {
         for msg in &msgs {
             match msg.role {
                 Role::System => {
-                    self.messages.push(ChatMessage::System {
-                        content: msg.content.clone(),
-                        timestamp: ts.clone(),
-                    });
+                    // System messages in memory are LLM context (system prompt,
+                    // environment info, project rules) — skip them so they
+                    // don't clutter the chat display after /resume.
                 }
                 Role::User => {
                     self.messages.push(ChatMessage::User {
