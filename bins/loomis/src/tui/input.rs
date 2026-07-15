@@ -508,11 +508,24 @@ impl App {
                 Some(None)
             }
 
+            "/init" => {
+                let init_prompt = include_str!("../../prompts/init.md");
+                self.messages.push(ChatMessage::System {
+                    content: "Initializing project documentation…\n\
+                              I'll explore the codebase, ask a few questions, \
+                              and create or update LOOMIS.md."
+                        .into(),
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+                Some(Some(TuiCommand::RunAgent(init_prompt.to_string())))
+            }
+
             "/help" => {
                 let content = [
                     "Commands:",
                     "  /exit          — quit",
                     "  /new           — start a new conversation",
+                    "  /init          — initialize or update project rules (LOOMIS.md)",
                     "  /plan          — toggle plan mode (read-only research & planning)",
                     "  /approve       — approve plan and exit plan mode",
                     "  /save <name>   — save conversation as a named thread",
