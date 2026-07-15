@@ -1,4 +1,4 @@
-//! [`WorkspaceFs`] — sandboxed file-system operations.
+//! [`WorkspaceFs`] �?sandboxed file-system operations.
 //!
 //! All path operations go through [`WorkspaceFs::resolve`], which ensures
 //! paths cannot escape the `workspace_root`.
@@ -69,7 +69,7 @@ impl WorkspaceFs {
 
     /// Heuristic: check whether raw bytes look like binary content.
     ///
-    /// Scans the first 8 KiB for null bytes — a reliable indicator of binary
+    /// Scans the first 8 KiB for null bytes �?a reliable indicator of binary
     /// formats (executables, images, archives, etc.).
     fn is_likely_binary(bytes: &[u8]) -> bool {
         let check_len = bytes.len().min(8192);
@@ -84,12 +84,11 @@ impl WorkspaceFs {
     ///
     /// ## Known limitations
     ///
-    /// 1. **Non-existing paths** bypass the TOCTOU re-check entirely —
-    ///    if a file is created by an attacker between resolution and
+    /// 1. **Non-existing paths** bypass the TOCTOU re-check entirely �?    ///    if a file is created by an attacker between resolution and
     ///    the subsequent I/O operation, it will not be detected.
     /// 2. **File identity** is verified via `(len, modified)` heuristic
     ///    rather than platform-specific inode/file-index APIs. This is
-    ///    not cryptographically strong — a determined attacker with
+    ///    not cryptographically strong �?a determined attacker with
     ///    write access can craft a file with matching size and mtime.
     ///
     /// A truly race-free design would require handle-based I/O (open
@@ -117,10 +116,10 @@ impl WorkspaceFs {
         // ── TOCTOU re-check for existing paths ──────────────────────────
         // Re-canonicalize and verify the file identity hasn't changed.
         // We compare file length + modification time as a heuristic for
-        // "same file" — this is NOT an inode/file-index comparison, and
+        // "same file" �?this is NOT an inode/file-index comparison, and
         // can be defeated by a determined attacker with write access.
         // If the path didn't exist at the first canonicalize (normalize_partial
-        // path), this re-check is skipped — new files are not covered.
+        // path), this re-check is skipped �?new files are not covered.
         if let Ok(meta) = normalized.metadata() {
             let re_canon = normalized.canonicalize().map_err(FsError::Io)?;
             if !re_canon.starts_with(&self.workspace_root) {
@@ -136,7 +135,7 @@ impl WorkspaceFs {
                 && (meta.len() != re_meta.len() || meta.modified().ok() != re_meta.modified().ok())
             {
                 return Err(FsError::WorkspaceEscape(format!(
-                    "'{}' file identity changed between checks — possible symlink swap",
+                    "'{}' file identity changed between checks �?possible symlink swap",
                     path
                 )));
             }
@@ -191,7 +190,7 @@ impl WorkspaceFs {
         let numbered: String = selected
             .iter()
             .enumerate()
-            .map(|(i, line)| format!("{:>6}\t{}", start + i + 1, line))
+            .map(|(i, line)| format!("{:>6} {}", start + i + 1, line))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -366,7 +365,7 @@ impl WorkspaceFs {
             }
 
             // Read as raw bytes and convert to UTF-8 losslessly. Binary files
-            // (null bytes in first 8 KiB) are skipped — text search is only
+            // (null bytes in first 8 KiB) are skipped �?text search is only
             // meaningful in text files.
             let bytes = fs::read(&resolved).map_err(FsError::Io)?;
             if Self::is_likely_binary(&bytes) {
@@ -500,7 +499,7 @@ mod tests {
 
     fn test_config() -> SandboxConfig {
         let mut cfg = SandboxConfig::default();
-        // Use generous limits for tests — we're testing sandbox logic,
+        // Use generous limits for tests �?we're testing sandbox logic,
         // not the specific limit values.
         cfg.filesystem.max_read_bytes = 10_000_000;
         cfg.filesystem.max_write_bytes = 1_000_000;

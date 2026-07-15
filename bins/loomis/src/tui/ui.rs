@@ -63,10 +63,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 /// Renders the scrollable conversation history with a right-edge scrollbar.
 ///
-/// When the scrollbar is visible, the paragraph is rendered into a
-/// 1-column-narrower area so ratatui's internal line-wrapping respects
-/// the narrower text width. The scrollbar is drawn in the freed column,
-/// completely outside the paragraph — no overlap possible.
+/// Lines are built once at a conservative width (reserving 1 column for the
+/// scrollbar). When no scrollbar is needed the paragraph area expands to the
+/// full width — the reserved column simply stays blank. This avoids a
+/// dual-pass over all messages and keeps scroll math consistent.
+///
+/// The entire `area` is cleared before rendering so that scrollbar
+/// appear/disappear transitions never leave residual characters at the
+/// right edge.
 fn draw_chat(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -76,33 +80,11 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     let visible_height = inner.height.max(1) as usize;
 
-    // Build all lines at full inner width to determine whether scrollbar is needed.
-    let full_lines: Vec<Line<'_>> = app
-        .messages
-        .iter()
-        .flat_map(|msg| message_to_lines(msg, inner.width, app.intervene_selection))
-        .collect();
-    let has_scrollbar = full_lines.len() > visible_height;
+    // Always reserve 1 column for the scrollbar so we only build lines
+    // once. When no scrollbar is needed the extra column stays blank —
+    // a negligible cost that eliminates dual-pass markdown rendering.
+    let text_width = inner.width.saturating_sub(1).max(1);
 
-    // When scrollbar is visible, shrink the paragraph's rendering area by
-    // 1 column so wrapping happens at the narrower width. The scrollbar
-    // occupies the rightmost column of `area`, outside the paragraph.
-    let para_area = if has_scrollbar {
-        Rect {
-            width: area.width.saturating_sub(1).max(3), // min 3 for borders + 1 col text
-            ..area
-        }
-    } else {
-        area
-    };
-
-    let para_inner = block.inner(para_area);
-    let text_width = para_inner.width;
-    let visible_height = para_inner.height.max(1) as usize;
-
-    // Build lines at the actual text width, then manually wrap each
-    // line so the count accurately reflects visual rows. Ratatui's
-    // Paragraph wrapping would add more rows we can't count.
     let raw_lines: Vec<Line<'_>> = app
         .messages
         .iter()
@@ -110,13 +92,27 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
     let all_lines = wrap_to_width(raw_lines, text_width);
     let total_lines = all_lines.len();
+    let has_scrollbar = total_lines > visible_height;
 
-    // Compute scroll offset
+    // When scrollbar is visible, shrink the paragraph's rendering area by
+    // 1 column so text and scrollbar don't overlap.
+    let para_area = if has_scrollbar {
+        Rect {
+            width: area.width.saturating_sub(1).max(3),
+            ..area
+        }
+    } else {
+        area
+    };
+
+    // Compute scroll offset (offset = 0 means "show the bottom").
     let max_scroll = total_lines.saturating_sub(visible_height);
     let scroll = (max_scroll.saturating_sub(app.scroll_offset)).min(max_scroll) as u16;
 
-    // Clear residual characters from previous frame before rendering.
-    frame.render_widget(Clear, para_area);
+    // Clear the FULL area so that residual characters from scrollbar
+    // transitions cannot survive. The paragraph + scrollbar will
+    // re-draw everything that should be visible.
+    frame.render_widget(Clear, area);
 
     let paragraph = Paragraph::new(Text::from(all_lines))
         .block(block)
@@ -124,8 +120,7 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &App) {
 
     frame.render_widget(paragraph, para_area);
 
-    // ── Scrollbar — drawn in the rightmost column of `area`, outside ──
-    // ── the paragraph. No overlap with text is possible.             ──
+    // ── Scrollbar — drawn in the rightmost column of `area` ──────
     if has_scrollbar {
         let scrollbar_x = area.x + area.width.saturating_sub(1);
         let scrollbar_area = Rect {
@@ -135,8 +130,8 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &App) {
             height: inner.height,
         };
 
-        // Clear residual text from the scrollbar column (e.g. when
-        // scrollbar first appears after full-width paragraph rendering).
+        // Scrollbar column was already cleared by the area-level Clear
+        // above; clearing again is a cheap no-op for defense-in-depth.
         frame.render_widget(Clear, scrollbar_area);
 
         let thumb_pos = if total_lines == 0 {
@@ -641,6 +636,11 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 ///
 /// Ratatui's `Paragraph` would wrap lines internally, but we can't count
 /// those extra rows — so we wrap manually here for correct scroll math.
+///
+/// Wrapping is span-aware: each span keeps its own style, and we only
+/// split individual wide spans at display-width boundaries. This
+/// preserves markdown styling (bold, italic, code blocks, links, etc.)
+/// across wrapped lines.
 fn wrap_to_width(lines: Vec<Line<'_>>, max_width: u16) -> Vec<Line<'_>> {
     let max_w = max_width.max(1) as usize;
     let mut out = Vec::with_capacity(lines.len());
@@ -657,17 +657,43 @@ fn wrap_to_width(lines: Vec<Line<'_>>, max_width: u16) -> Vec<Line<'_>> {
             continue;
         }
 
-        // Line is too wide — flatten to plain text, split at display-width
-        // boundaries, and re-apply the first span's style (most lines in
-        // our TUI have uniform styling within a single line).
-        let full_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        let base_style = line.spans.first().map(|s| s.style).unwrap_or_default();
+        // Line is too wide — wrap span-by-span, preserving each style.
+        let mut current_spans: Vec<Span<'_>> = Vec::new();
+        let mut current_w: usize = 0;
 
-        let mut remaining: &str = &full_text;
-        while !remaining.is_empty() {
-            let (chunk, rest) = split_at_display_width(remaining, max_w);
-            out.push(Line::from(Span::styled(chunk.to_string(), base_style)));
-            remaining = rest;
+        for span in line.spans.into_iter() {
+            let span_w = UnicodeWidthStr::width(span.content.as_ref());
+
+            if current_w + span_w <= max_w {
+                // Fits on the current wrapped line.
+                current_spans.push(span);
+                current_w += span_w;
+            } else if current_w == 0 {
+                // Single span is wider than max_w — split it across
+                // multiple lines, each inheriting this span's style.
+                let mut rem: &str = span.content.as_ref();
+                while !rem.is_empty() {
+                    let (chunk, rest) = split_at_display_width(rem, max_w);
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    out.push(Line::from(Span::styled(
+                        chunk.to_string(),
+                        span.style,
+                    )));
+                    rem = rest;
+                }
+            } else {
+                // Doesn't fit on current line — flush and start a new
+                // wrapped line with this span.
+                out.push(Line::from(std::mem::take(&mut current_spans)));
+                current_spans.push(span);
+                current_w = span_w;
+            }
+        }
+
+        if !current_spans.is_empty() {
+            out.push(Line::from(current_spans));
         }
     }
 
