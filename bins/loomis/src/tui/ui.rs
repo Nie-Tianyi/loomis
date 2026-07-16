@@ -728,10 +728,7 @@ fn wrap_to_width(lines: Vec<Line<'_>>, max_width: u16) -> Vec<Line<'_>> {
                     if chunk.is_empty() {
                         break;
                     }
-                    out.push(Line::from(Span::styled(
-                        chunk.to_string(),
-                        span.style,
-                    )));
+                    out.push(Line::from(Span::styled(chunk.to_string(), span.style)));
                     rem = rest;
                 }
             } else {
@@ -1462,10 +1459,7 @@ mod tests {
     #[test]
     fn test_tool_resource_summary_shell() {
         assert_eq!(
-            tool_resource_summary(
-                "shell",
-                r#"{"command": "cargo build", "timeout_secs": 60}"#
-            ),
+            tool_resource_summary("shell", r#"{"command": "cargo build", "timeout_secs": 60}"#),
             Some("cargo build".into())
         );
     }
@@ -1491,10 +1485,7 @@ mod tests {
 
     #[test]
     fn test_tool_resource_summary_ls_without_path() {
-        assert_eq!(
-            tool_resource_summary("ls", r#"{}"#),
-            Some("root".into())
-        );
+        assert_eq!(tool_resource_summary("ls", r#"{}"#), Some("root".into()));
     }
 
     #[test]
@@ -1535,10 +1526,7 @@ mod tests {
     #[test]
     fn test_tool_resource_summary_todo_multiple() {
         assert_eq!(
-            tool_resource_summary(
-                "todo",
-                r#"{"todos": [{}, {}, {}]}"#
-            ),
+            tool_resource_summary("todo", r#"{"todos": [{}, {}, {}]}"#),
             Some("3 items".into())
         );
     }
@@ -1555,10 +1543,7 @@ mod tests {
 
     #[test]
     fn test_tool_resource_summary_unknown_tool() {
-        assert_eq!(
-            tool_resource_summary("unknown_tool", r#"{"x": "y"}"#),
-            None
-        );
+        assert_eq!(tool_resource_summary("unknown_tool", r#"{"x": "y"}"#), None);
     }
 
     #[test]

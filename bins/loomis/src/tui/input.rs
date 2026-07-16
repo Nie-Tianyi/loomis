@@ -589,10 +589,7 @@ impl App {
                 let _ = std::fs::create_dir_all(&traces_dir);
                 // Replace colons for Windows filename compatibility.
                 // ISO 8601 "2026-07-15T14:30:00Z" → "2026-07-15T14-30-00Z"
-                let filename = format!(
-                    "trace_{}.jsonl",
-                    memory::iso8601_now().replace(':', "-")
-                );
+                let filename = format!("trace_{}.jsonl", memory::iso8601_now().replace(':', "-"));
                 let path = traces_dir.join(&filename);
                 match std::fs::File::create(&path) {
                     Ok(file) => {

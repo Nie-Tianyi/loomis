@@ -39,8 +39,6 @@ fn init_tracing(workspace_root: &Path) -> WorkerGuard {
 
 #[tokio::main]
 async fn main() {
-    let use_tui = !std::env::args().any(|a| a == "--no-tui");
-
     // Load environment
     dotenvy::dotenv().ok();
 
@@ -87,14 +85,9 @@ async fn main() {
         "Loomis initialized",
     );
 
-    if use_tui {
-        let model = kit.model.clone();
-        match loomis::tui::run(kit, cwd, &model) {
-            Ok(()) => {}
-            Err(e) => tracing::error!(error = %e, "TUI error"),
-        }
-    } else {
-        tracing::warn!("--no-tui mode is not yet migrated to the new crate structure.");
-        std::process::exit(1);
+    let model = kit.model.clone();
+    match loomis::tui::run(kit, cwd, &model) {
+        Ok(()) => {}
+        Err(e) => tracing::error!(error = %e, "TUI error"),
     }
 }
