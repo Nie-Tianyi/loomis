@@ -16,6 +16,7 @@ schemars = { workspace = true }
 regex = { workspace = true }
 glob = { workspace = true }
 toml = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

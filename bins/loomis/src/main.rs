@@ -58,8 +58,9 @@ async fn main() {
     let flash_model =
         std::env::var("FLASH_MODEL").unwrap_or_else(|_| DEFAULT_FLASH_MODEL.to_string());
 
-    // Load sandbox config from .loomis/config.toml (falls back to safe defaults).
-    let sandbox_config = match SandboxConfig::load(&cwd) {
+    // Load sandbox config (falls back to safe defaults).
+    let config_path = cwd.join(".loomis").join("config.toml");
+    let sandbox_config = match SandboxConfig::load(&config_path) {
         Ok(cfg) => cfg,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to load sandbox config, using safe defaults");

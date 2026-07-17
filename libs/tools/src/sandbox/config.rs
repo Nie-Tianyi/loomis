@@ -3,13 +3,15 @@
 //! All fields are optional in the TOML file; missing keys use the
 //! baked-in safe defaults (equivalent to the `"strict"` profile).
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Root configuration for the sandbox system.
 ///
-/// Loaded from `.loomis/config.toml`. If the file is missing or any key
-/// is absent, [`SandboxConfig::default`] provides safe fallback values.
-#[derive(Debug, Clone, Default, Deserialize)]
+/// Loaded from `.loomis/config.toml`. If the file is missing, a fresh one
+/// is written with safe defaults so the user can inspect and customise it.
+/// If any key is absent in an existing file,
+/// [`SandboxConfig::default`] provides fallback values.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SandboxConfig {
     pub filesystem: FilesystemConfig,
@@ -19,22 +21,71 @@ pub struct SandboxConfig {
 }
 
 impl SandboxConfig {
-    /// Load config from the standard path `.loomis/config.toml` inside
-    /// `workspace_root`. Returns `Ok(Self::default())` if the file does
-    /// not exist.
-    pub fn load(workspace_root: &std::path::Path) -> Result<Self, ConfigError> {
-        let config_path = workspace_root.join(".loomis").join("config.toml");
-        match std::fs::read_to_string(&config_path) {
+    /// Load config from `config_path` (a `.toml` file).
+    ///
+    /// When the file does not exist, its parent directory and the file
+    /// itself are created with the default values.  If writing the
+    /// default file fails, the error is logged (via `tracing`) and the
+    /// in-memory defaults are still returned — the application should
+    /// not refuse to start just because it cannot persist the config
+    /// template.
+    pub fn load(config_path: &std::path::Path) -> Result<Self, ConfigError> {
+        match std::fs::read_to_string(config_path) {
             Ok(contents) => toml::from_str(&contents).map_err(ConfigError::Parse),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let default_config = Self::default();
+                Self::try_write_default(config_path, &default_config);
+                Ok(default_config)
+            }
             Err(e) => Err(ConfigError::Io(e)),
+        }
+    }
+
+    /// Best-effort write of the default config to disk.
+    ///
+    /// Creates the parent directory if needed.  Failures are traced but
+    /// never propagated — the caller always continues with in-memory
+    /// defaults.
+    fn try_write_default(config_path: &std::path::Path, config: &Self) {
+        // Ensure the parent directory exists.
+        if let Some(parent) = config_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!(
+                    dir = %parent.display(),
+                    error = %e,
+                    "Cannot create config directory; config template not written",
+                );
+                return;
+            }
+        }
+
+        // Serialise with pretty formatting so the file is human-editable.
+        let toml_str = match toml::to_string_pretty(config) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to serialise default config");
+                return;
+            }
+        };
+
+        if let Err(e) = std::fs::write(config_path, &toml_str) {
+            tracing::warn!(
+                path = %config_path.display(),
+                error = %e,
+                "Cannot write default config.toml",
+            );
+        } else {
+            tracing::info!(
+                path = %config_path.display(),
+                "Created config.toml with safe defaults",
+            );
         }
     }
 }
 
 // ── Filesystem ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct FilesystemConfig {
     /// Maximum bytes that `read()` will return for a single file.
@@ -70,7 +121,7 @@ impl Default for FilesystemConfig {
 
 // ── Shell ──────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShellConfig {
     /// Default timeout in seconds when the model omits `timeout_secs`.
@@ -103,7 +154,7 @@ impl Default for ShellConfig {
 
 /// Commands whose first word matches one of these prefixes are allowed
 /// to run without user confirmation.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AutoApproveConfig {
     pub prefixes: Vec<String>,
@@ -139,7 +190,7 @@ impl Default for AutoApproveConfig {
 
 /// Regex patterns that, when matched against the full command string,
 /// cause immediate rejection (no user prompt).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DenyPatternsConfig {
     pub patterns: Vec<String>,
@@ -165,7 +216,7 @@ impl Default for DenyPatternsConfig {
 
 /// When non-empty, ONLY these exact binary names are allowed.
 /// Empty vec = permissive mode (deny_patterns + auto_approve apply).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AllowedCommandsConfig {
     pub binaries: Vec<String>,
@@ -173,7 +224,7 @@ pub struct AllowedCommandsConfig {
 
 // ── Quotas ─────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct QuotaConfig {
     /// Maximum tool-calling steps per session (already enforced by the
@@ -197,7 +248,7 @@ impl Default for QuotaConfig {
 
 // ── Audit ──────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AuditConfig {
     /// Master switch for audit logging.
