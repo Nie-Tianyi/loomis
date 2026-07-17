@@ -47,11 +47,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_thread_picker(frame, area, picker);
     }
 
-    // ── Debug Trace Overlay ────────────────────────────────────
-    if app.debug_overlay.visible {
-        super::debug::draw_debug_overlay(frame, area, &app.debug_overlay);
-    }
-
     // Place the hardware cursor inside the input area.
     // Account for multi-line input (vertical offset) and CJK width.
     frame.set_cursor_position((

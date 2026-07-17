@@ -1,44 +1,20 @@
-//! Trace event types for full-chain agent observability.
+//! Trace event types for agent observability.
 //!
-//! Each event captures a single observable atom in the agent lifecycle.
-//! Events are wrapped in [`Timestamped`] to carry both wall-clock offset
-//! (via [`std::time::Instant`]) and absolute time (via
-//! [`std::time::SystemTime`]).
+//! Each variant captures a single observable atom in the agent lifecycle.
+//! Events are dispatched to the [`tracing`] crate via [`super::store::TraceStore::emit`]
+//! and can be persisted to the file log or filtered by target (`agent`) and level.
 
 use provider::Usage;
-use std::time::{Duration, Instant, SystemTime};
-
-// ── Timestamped wrapper ────────────────────────────────────────────────────────────
-
-/// Wraps any event with capture-time metadata.
-#[derive(Debug, Clone)]
-pub struct Timestamped<T> {
-    /// Monotonic wall-clock instant when the event was created.
-    /// Use this to compute durations relative to run start.
-    pub instant: Instant,
-    /// Absolute system time when the event was created.
-    /// Use this for ordering events across runs / processes.
-    pub system_time: SystemTime,
-    /// The wrapped event.
-    pub inner: T,
-}
-
-impl<T> Timestamped<T> {
-    pub fn new(inner: T) -> Self {
-        Self {
-            instant: Instant::now(),
-            system_time: SystemTime::now(),
-            inner,
-        }
-    }
-}
+use std::fmt;
+use std::time::Duration;
 
 // ── TraceEvent ────────────────────────────────────────────────────────────────────
 
 /// A single observable event in the agent lifecycle.
 ///
 /// Each variant carries the data available at that point in time.
-/// Timing data is captured by the [`Timestamped`] wrapper.
+/// Timing data is captured by the caller (e.g. [`ObservabilityHook`])
+/// before the event is emitted.
 #[derive(Debug, Clone)]
 pub enum TraceEvent {
     /// A new agent run has started.
@@ -129,6 +105,8 @@ pub enum TraceEvent {
     },
 
     /// A tool call was rejected by a hook (e.g., SandboxHook).
+    ///
+    /// **Reserved for future use** — currently never emitted by any code path.
     ToolCallRejected {
         tool_call_id: String,
         tool_name: String,
@@ -137,7 +115,8 @@ pub enum TraceEvent {
     },
 
     /// Summary of streaming tokens emitted for a step.
-    /// Emitted after the LLM stream completes.
+    ///
+    /// **Reserved for future use** — currently never emitted by any code path.
     StreamingSummary {
         step: usize,
         /// Number of content (non-reasoning) token events emitted.
@@ -161,4 +140,217 @@ pub enum TraceEvent {
         /// Wall-clock duration of the subagent run.
         duration: Duration,
     },
+}
+
+// ── Display ───────────────────────────────────────────────────────────────────────
+
+impl fmt::Display for TraceEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RunStarted {
+                session_id,
+                user_input,
+                max_steps,
+                max_retries,
+            } => {
+                write!(
+                    f,
+                    "RunStarted session={session_id} input=\"{user_input}\" max_steps={max_steps} max_retries={max_retries}"
+                )
+            }
+            Self::RunFinished {
+                outcome,
+                total_duration,
+                total_steps,
+                total_llm_calls,
+                total_tool_calls,
+                cumulative_usage,
+            } => {
+                write!(
+                    f,
+                    "RunFinished outcome=\"{outcome}\" duration={}ms steps={total_steps} llm={total_llm_calls} tools={total_tool_calls} tokens={}",
+                    total_duration.as_millis(),
+                    cumulative_usage.total_tokens
+                )
+            }
+            Self::StepStarted { step } => {
+                write!(f, "StepStarted step={step}")
+            }
+            Self::LlmCallStarted {
+                step,
+                attempt,
+                message_count,
+            } => {
+                write!(
+                    f,
+                    "LlmCallStarted step={step} attempt={attempt} msgs={message_count}"
+                )
+            }
+            Self::LlmCallFinished {
+                step,
+                attempt,
+                duration,
+                usage,
+                finish_reason,
+            } => {
+                write!(
+                    f,
+                    "LlmCallFinished step={step} attempt={attempt} duration={}ms tokens={} reason={}",
+                    duration.as_millis(),
+                    usage.total_tokens,
+                    finish_reason.as_deref().unwrap_or("none")
+                )
+            }
+            Self::LlmCallFailed {
+                step,
+                attempt,
+                error,
+                will_retry,
+                duration,
+            } => {
+                write!(
+                    f,
+                    "LlmCallFailed step={step} attempt={attempt} error=\"{error}\" retry={will_retry} duration={}ms",
+                    duration.as_millis()
+                )
+            }
+            Self::ToolCallStarted {
+                tool_call_id,
+                tool_name,
+                step,
+            } => {
+                write!(
+                    f,
+                    "ToolCallStarted step={step} tool={tool_name} id={tool_call_id}"
+                )
+            }
+            Self::ToolCallFinished {
+                tool_call_id,
+                tool_name,
+                duration,
+                success,
+                output_size_bytes,
+            } => {
+                write!(
+                    f,
+                    "ToolCallFinished tool={tool_name} id={tool_call_id} duration={}ms ok={success} output={output_size_bytes}B",
+                    duration.as_millis()
+                )
+            }
+            Self::ToolCallRejected {
+                tool_call_id,
+                tool_name,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "ToolCallRejected tool={tool_name} id={tool_call_id} reason=\"{reason}\""
+                )
+            }
+            Self::StreamingSummary {
+                step,
+                content_chunks,
+                reasoning_chunks,
+            } => {
+                write!(
+                    f,
+                    "StreamingSummary step={step} content={content_chunks} reasoning={reasoning_chunks}"
+                )
+            }
+            Self::SubagentFinished {
+                description,
+                steps,
+                llm_calls,
+                tool_calls,
+                usage,
+                duration,
+            } => {
+                write!(
+                    f,
+                    "SubagentFinished desc=\"{description}\" steps={steps} llm={llm_calls} tools={tool_calls} tokens={} duration={}ms",
+                    usage.total_tokens,
+                    duration.as_millis()
+                )
+            }
+        }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_run_started() {
+        let e = TraceEvent::RunStarted {
+            session_id: "s1".into(),
+            user_input: "hello world".into(),
+            max_steps: 50,
+            max_retries: 3,
+        };
+        let s = e.to_string();
+        assert!(s.starts_with("RunStarted"));
+        assert!(s.contains("session=s1"));
+        assert!(s.contains("input=\"hello world\""));
+        assert!(s.contains("max_steps=50"));
+        assert!(s.contains("max_retries=3"));
+    }
+
+    #[test]
+    fn test_display_run_finished() {
+        let e = TraceEvent::RunFinished {
+            outcome: "success".into(),
+            total_duration: Duration::from_millis(1234),
+            total_steps: 3,
+            total_llm_calls: 4,
+            total_tool_calls: 5,
+            cumulative_usage: Usage {
+                prompt_tokens: 100,
+                completion_tokens: 200,
+                total_tokens: 300,
+            },
+        };
+        let s = e.to_string();
+        assert!(s.starts_with("RunFinished"));
+        assert!(s.contains("duration=1234ms"));
+        assert!(s.contains("steps=3"));
+        assert!(s.contains("tokens=300"));
+    }
+
+    #[test]
+    fn test_display_step_started() {
+        let s = TraceEvent::StepStarted { step: 42 }.to_string();
+        assert_eq!(s, "StepStarted step=42");
+    }
+
+    #[test]
+    fn test_display_llm_call_failed() {
+        let e = TraceEvent::LlmCallFailed {
+            step: 2,
+            attempt: 1,
+            error: "timeout".into(),
+            will_retry: true,
+            duration: Duration::from_secs(30),
+        };
+        let s = e.to_string();
+        assert!(s.contains("error=\"timeout\""));
+        assert!(s.contains("retry=true"));
+    }
+
+    #[test]
+    fn test_display_tool_call_finished() {
+        let e = TraceEvent::ToolCallFinished {
+            tool_call_id: "call_123".into(),
+            tool_name: "read".into(),
+            duration: Duration::from_millis(50),
+            success: true,
+            output_size_bytes: 1024,
+        };
+        let s = e.to_string();
+        assert!(s.contains("tool=read"));
+        assert!(s.contains("ok=true"));
+        assert!(s.contains("output=1024B"));
+    }
 }

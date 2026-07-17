@@ -97,10 +97,8 @@ pub struct App {
     pub persistence_config: PersistenceConfig,
 
     // ── Observability ──
-    /// Shared trace store — written by [`ObservabilityHook`], read by TUI each frame.
+    /// Shared trace store — written by [`ObservabilityHook`], read by TUI status bar.
     pub trace_store: Arc<TraceStore>,
-    /// Debug overlay showing recent trace events.
-    pub debug_overlay: super::debug::DebugOverlay,
 
     // ── Plan mode ──
     /// Shared plan-mode toggle between TUI and [`PlanModeHook`].
@@ -159,7 +157,6 @@ impl App {
             should_quit: false,
             persistence_config,
             trace_store,
-            debug_overlay: super::debug::DebugOverlay::new(),
             plan_mode,
             skill_registry,
             active_skills,
@@ -168,14 +165,6 @@ impl App {
 }
 
 // ── Trace Sync ────────────────────────────────────────────────────────────────────
-
-impl App {
-    /// Sync trace events from the store into the debug overlay.
-    /// Called once per render frame from the TUI event loop.
-    pub fn sync_trace(&mut self) {
-        self.debug_overlay.sync(&self.trace_store);
-    }
-}
 
 // ── Event Application ────────────────────────────────────────────────────────────
 

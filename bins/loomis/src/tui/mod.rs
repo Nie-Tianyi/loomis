@@ -30,7 +30,6 @@
 //! | [`shell_exec`] | User `!command` shell execution + Windows encoding |
 
 mod app;
-pub mod debug;
 mod event;
 mod input;
 mod markdown;

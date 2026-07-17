@@ -59,7 +59,7 @@ agent_oxide/
 | `hooks` | Concrete hooks | `MicroCompactHook`, `MacroCompactHook<C>`, compaction constants |
 | `engine` | Core loop | `Agent`, `AgentBuilder`, `AgentHook` trait, `AgentEvent`, `AgentError`, `EngineContext`, `ResponseRouter`, `InterventionRequest`/`Response`, `RunOutcome`, `CallOrigin` |
 | `subagent` | Concrete | `SubagentTool<C>`, `SubagentConfig`, `filter_tools()` |
-| `observability` | Abstraction | `TraceEvent`, `TraceStore`, `RunMetrics`, `SubagentTrace`, `Timestamped<T>` |
+| `observability` | Abstraction | `TraceEvent`, `TraceStore`, `RunMetrics` |
 | `skills` | Abstraction | `SkillDef`, `SkillRegistry`, `ActiveSkills`, YAML frontmatter parser, `SkillError` |
 | `loomis` | Binary | 12 concrete tools, 7 hooks (Sandbox, Persistence, SystemPrompt, TodoList, Observability, PlanMode, Skill), sandbox system, TUI, `AgentKit`, `build_coding_agent()` |
 
@@ -84,6 +84,10 @@ provider (no internal deps)
     │       ↑
     └── loomis (bin) ──── (uses all libs)
 ```
+
+## Principles
+
+**Code quality above all.** Always produce teaching-quality code — clear, well-named, self-documenting. Readability trumps performance in every decision, unless the algorithmic improvement is substantial enough to justify the complexity trade-off.
 
 ## Key patterns
 
@@ -152,23 +156,33 @@ Both in the `hooks` crate:
 
 Config: `.loomis/config.toml` → `SandboxConfig` (safe defaults if missing).
 
-### Observability (full-chain tracing)
+### Observability (agent event tracing → file log)
 
-`ObservabilityHook` implements all 9 `AgentHook` callbacks to capture lifecycle events with timing data and token counts. Events flow through a side channel (`Arc<TraceStore>`) shared between agent task and TUI — no changes to `AgentEvent` enum needed.
+`ObservabilityHook` implements all 9 `AgentHook` callbacks to capture lifecycle events with timing data and token counts. Events are dispatched through `TraceStore::emit()` to the [`tracing`](https://crates.io/crates/tracing) infrastructure, which writes them to `.loomis/logs/loomis.log` (daily rotation, non-blocking). `RunMetrics` atomics are updated separately for the TUI status bar.
 
 | Component | Crate | Role |
 | --- | --- | --- |
 | `TraceEvent` | `observability` | 12 variants: `RunStarted`, `RunFinished`, `StepStarted`, `LlmCallStarted`, `LlmCallFinished`, `LlmCallFailed`, `ToolCallStarted`, `ToolCallFinished`, `ToolCallRejected`, `StreamingSummary`, `SubagentFinished` |
-| `TraceStore` | `observability` | Thread-safe ring buffer (4096 entries), lock-free `RunMetrics` atomics, `export_jsonl()` |
+| `TraceStore` | `observability` | Dispatches events to `tracing` at appropriate levels (`INFO` for lifecycle, `WARN` for errors, `DEBUG` for step details); exposes lock-free `RunMetrics` atomics |
 | `RunMetrics` | `observability` | Aggregated counters (steps, LLM calls, tool calls, tokens, errors) — read by TUI status bar |
-| `ObservabilityHook` | `loomis` | Implements `AgentHook`, captures `Instant::now()` at each phase boundary, holds `SharedMemory` to read `last_usage` in `on_llm_end` |
-| `DebugOverlay` | `loomis` (TUI) | Toggleable via `Ctrl+O` or `/debug`, scrollable table of recent trace events, synced each frame |
+| `ObservabilityHook` | `loomis` | Implements `AgentHook`, captures `Instant::now()` at each phase boundary, updates `RunMetrics`, calls `store.emit()` |
 
-**Data flow**: Agent loop → `AgentHook` callbacks → `ObservabilityHook::emit(TraceEvent)` → `TraceStore` ring buffer (hot path, O(1), no alloc) → TUI drains at 20fps via `App::sync_trace()`.
+**Data flow**: Agent loop → `AgentHook` callbacks → `ObservabilityHook` updates `RunMetrics` + calls `TraceStore::emit(TraceEvent)` → `tracing::event!` macro → `tracing_appender` writes to `.loomis/logs/loomis.log`.
+
+**Log levels by event**:
+
+| Level | Events |
+| --- | --- |
+| `INFO` | `RunStarted`, `RunFinished`, `SubagentFinished` |
+| `WARN` | `LlmCallFailed`, `ToolCallRejected` |
+| `DEBUG` | `StepStarted`, `LlmCallStarted`, `LlmCallFinished`, `ToolCallStarted`, `ToolCallFinished` |
+| `TRACE` | `StreamingSummary` |
+
+All events use `target: "agent"`. Filter with `LOOMIS_LOG=agent=debug` for full step-by-step detail (default: `info`).
 
 **Subagent tracing**: `SubagentTool` holds `Option<Arc<TraceStore>>`. On child completion, `emit_subagent_trace()` reads child memory's `usage_history` and emits a single `SubagentFinished` event to the parent's store.
 
-**Persistence**: `/trace-save` slash command exports buffered events as JSONL to `.loomis/traces/trace_{timestamp}.jsonl`.
+**Persistence**: All events are automatically written to `.loomis/logs/loomis.log` via `tracing_appender` (daily rotation, non-blocking I/O). No manual export step needed.
 
 ### Plan Mode (read-only research & planning)
 
@@ -272,8 +286,8 @@ cmd_tx ───────── TuiCommand ──────→ cmd_rx
 agent_rx ←────── AgentEvent ─────── agent_tx
 ```
 
-- **Keybindings**: Enter (submit), Ctrl+C (cancel), Esc (cancel), Ctrl+D (exit), Ctrl+O (toggle trace debug overlay), PgUp/PgDown (scroll), Up/Down (history), Left/Right/Home/End (cursor). Intervention prompts: ↑/↓ (navigate), Enter (select), Esc (cancel)
-- **Slash commands**: `/exit`, `/new`, `/plan`, `/approve`, `/save <name>`, `/resume [name]`, `/threads`, `/stats`, `/tools`, `/debug`, `/trace-save`, `/skill <name>`, `/help`
+- **Keybindings**: Enter (submit), Ctrl+C (cancel), Esc (cancel), Ctrl+D (exit), PgUp/PgDown (scroll), Up/Down (history), Left/Right/Home/End (cursor). Intervention prompts: ↑/↓ (navigate), Enter (select), Esc (cancel)
+- **Slash commands**: `/exit`, `/new`, `/plan`, `/approve`, `/save <name>`, `/resume [name]`, `/threads`, `/stats`, `/tools`, `/skill <name>`, `/help`
 - **Bang prefix**: `!command` — runs shell, output shared with agent
 
 ## Future work

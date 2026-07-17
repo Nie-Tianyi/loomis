@@ -140,9 +140,6 @@ fn run_event_loop(
     let mut pending_events: Vec<AgentEvent> = Vec::new();
 
     loop {
-        // ── Sync trace events ────────────────────────────────────────
-        app.sync_trace();
-
         // ── Render ───────────────────────────────────────────────────
         terminal.draw(|frame| super::ui::draw(frame, app))?;
 

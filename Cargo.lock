@@ -1027,8 +1027,7 @@ name = "observability"
 version = "0.1.0"
 dependencies = [
  "provider",
- "serde",
- "serde_json",
+ "tracing",
 ]
 
 [[package]]
