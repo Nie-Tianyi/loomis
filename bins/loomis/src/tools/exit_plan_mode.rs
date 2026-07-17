@@ -41,13 +41,17 @@ pub(crate) struct ExitPlanModeArgs {}
 /// # Response
 ///
 /// - **Approved** → plan mode deactivated, full access restored
+/// - **Suggest changes** → stays in plan mode, user feedback returned so
+///   the LLM can revise the plan and call exit_plan_mode again
 /// - **Cancelled** → stays in plan mode, error returned to LLM
 /// - **Not in plan mode** → error
 #[tool(
     name = "exit_plan_mode",
     description = "Exit plan mode and present your plan to the user for approval. \
-         This reads the plan file, shows it to the user, and asks them to approve \
-         or cancel.\n\n\
+         This reads the plan file, shows it to the user, and asks them to approve, \
+         suggest changes, or cancel.\n\n\
+         If the user suggests changes, their feedback is returned to you so you \
+         can revise the plan and call exit_plan_mode again.\n\n\
          When to use:\n\
          - You have finished researching and written a plan to the plan file\n\
          - You are ready to present your findings for user review\n\
@@ -130,7 +134,11 @@ impl ExitPlanModeTool {
                 request_id: request_id.clone(),
                 title: "Approve Plan?".into(),
                 description,
-                options: vec!["Approve".into(), "Cancel".into()],
+                options: vec![
+                    "Approve".into(),
+                    "Suggest changes…".into(),
+                    "Cancel".into(),
+                ],
             }));
         }
 
@@ -176,8 +184,27 @@ impl ExitPlanModeTool {
                 };
                 Ok(ProgressStream::done(msg))
             }
-            // "Cancel" (index 1) — stay in plan mode.
-            Some(1) => Err(ToolError::Execution(
+            // "Suggest changes…" (index 1) — stay in plan mode, pass
+            // feedback back to the LLM so it can revise the plan.
+            Some(1) => {
+                let feedback = response
+                    .custom_text
+                    .unwrap_or_else(|| "(No specific feedback provided.)".into());
+                Ok(ProgressStream::done(format!(
+                    "The user reviewed your plan and provided suggestions. \
+                     You are still in plan mode.\n\n\
+                     ─── User Feedback ───\n\n\
+                     {feedback}\n\n\
+                     ─── Instructions ──\n\n\
+                     1. Read the feedback carefully — it tells you what to change or improve.\n\
+                     2. Update the plan file ({plan_path}) to address each point.\n\
+                     3. Use read/grep/glob as needed to research anything new.\n\
+                     4. When the plan is updated, call exit_plan_mode again to present it.",
+                    plan_path = self.plan_file_path.display()
+                )))
+            }
+            // "Cancel" (index 2) — stay in plan mode.
+            Some(2) => Err(ToolError::Execution(
                 "Plan was not approved. Staying in plan mode. You can revise \
                  the plan and call exit_plan_mode again, or the user can use \
                  /approve to exit plan mode manually."
