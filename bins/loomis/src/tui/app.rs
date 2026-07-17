@@ -368,7 +368,7 @@ mod tests {
         let pending_hints = PendingHints::default();
         let todos = Arc::new(RwLock::new(Vec::<TodoItem>::new()));
         let trace_store = Arc::new(TraceStore::new());
-        let plan_mode = Arc::new(PlanModeState::new());
+        let plan_mode = Arc::new(PlanModeState::default());
         let skill_registry = Arc::new(SkillRegistry::empty());
         let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
         App::new(

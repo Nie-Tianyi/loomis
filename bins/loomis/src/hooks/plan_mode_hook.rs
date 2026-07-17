@@ -29,12 +29,6 @@ pub struct PlanModeState {
     pub active: AtomicBool,
 }
 
-impl PlanModeState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
 impl Default for PlanModeState {
     fn default() -> Self {
         Self {

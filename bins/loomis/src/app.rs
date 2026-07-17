@@ -100,7 +100,7 @@ pub fn build_coding_agent(
     // ── Plan mode state ───────────────────────────────────────
     // Created before tools so EnterPlanModeTool / ExitPlanModeTool
     // can be registered and included in tool_names.
-    let plan_mode = Arc::new(PlanModeState::new());
+    let plan_mode = Arc::new(PlanModeState::default());
     let plan_file_path = workspace_root.join(".loomis").join("plan.md");
 
     // ── Skills ────────────────────────────────────────────────

@@ -348,22 +348,19 @@ fn format_conversation_md(cf: &ConversationFile, config: &PersistenceConfig) -> 
     md.push_str("\n---\n\n");
 
     for msg in &cf.messages {
-        let role_str = match msg.role {
-            Role::System => "System",
-            Role::User => "User",
-            Role::Assistant => "Assistant",
-            Role::Tool => {
-                if let Some(ref id) = msg.tool_call_id {
-                    md.push_str(&format!("## [Tool → {id}]\n\n"));
-                } else {
-                    md.push_str("## [Tool]\n\n");
-                }
-                md.push_str(&msg.content);
-                md.push_str("\n\n---\n\n");
-                continue;
+        // Tool messages get special formatting and skip the standard header.
+        if msg.role == Role::Tool {
+            if let Some(ref id) = msg.tool_call_id {
+                md.push_str(&format!("## [Tool → {id}]\n\n"));
+            } else {
+                md.push_str("## [Tool]\n\n");
             }
-            _ => "Unknown",
-        };
+            md.push_str(&msg.content);
+            md.push_str("\n\n---\n\n");
+            continue;
+        }
+
+        let role_str = msg.role.label();
         md.push_str(&format!("## [{role_str}]\n\n"));
         if let Some(ref tool_calls) = msg.tool_calls {
             for tc in tool_calls {

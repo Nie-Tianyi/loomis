@@ -163,7 +163,7 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
         // Build summarisation transcript
         let transcript: String = old
             .iter()
-            .map(|m| format!("[{}]: {}", role_label(m.role), m.content))
+            .map(|m| format!("[{}]: {}", m.role.label(), m.content))
             .collect::<Vec<_>>()
             .join("\n\n");
 
@@ -296,15 +296,6 @@ fn drain_for_compact(messages: &mut Vec<Message>, keep_last_n: usize) -> Vec<Mes
     drained
 }
 
-const fn role_label(role: Role) -> &'static str {
-    match role {
-        Role::System => "System",
-        Role::User => "User",
-        Role::Assistant => "Assistant",
-        Role::Tool => "Tool",
-        _ => "Unknown",
-    }
-}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -470,10 +461,10 @@ mod tests {
 
     #[test]
     fn test_role_label_all_variants() {
-        assert_eq!(role_label(Role::System), "System");
-        assert_eq!(role_label(Role::User), "User");
-        assert_eq!(role_label(Role::Assistant), "Assistant");
-        assert_eq!(role_label(Role::Tool), "Tool");
+        assert_eq!(Role::System.label(), "System");
+        assert_eq!(Role::User.label(), "User");
+        assert_eq!(Role::Assistant.label(), "Assistant");
+        assert_eq!(Role::Tool.label(), "Tool");
     }
 
     #[test]

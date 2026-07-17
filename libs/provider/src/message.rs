@@ -64,6 +64,18 @@ pub enum Role {
     Tool,
 }
 
+impl Role {
+    /// Human-readable label for this role.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Role::System => "System",
+            Role::User => "User",
+            Role::Assistant => "Assistant",
+            Role::Tool => "Tool",
+        }
+    }
+}
+
 /// A tool call emitted by the model in a streaming or non-streaming response.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCall {

@@ -72,7 +72,7 @@ impl WriteTool {
 
         let file_path = args.file_path.clone();
         let content_len = args.content.len();
-        let preview = content_preview(&args.content);
+        let preview = super::content_preview(&args.content, "Content");
 
         // Stream progress events with small delays so the TUI can render
         // intermediate states before Done transitions to Complete.
@@ -102,32 +102,6 @@ impl WriteTool {
             rx.recv().await.map(|item| (item, rx))
         });
         Ok(ProgressStream::new(Box::pin(stream)))
-    }
-}
-
-/// Build a single-line content preview for progress display.
-///
-/// Shows the first non-empty line, truncated to 80 characters.
-/// Appends a line-count hint for multi-line content.
-fn content_preview(content: &str) -> String {
-    if content.is_empty() {
-        return String::new(); // empty content: skip preview
-    }
-
-    let first_line = content.lines().next().unwrap_or("");
-    let line_count = content.lines().count();
-
-    let truncated = if first_line.len() > 80 {
-        let boundary = first_line.floor_char_boundary(77);
-        format!("{}...", &first_line[..boundary])
-    } else {
-        first_line.to_string()
-    };
-
-    if line_count > 1 {
-        format!("Content: {} (+{} more lines)", truncated, line_count - 1)
-    } else {
-        format!("Content: {}", truncated)
     }
 }
 
@@ -258,13 +232,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_content_preview_single_line() {
-        let preview = content_preview("hello world");
+        let preview = crate::tools::content_preview("hello world", "Content");
         assert_eq!(preview, "Content: hello world");
     }
 
     #[tokio::test]
     async fn test_content_preview_multi_line() {
-        let preview = content_preview("line1\nline2\nline3");
+        let preview = crate::tools::content_preview("line1\nline2\nline3", "Content");
         assert!(preview.contains("line1"));
         assert!(preview.contains("+2 more lines"));
     }
@@ -272,13 +246,13 @@ mod tests {
     #[tokio::test]
     async fn test_content_preview_long_line() {
         let long = "a".repeat(100);
-        let preview = content_preview(&long);
+        let preview = crate::tools::content_preview(&long, "Content");
         assert!(preview.ends_with("..."));
         assert!(preview.len() <= "Content: ".len() + 83); // 80 chars + "..."
     }
 
     #[tokio::test]
     async fn test_content_preview_empty() {
-        assert!(content_preview("").is_empty());
+        assert!(crate::tools::content_preview("", "Content").is_empty());
     }
 }

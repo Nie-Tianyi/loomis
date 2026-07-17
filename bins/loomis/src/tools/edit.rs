@@ -105,7 +105,7 @@ impl EditTool {
         } else {
             format!("lines {}-{}", start, end)
         };
-        let preview = content_preview(&args.new_content);
+        let preview = super::content_preview(&args.new_content, "Replace with");
 
         // Stream progress events with small delays so the TUI can render
         // intermediate states before Done transitions to Complete.
@@ -131,36 +131,6 @@ impl EditTool {
             rx.recv().await.map(|item| (item, rx))
         });
         Ok(ProgressStream::new(Box::pin(stream)))
-    }
-}
-
-/// Build a single-line content preview for progress display.
-///
-/// Shows the first non-empty line, truncated to 80 characters.
-/// Appends a line-count hint for multi-line content.
-fn content_preview(content: &str) -> String {
-    if content.is_empty() {
-        return String::new(); // empty replacement (delete): skip preview
-    }
-
-    let first_line = content.lines().next().unwrap_or("");
-    let line_count = content.lines().count();
-
-    let truncated = if first_line.len() > 80 {
-        let boundary = first_line.floor_char_boundary(77);
-        format!("{}...", &first_line[..boundary])
-    } else {
-        first_line.to_string()
-    };
-
-    if line_count > 1 {
-        format!(
-            "Replace with: {} (+{} more lines)",
-            truncated,
-            line_count - 1
-        )
-    } else {
-        format!("Replace with: {}", truncated)
     }
 }
 
@@ -320,18 +290,18 @@ mod tests {
     #[tokio::test]
     async fn test_content_preview_delete() {
         // Empty content (delete) should return empty preview.
-        assert!(content_preview("").is_empty());
+        assert!(crate::tools::content_preview("", "Replace with").is_empty());
     }
 
     #[tokio::test]
     async fn test_content_preview_single_line() {
-        let preview = content_preview("hello world");
+        let preview = crate::tools::content_preview("hello world", "Replace with");
         assert_eq!(preview, "Replace with: hello world");
     }
 
     #[tokio::test]
     async fn test_content_preview_multi_line() {
-        let preview = content_preview("line1\nline2\nline3");
+        let preview = crate::tools::content_preview("line1\nline2\nline3", "Replace with");
         assert!(preview.contains("line1"));
         assert!(preview.contains("+2 more lines"));
     }

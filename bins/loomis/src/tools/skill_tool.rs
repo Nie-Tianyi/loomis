@@ -1,7 +1,7 @@
 //! [`SkillTool`] — lets the LLM load a named skill by injecting its
 //! instructions as a System message.
 //!
-//! Follows the same pattern as [`EchoTool`](crate::tools::EchoTool):
+//! Follows the same pattern as [`CalculatorTool`](crate::tools::CalculatorTool):
 //! define args struct → annotate with `#[tool()]` → implement `execute_stream`.
 //!
 //! On success, the skill's content is written to the shared [`ActiveSkills`]

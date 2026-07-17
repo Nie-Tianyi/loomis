@@ -115,21 +115,21 @@ mod tests {
     #[test]
     fn test_name() {
         let plan_file = make_plan_file();
-        let tool = EnterPlanModeTool::new(Arc::new(PlanModeState::new()), plan_file);
+        let tool = EnterPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file);
         assert_eq!(tool.name(), "enter_plan_mode");
     }
 
     #[test]
     fn test_description() {
         let plan_file = make_plan_file();
-        let tool = EnterPlanModeTool::new(Arc::new(PlanModeState::new()), plan_file);
+        let tool = EnterPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file);
         assert!(tool.description().contains("plan mode"));
     }
 
     #[test]
     fn test_parameters_schema() {
         let plan_file = make_plan_file();
-        let tool = EnterPlanModeTool::new(Arc::new(PlanModeState::new()), plan_file);
+        let tool = EnterPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file);
         let params = tool.parameter_schema();
         assert_eq!(params["type"], "object");
         assert_eq!(params["additionalProperties"], false);
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_activates_plan_mode() {
         let plan_file = make_plan_file();
-        let state = Arc::new(PlanModeState::new());
+        let state = Arc::new(PlanModeState::default());
         let tool = EnterPlanModeTool::new(state.clone(), plan_file);
 
         assert!(!state.active.load(Ordering::SeqCst));
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn test_noop_when_already_active() {
         let plan_file = make_plan_file();
-        let state = Arc::new(PlanModeState::new());
+        let state = Arc::new(PlanModeState::default());
         state.active.store(true, Ordering::SeqCst);
         let tool = EnterPlanModeTool::new(state.clone(), plan_file);
 
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn test_invalid_json_rejected() {
         let plan_file = make_plan_file();
-        let tool = EnterPlanModeTool::new(Arc::new(PlanModeState::new()), plan_file);
+        let tool = EnterPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file);
         let err = Tool::execute_stream(&tool, "garbage").unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }

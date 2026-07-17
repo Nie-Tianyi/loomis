@@ -211,21 +211,21 @@ mod tests {
     #[test]
     fn test_name() {
         let plan_file = make_plan_file();
-        let tool = ExitPlanModeTool::new(Arc::new(PlanModeState::new()), plan_file, make_router());
+        let tool = ExitPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file, make_router());
         assert_eq!(tool.name(), "exit_plan_mode");
     }
 
     #[test]
     fn test_description() {
         let plan_file = make_plan_file();
-        let tool = ExitPlanModeTool::new(Arc::new(PlanModeState::new()), plan_file, make_router());
+        let tool = ExitPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file, make_router());
         assert!(tool.description().contains("plan mode"));
     }
 
     #[test]
     fn test_parameters_schema() {
         let plan_file = make_plan_file();
-        let tool = ExitPlanModeTool::new(Arc::new(PlanModeState::new()), plan_file, make_router());
+        let tool = ExitPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file, make_router());
         let params = tool.parameter_schema();
         assert_eq!(params["type"], "object");
         assert_eq!(params["additionalProperties"], false);
@@ -235,7 +235,7 @@ mod tests {
     fn test_error_when_not_in_plan_mode() {
         let plan_file = make_plan_file();
         let tool = ExitPlanModeTool::new(
-            Arc::new(PlanModeState::new()), // active defaults to false
+            Arc::new(PlanModeState::default()), // active defaults to false
             plan_file,
             make_router(),
         );
@@ -258,7 +258,7 @@ mod tests {
         // test, but we verify that the tool constructs correctly and
         // the guard clause works.
         let plan_file = make_plan_file();
-        let state = Arc::new(PlanModeState::new());
+        let state = Arc::new(PlanModeState::default());
         state.active.store(true, Ordering::SeqCst);
         let tool = ExitPlanModeTool::new(state, plan_file, make_router());
         // agent_tx is NOT set
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn test_invalid_json_rejected() {
         let plan_file = make_plan_file();
-        let tool = ExitPlanModeTool::new(Arc::new(PlanModeState::new()), plan_file, make_router());
+        let tool = ExitPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file, make_router());
         let err = Tool::execute_stream(&tool, "garbage").unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn test_extra_field_rejected() {
         let plan_file = make_plan_file();
-        let tool = ExitPlanModeTool::new(Arc::new(PlanModeState::new()), plan_file, make_router());
+        let tool = ExitPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file, make_router());
         let err = Tool::execute_stream(&tool, r#"{"extra": true}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }

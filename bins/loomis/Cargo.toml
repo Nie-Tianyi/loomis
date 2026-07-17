@@ -22,12 +22,10 @@ hooks = { path = "../../libs/hooks" }
 subagent = { path = "../../libs/subagent" }
 observability = { path = "../../libs/observability" }
 skills = { path = "../../libs/skills" }
-reqwest = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dotenvy = { workspace = true }
-futures-executor = { workspace = true }
 futures-util = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
@@ -41,4 +39,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 
 [dev-dependencies]
+futures-executor = { workspace = true }
 tempfile = { workspace = true }

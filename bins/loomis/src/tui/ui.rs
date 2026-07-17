@@ -1019,7 +1019,7 @@ fn draw_thread_picker(frame: &mut Frame, area: Rect, picker: &ThreadPicker) {
             "{name:20}  {count:4} msgs  {chars:6} chars  {time}",
             name = t.name,
             count = t.message_count,
-            chars = format_chars(t.total_chars),
+            chars = format_human(t.total_chars, "k", "M"),
             time = t.saved_at,
         );
 
@@ -1055,12 +1055,12 @@ fn draw_thread_picker(frame: &mut Frame, area: Rect, picker: &ThreadPicker) {
     frame.render_widget(paragraph, popup_rect);
 }
 
-/// Formats a character count with a human-readable suffix (e.g. "2.5k").
-fn format_chars(n: usize) -> String {
+/// Formats a number with a human-readable suffix (e.g. "2.5k", "1.2K", "3.0M").
+fn format_human(n: usize, suffix_lower: &str, suffix_upper: &str) -> String {
     if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
+        format!("{:.1}{suffix_upper}", n as f64 / 1_000_000.0)
     } else if n >= 1_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
+        format!("{:.1}{suffix_lower}", n as f64 / 1_000.0)
     } else {
         n.to_string()
     }
@@ -1098,7 +1098,7 @@ fn build_status_content(app: &App) -> (String, String, String) {
             let steps = m.steps();
             let llm = m.llm_calls();
             let tools = m.tool_calls();
-            let tokens = format_tokens(m.total_tokens());
+            let tokens = format_human(m.total_tokens() as usize, "K", "M");
             format!("#{steps} · {llm} LLM · {tools} tools · {tokens} | ")
         } else {
             String::new()
@@ -1140,16 +1140,6 @@ fn build_status_content(app: &App) -> (String, String, String) {
     (left, accent, right)
 }
 
-/// Formats token count with a human-readable suffix (e.g., "1.2K").
-fn format_tokens(n: u32) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
-    }
-}
 
 // ── Line Count Estimation ────────────────────────────────────────────────────────
 
