@@ -296,7 +296,6 @@ fn drain_for_compact(messages: &mut Vec<Message>, keep_last_n: usize) -> Vec<Mes
     drained
 }
 
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

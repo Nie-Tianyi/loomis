@@ -1140,7 +1140,6 @@ fn build_status_content(app: &App) -> (String, String, String) {
     (left, accent, right)
 }
 
-
 // ── Line Count Estimation ────────────────────────────────────────────────────────
 
 impl App {
