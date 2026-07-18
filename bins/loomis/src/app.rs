@@ -249,8 +249,14 @@ pub fn build_coding_agent(
     let todo_list_hook = TodoListHook::new(todo_state.clone());
 
     // PersistenceHook — auto-saves conversation after each agent run.
-    // Replaces the ad-hoc save in the TUI agent_handler's tokio::spawn block.
-    let persistence_config = PersistenceConfig::default();
+    // Must match the TUI's persistence_config so both the hook and user
+    // save/resume operations write to the same directory.
+    let persistence_config = PersistenceConfig {
+        threads_dir: ".loomis/threads".into(),
+        current_thread_file: ".loomis/current".into(),
+        markdown_title: "Loomis Conversation".into(),
+        ..Default::default()
+    };
     let persistence_hook =
         PersistenceHook::new(workspace_root.to_path_buf(), persistence_config.clone());
 
