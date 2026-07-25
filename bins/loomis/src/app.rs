@@ -65,6 +65,62 @@ pub struct AgentKit {
     pub active_skills: skills::ActiveSkills,
 }
 
+/// Seed default skills into `.loomis/skills/` if no `.md` files exist there.
+///
+/// Idempotent: if the directory already contains any `.md` files (user-created
+/// or previously seeded), this function is a no-op. Missing directories are
+/// created on demand.
+///
+/// Embedded content comes from `include_str!()` at compile time, so the binary
+/// is self-contained — no runtime file reads.
+fn seed_default_skills(workspace_root: &Path) {
+    let skills_dir = workspace_root.join(".loomis").join("skills");
+
+    // Check if any .md files already exist. If so, the user has intentionally
+    // authored (or previously seeded) skills — don't touch anything.
+    if skills_dir.exists() {
+        let has_md = std::fs::read_dir(&skills_dir)
+            .map(|rd| {
+                rd.flatten()
+                    .any(|e| e.path().extension().map_or(false, |ext| ext == "md"))
+            })
+            .unwrap_or(false);
+        if has_md {
+            tracing::debug!(
+                dir = %skills_dir.display(),
+                "Skills already exist, skipping seed",
+            );
+            return;
+        }
+    }
+
+    // Create the directory (idempotent).
+    if let Err(e) = std::fs::create_dir_all(&skills_dir) {
+        tracing::error!(
+            dir = %skills_dir.display(),
+            error = %e,
+            "Failed to create skills directory",
+        );
+        return;
+    }
+
+    // Write the embedded default skill.
+    let seed_path = skills_dir.join("skill-generator.md");
+    let content = include_str!("../skills/skill-generator.md");
+
+    match std::fs::write(&seed_path, content) {
+        Ok(()) => tracing::info!(
+            path = %seed_path.display(),
+            "Seeded default skill-generator skill",
+        ),
+        Err(e) => tracing::error!(
+            path = %seed_path.display(),
+            error = %e,
+            "Failed to seed default skill",
+        ),
+    }
+}
+
 /// Build a fully-wired coding agent with all channels and hooks.
 pub fn build_coding_agent(
     api_key: &str,
@@ -102,6 +158,11 @@ pub fn build_coding_agent(
     // can be registered and included in tool_names.
     let plan_mode = Arc::new(PlanModeState::default());
     let plan_file_path = workspace_root.join(".loomis").join("plan.md");
+
+    // ── Seed default skills ──────────────────────────────────
+    // If no skills exist yet, seed the default "skill-generator"
+    // skill so the user immediately has guidance on creating new skills.
+    seed_default_skills(workspace_root);
 
     // ── Skills ────────────────────────────────────────────────
     // Discover skills from project and user directories.
@@ -318,4 +379,80 @@ fn dirs_fallback() -> std::path::PathBuf {
         }
     }
     std::path::PathBuf::from(".")
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skills::SkillRegistry;
+
+    #[test]
+    fn test_seeds_when_no_skills_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_default_skills(tmp.path());
+        let seeded = tmp
+            .path()
+            .join(".loomis")
+            .join("skills")
+            .join("skill-generator.md");
+        assert!(seeded.exists(), "seed file should be created");
+        let content = std::fs::read_to_string(&seeded).unwrap();
+        assert!(content.contains("name: skill-generator"));
+        assert!(content.contains("YAML frontmatter"));
+    }
+
+    #[test]
+    fn test_idempotent_when_skills_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join(".loomis").join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        // Create a user skill.
+        std::fs::write(
+            skills_dir.join("my-skill.md"),
+            "---\nname: my-skill\ndescription: User skill.\n---\nBody.",
+        )
+        .unwrap();
+
+        seed_default_skills(tmp.path());
+
+        // The default skill should NOT overwrite the user's skill.
+        let user_skill = std::fs::read_to_string(skills_dir.join("my-skill.md")).unwrap();
+        assert!(user_skill.contains("name: my-skill"));
+        // The seed file should not exist because .md files already existed.
+        assert!(
+            !skills_dir.join("skill-generator.md").exists(),
+            "seed file should not be created when skills already exist"
+        );
+    }
+
+    #[test]
+    fn test_idempotent_when_directory_missing() {
+        // No .loomis/ directory at all — seed should create it.
+        let tmp = tempfile::tempdir().unwrap();
+        let looms_dir = tmp.path().join(".loomis");
+        assert!(!looms_dir.exists(), "precondition: no .loomis dir");
+
+        seed_default_skills(tmp.path());
+
+        assert!(looms_dir.exists(), ".loomis should be created");
+        assert!(
+            looms_dir.join("skills").join("skill-generator.md").exists(),
+            "seed file should be created"
+        );
+    }
+
+    #[test]
+    fn test_seeded_skill_discovered_by_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_default_skills(tmp.path());
+        let paths = vec![tmp.path().join(".loomis").join("skills")];
+        let reg = SkillRegistry::discover(&paths);
+        assert_eq!(reg.list().len(), 1);
+        let skill = reg.by_name("skill-generator").unwrap();
+        assert_eq!(skill.name, "skill-generator");
+        assert!(!skill.content.is_empty());
+        assert!(skill.content.contains("YAML frontmatter"));
+    }
 }
