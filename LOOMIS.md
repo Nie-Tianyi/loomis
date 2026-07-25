@@ -165,8 +165,7 @@ Shell output is capped at **100 KB**.
 `ObservabilityHook` captures lifecycle events with timing data and token
 counts via a side channel (`Arc<TraceStore>`) shared between agent task and
 TUI. `TraceStore` is a thread-safe ring buffer (4096 entries) with lock-free
-`RunMetrics` atomics. TUI drains at 20fps. Toggle debug overlay with `Ctrl+O`
-or `/debug`. Export traces with `/trace-save` → `.loomis/traces/`.
+`RunMetrics` atomics. All trace events are automatically written to `.loomis/logs/loomis.log` (daily rolling).
 
 ### Plan Mode (read-only research & planning)
 Toggled via `/plan`. `PlanModeHook` runs at position 1 — `before_tool_call`
@@ -197,8 +196,7 @@ agent_rx ←────── AgentEvent ─────── agent_tx
 ```
 
 **Slash commands**: `/exit`, `/new`, `/plan`, `/approve`, `/save <name>`,
-`/resume [name]`, `/threads`, `/stats`, `/tools`, `/debug`, `/trace-save`,
-`/help`
+`/resume [name]`, `/threads`, `/stats`, `/tools`, `/help`
 
 **Bang prefix**: `!command` — runs shell, output shared with agent.
 
