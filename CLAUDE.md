@@ -30,7 +30,7 @@ Set `DEEPSEEK_API` in `.env` before running.
 | `subagent` | Concrete | `SubagentTool<C>`, `SubagentConfig` |
 | `observability` | Abstraction | `TraceEvent`, `TraceStore`, `RunMetrics` |
 | `skills` | Abstraction | `SkillDef`, `SkillRegistry`, `ActiveSkills` |
-| `loomis` (bin) | Binary | 12 tools, 7 hooks, sandbox, TUI, `build_coding_agent()` |
+| `loomis` (bin) | Binary | 14 tools, 10 hooks, sandbox, TUI, user profiling, `build_coding_agent()` |
 
 ### Key traits
 
@@ -72,9 +72,18 @@ Config: `.loomis/config.toml` → `SandboxConfig` (safe defaults if missing).
 
 `/plan` toggles read-only mode. Allowed tools: read, ls, glob, grep, calculator, ask_user_question, todo, task/subagent, write (only to `.loomis/plan.md`). Blocked: edit, shell, write (other files). `/approve` exits plan mode.
 
+### User Profiling
+
+`ProfileHook` builds a user profile at `<workspace>/.loomis/profile.json` across two tiers:
+
+1. **Real-time rules** (zero token cost): CJK language detection (sticky once `zh-CN`), per-tool call/fail/success counters, session count — updated synchronously in hook callbacks.
+2. **LLM synthesis** (every 5 sessions): recent user/assistant messages are sent to the flash model, which extracts `preferences`, `avoidances`, `expertise_signals`, `coding_conventions`, and `verbosity`.
+
+A `[PROFILE]` System message is injected at index 0 by `on_llm_start()` using the remove-then-reinsert pattern (same as `SkillHook`). The JSON is human-readable — users can inspect or hand-edit it directly. Key types: `UserProfile`, `ProfileStore`, `ProfileHook`. Constants: `SYNTHESIS_INTERVAL = 5`, `SYNTHESIS_CONTEXT_SIZE = 10`.
+
 ### Hook registration order
 
-0. `SystemPromptHook` → 1. `PlanModeHook` → 2. `ObservabilityHook` → 3. `PersistenceHook` → 4. `TodoListHook` → 5. `SkillHook` → 6. `MacroCompactHook` → 7. `MicroCompactHook` → 8. `SandboxHook`
+0. `SystemPromptHook` → 1. `PlanModeHook` → 2. `ObservabilityHook` → 3. `PersistenceHook` → 4. `TodoListHook` → 5. `SkillHook` → 6. `ProfileHook` → 7. `MacroCompactHook` → 8. `MicroCompactHook` → 9. `SandboxHook`
 
 ### Skills
 
