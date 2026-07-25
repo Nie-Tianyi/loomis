@@ -98,7 +98,8 @@ impl ToolStats {
     /// Calls that were neither successful nor failed — blocked, rejected,
     /// or swallowed by another hook before execution.
     pub fn rejected(&self) -> u64 {
-        self.total_calls.saturating_sub(self.successes + self.failures)
+        self.total_calls
+            .saturating_sub(self.successes + self.failures)
     }
 }
 
@@ -281,16 +282,10 @@ pub fn build_profile_system_message(profile: &UserProfile) -> String {
         ));
     }
     if !profile.preferences.is_empty() {
-        lines.push(format!(
-            "- Preferences: {}",
-            profile.preferences.join("; ")
-        ));
+        lines.push(format!("- Preferences: {}", profile.preferences.join("; ")));
     }
     if !profile.avoidances.is_empty() {
-        lines.push(format!(
-            "- Avoidances: {}",
-            profile.avoidances.join("; ")
-        ));
+        lines.push(format!("- Avoidances: {}", profile.avoidances.join("; ")));
     }
     if !profile.expertise_signals.is_empty() {
         lines.push(format!(
@@ -335,11 +330,7 @@ pub fn truncate(s: &str, max: usize) -> String {
         .find(|&i| s.is_char_boundary(i))
         .unwrap_or(0);
     let truncated_bytes = s.len() - boundary;
-    format!(
-        "{}… [truncated {} bytes]",
-        &s[..boundary],
-        truncated_bytes
-    )
+    format!("{}… [truncated {} bytes]", &s[..boundary], truncated_bytes)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -546,7 +537,10 @@ mod tests {
         // Hiragana/Katakana are not in the CJK block, so this is
         // expected behaviour — Japanese detection would need
         // additional ranges.
-        assert!(!has_cjk("こんにちは"), "hiragana alone should not trigger CJK");
+        assert!(
+            !has_cjk("こんにちは"),
+            "hiragana alone should not trigger CJK"
+        );
     }
 
     // ── truncate ─────────────────────────────────────────────────

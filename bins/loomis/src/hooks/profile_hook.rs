@@ -39,7 +39,7 @@ use memory::SharedMemory;
 use provider::{CompletionRequest, LLMClient, Message, Role, ToolCall};
 
 use crate::profile::{
-    ProfileStore, Verbosity, build_profile_system_message, has_cjk, truncate, PROFILE_MARKER,
+    PROFILE_MARKER, ProfileStore, Verbosity, build_profile_system_message, has_cjk, truncate,
 };
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -99,10 +99,7 @@ impl AgentHook for ProfileHook {
     /// English-only messages won't flip it back.  The LLM synthesis
     /// may refine this later.
     fn on_run_start(&self, _session_id: &str, user_input: &str, _memory: &SharedMemory) {
-        let mut store = self
-            .store
-            .write()
-            .expect("profile store lock poisoned");
+        let mut store = self.store.write().expect("profile store lock poisoned");
 
         // Sticky: once we've detected Chinese, don't regress.
         if store.profile.language_preference != "zh-CN" && has_cjk(user_input) {
@@ -116,16 +113,14 @@ impl AgentHook for ProfileHook {
     /// reaches [`SYNTHESIS_INTERVAL`].
     fn on_run_finish(&self, _session_id: &str, _outcome: &RunOutcome, memory: &SharedMemory) {
         let needs_synthesis = {
-            let mut store = self
-                .store
-                .write()
-                .expect("profile store lock poisoned");
+            let mut store = self.store.write().expect("profile store lock poisoned");
 
             store.profile.total_sessions += 1;
             store.profile.updated_at = memory::iso8601_now();
             store.save();
 
-            store.profile.total_sessions - store.profile.last_synthesis_session >= SYNTHESIS_INTERVAL
+            store.profile.total_sessions - store.profile.last_synthesis_session
+                >= SYNTHESIS_INTERVAL
         };
 
         if needs_synthesis {
@@ -143,10 +138,7 @@ impl AgentHook for ProfileHook {
         _session_id: &str,
         tool_call: &ToolCall,
     ) -> Result<(), engine::AgentError> {
-        let mut store = self
-            .store
-            .write()
-            .expect("profile store lock poisoned");
+        let mut store = self.store.write().expect("profile store lock poisoned");
 
         let stats = store
             .profile
@@ -160,10 +152,7 @@ impl AgentHook for ProfileHook {
 
     /// Count successful tool executions.
     fn after_tool_call(&self, _session_id: &str, tool_call: &ToolCall, _observation: &str) {
-        let mut store = self
-            .store
-            .write()
-            .expect("profile store lock poisoned");
+        let mut store = self.store.write().expect("profile store lock poisoned");
 
         let stats = store
             .profile
@@ -175,10 +164,7 @@ impl AgentHook for ProfileHook {
 
     /// Count failed tool executions.
     fn on_tool_failed(&self, _session_id: &str, tool_call: &ToolCall, _error: &str) {
-        let mut store = self
-            .store
-            .write()
-            .expect("profile store lock poisoned");
+        let mut store = self.store.write().expect("profile store lock poisoned");
 
         let stats = store
             .profile
@@ -200,10 +186,7 @@ impl AgentHook for ProfileHook {
     /// be followed by tool result messages).
     fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
         let profile_msg = {
-            let store = self
-                .store
-                .read()
-                .expect("profile store lock poisoned");
+            let store = self.store.read().expect("profile store lock poisoned");
             build_profile_system_message(&store.profile)
         };
 
@@ -232,13 +215,9 @@ impl ProfileHook {
         // ── Gather input under locks (released before the LLM call) ──
         let (profile_json, context_text) = {
             let mem = memory.read().expect("memory lock poisoned");
-            let store = self
-                .store
-                .read()
-                .expect("profile store lock poisoned");
+            let store = self.store.read().expect("profile store lock poisoned");
 
-            let profile_json =
-                serde_json::to_string_pretty(&store.profile).unwrap_or_default();
+            let profile_json = serde_json::to_string_pretty(&store.profile).unwrap_or_default();
 
             let recent: Vec<String> = mem
                 .messages
@@ -264,8 +243,7 @@ impl ProfileHook {
             CompletionRequest::new(&self.flash_model, vec![Message::new(Role::User, prompt)]);
 
         // Block the agent loop, not the UI — same pattern as MacroCompactHook.
-        let result =
-            tokio::runtime::Handle::current().block_on(self.client.generate(request));
+        let result = tokio::runtime::Handle::current().block_on(self.client.generate(request));
 
         match result {
             Ok(resp) => {
@@ -277,10 +255,7 @@ impl ProfileHook {
                     .unwrap_or_default();
 
                 if let Some(update) = parse_synthesis_response(&text) {
-                    let mut store = self
-                        .store
-                        .write()
-                        .expect("profile store lock poisoned");
+                    let mut store = self.store.write().expect("profile store lock poisoned");
 
                     // Merge only non-empty fields — empty arrays mean
                     // "no new evidence" and should not overwrite.
@@ -502,7 +477,10 @@ mod tests {
             "expected [PROFILE] System message after on_llm_start"
         );
         let content = &profile_msg.unwrap().content;
-        assert!(content.contains("Sessions:"), "should contain session count");
+        assert!(
+            content.contains("Sessions:"),
+            "should contain session count"
+        );
         assert!(content.contains("Language:"), "should contain language");
     }
 
@@ -530,7 +508,10 @@ mod tests {
             .iter()
             .filter(|m| m.role == Role::System && m.content.starts_with(PROFILE_MARKER))
             .count();
-        assert_eq!(count, 1, "[PROFILE] message should be unique (not duplicated)");
+        assert_eq!(
+            count, 1,
+            "[PROFILE] message should be unique (not duplicated)"
+        );
     }
 
     #[test]
