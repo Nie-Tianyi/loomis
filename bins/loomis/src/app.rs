@@ -17,8 +17,8 @@ use tools::ToolRegistry;
 use tools::SandboxConfig;
 
 use crate::hooks::{
-    ObservabilityHook, PersistenceHook, PlanModeHook, PlanModeState, SandboxHook, SkillHook,
-    SystemPromptHook, TodoListHook,
+    ObservabilityHook, PersistenceHook, PlanModeHook, PlanModeState, ProfileHook, SandboxHook,
+    SkillHook, SystemPromptHook, TodoListHook,
 };
 use crate::sandbox::audit_logger::AuditLogger;
 use crate::sandbox::resource_tracker::ResourceTracker;
@@ -200,6 +200,7 @@ pub fn build_coding_agent(
     // ── LLM Clients ─────────────────────────────────────────────
     let client = DeepSeekClient::new(api_key);
     let subagent_client = client.clone(); // clone before client is moved into EngineContext
+    let profile_client = client.clone(); // clone for ProfileHook synthesis
     let compact_client = DeepSeekClient::new(api_key);
 
     // ── Subagent tool (read-only subset, no shell, no write, no task) ──
@@ -296,6 +297,15 @@ pub fn build_coding_agent(
         compact_client,
     );
 
+    // ProfileHook — collects user behaviour signals across sessions,
+    // periodically synthesises them via flash-model LLM, and injects
+    // a [PROFILE] System message so the agent personalises responses.
+    let profile_hook = ProfileHook::new(
+        workspace_root.to_path_buf(),
+        flash_model.to_string(),
+        profile_client,
+    );
+
     // SystemPromptHook — seeds the three initial system messages on first run
     // (now includes skill list in the main system prompt).
     let system_prompt_hook = SystemPromptHook::new(
@@ -328,9 +338,10 @@ pub fn build_coding_agent(
         Box::new(persistence_hook),   // 3. Save conversation after each run
         Box::new(todo_list_hook),     // 4. Maintain [TODO] System message
         Box::new(SkillHook::new(active_skills.clone())), // 5. Maintain [SKILL: ...] System messages
-        Box::new(macro_compact),      // 6. LLM summarisation
-        Box::new(micro_compact),      // 7. Tool output clearing
-        Box::new(approval_hook),      // 8. Security sandbox
+        Box::new(profile_hook),       // 6. Maintain [PROFILE] System message + synthesis
+        Box::new(macro_compact),      // 7. LLM summarisation
+        Box::new(micro_compact),      // 8. Tool output clearing
+        Box::new(approval_hook),      // 9. Security sandbox
     ];
 
     // ── Engine context (via builder) ─────────────────────────
