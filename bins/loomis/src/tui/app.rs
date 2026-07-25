@@ -19,7 +19,9 @@ use memory::{PendingHints, PersistenceConfig, SharedMemory};
 use observability::TraceStore;
 use skills::{self, SkillRegistry};
 
-use super::messages::{ChatMessage, ToolCallState};
+use ratatui::layout::Rect;
+
+use super::messages::{ChatMessage, SelectionState, ToolCallState};
 use crate::hooks::PlanModeState;
 use crate::tools::TodoItem;
 
@@ -93,6 +95,16 @@ pub struct App {
     // ── Exit signal ──
     pub should_quit: bool,
 
+    // ── Text selection ──
+    /// Current mouse-drag text selection, if any.
+    pub selection: Option<SelectionState>,
+    /// Cached chat area rect — set each frame in [`super::ui::draw`].
+    pub chat_area: Rect,
+    /// Total number of wrapped rendered lines — set each frame.
+    pub total_rendered_lines: usize,
+    /// Number of visible rows inside the chat border — set each frame.
+    pub visible_chat_height: usize,
+
     // ── Persistence ──
     pub persistence_config: PersistenceConfig,
 
@@ -155,6 +167,10 @@ impl App {
             intervene_saved_input: String::new(),
             intervene_saved_cursor: 0,
             should_quit: false,
+            selection: None,
+            chat_area: Rect::default(),
+            total_rendered_lines: 0,
+            visible_chat_height: 0,
             persistence_config,
             trace_store,
             plan_mode,
@@ -185,6 +201,7 @@ impl App {
             }
 
             AgentEvent::RunFailed { error } => {
+                self.selection = None;
                 self.messages.push(ChatMessage::Error {
                     content: error,
                     timestamp: ChatMessage::now_timestamp(),
@@ -192,6 +209,7 @@ impl App {
             }
 
             AgentEvent::Cancelled => {
+                self.selection = None;
                 self.messages.push(ChatMessage::System {
                     content: "[Cancelled]".into(),
                     timestamp: ChatMessage::now_timestamp(),
@@ -225,6 +243,7 @@ impl App {
 
             // ── Tool lifecycle ───────────────────────────────────────
             AgentEvent::ToolCallStart { id, name } => {
+                self.selection = None;
                 self.messages.push(ChatMessage::ToolCall {
                     id,
                     name,
@@ -321,6 +340,7 @@ impl App {
 
             // ── Intervention ─────────────────────────────────────────
             AgentEvent::InterventionRequired(req) => {
+                self.selection = None;
                 self.messages.push(ChatMessage::Intervene {
                     request_id: req.request_id,
                     title: req.title,
@@ -346,6 +366,183 @@ impl App {
         // manually scrolled up.
         if self.auto_scroll {
             self.scroll_offset = 0;
+        }
+    }
+}
+
+// ── Text Selection ────────────────────────────────────────────────────────────────
+
+impl App {
+    /// Extracts plain text for the currently selected line range.
+    ///
+    /// Walks `messages` + `line_counts` in parallel to find which messages
+    /// overlap with the selection, then joins their text content.
+    pub fn get_selection_text(&self) -> String {
+        let sel = match &self.selection {
+            Some(s) if !s.dragging => s,
+            _ => return String::new(),
+        };
+        let start = sel.start_line.min(sel.end_line);
+        let end = sel.start_line.max(sel.end_line);
+
+        let mut texts: Vec<String> = Vec::new();
+        let mut line_offset: usize = 0;
+
+        for (msg, &count) in self.messages.iter().zip(self.line_counts.iter()) {
+            let msg_end = line_offset + count;
+            if msg_end > start && line_offset <= end {
+                let text = match msg {
+                    ChatMessage::User { content, .. } => content.clone(),
+                    ChatMessage::Assistant { content, .. } => content.clone(),
+                    ChatMessage::Reasoning { content, .. } => content.clone(),
+                    ChatMessage::ToolCall {
+                        name,
+                        args,
+                        state,
+                        origin,
+                        ..
+                    } => {
+                        let is_user = matches!(origin, CallOrigin::User);
+                        match state {
+                            ToolCallState::Running => {
+                                if is_user {
+                                    format!("$ {args}")
+                                } else {
+                                    format!("{name} {args}")
+                                }
+                            }
+                            ToolCallState::Complete(output) => {
+                                if is_user {
+                                    format!("$ {args}\n{output}")
+                                } else {
+                                    format!("{name} {args}\n{output}")
+                                }
+                            }
+                            ToolCallState::Rejected(reason) => {
+                                format!("{name} {args}\nRejected: {reason}")
+                            }
+                            ToolCallState::Error(error) => {
+                                format!("{name} {args}\nError: {error}")
+                            }
+                        }
+                    }
+                    ChatMessage::System { content, .. } => content.clone(),
+                    ChatMessage::Intervene {
+                        title,
+                        description,
+                        options,
+                        responded,
+                        chosen,
+                        custom_text,
+                        ..
+                    } => {
+                        if *responded {
+                            if let Some(idx) = chosen {
+                                let label =
+                                    options.get(*idx).map(|s| s.as_str()).unwrap_or("?");
+                                if let Some(text) = custom_text {
+                                    format!("{title}: {label}: {text}")
+                                } else {
+                                    format!("{title}: {label}")
+                                }
+                            } else {
+                                format!("{title}: Cancelled")
+                            }
+                        } else {
+                            format!("{title}\n{description}\n[{}]", options.join(" / "))
+                        }
+                    }
+                    ChatMessage::Error { content, .. } => content.clone(),
+                };
+                if !text.is_empty() {
+                    texts.push(text);
+                }
+            }
+            line_offset = msg_end;
+        }
+
+        texts.join("\n")
+    }
+
+    /// Clears the current selection.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// Checks whether terminal coordinates (col, row) fall inside the chat
+    /// inner area (i.e. inside the border of the chat block).
+    fn is_in_chat_area(&self, col: u16, row: u16) -> bool {
+        let block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL);
+        let inner = block.inner(self.chat_area);
+        col >= inner.x && col < inner.x + inner.width
+            && row >= inner.y && row < inner.y + inner.height
+    }
+
+    /// Converts terminal screen coordinates to a line index in the wrapped
+    /// `all_lines` vec (used for mouse-to-text mapping).
+    fn screen_to_line(&self, _col: u16, row: u16) -> usize {
+        let block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL);
+        let inner = block.inner(self.chat_area);
+        let visible_row = (row.saturating_sub(inner.y)) as usize;
+        let max_scroll = self
+            .total_rendered_lines
+            .saturating_sub(self.visible_chat_height);
+        let scroll = max_scroll.saturating_sub(self.scroll_offset).min(max_scroll);
+        scroll + visible_row
+    }
+
+    /// Handles a crossterm mouse event for text selection (Left click/drag/up)
+    /// and scroll wheel. Called from the event loop.
+    pub fn handle_mouse_event(&mut self, event: &crossterm::event::MouseEvent) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        let col = event.column;
+        let row = event.row;
+
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.is_in_chat_area(col, row) {
+                    let line = self.screen_to_line(col, row);
+                    self.selection = Some(SelectionState {
+                        start_line: line,
+                        end_line: line,
+                        dragging: true,
+                    });
+                } else {
+                    // Click outside chat area clears selection.
+                    self.selection = None;
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let line = self.screen_to_line(col, row);
+                if let Some(ref mut sel) = self.selection
+                    && sel.dragging
+                {
+                    sel.end_line = line;
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if let Some(ref mut sel) = self.selection {
+                    sel.dragging = false;
+                    // Normalize: ensure start ≤ end.
+                    if sel.start_line > sel.end_line {
+                        std::mem::swap(&mut sel.start_line, &mut sel.end_line);
+                    }
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                self.scroll_offset = self.scroll_offset.saturating_add(4);
+                self.auto_scroll = false;
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(4);
+                if self.scroll_offset == 0 {
+                    self.auto_scroll = true;
+                }
+            }
+            _ => {}
         }
     }
 }

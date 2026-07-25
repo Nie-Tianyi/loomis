@@ -84,6 +84,25 @@ pub enum ToolCallState {
     Error(String),
 }
 
+// ── SelectionState ───────────────────────────────────────────────────────────────
+
+/// Tracks mouse-based text selection in the chat area.
+///
+/// Start and end are line indices into the wrapped `all_lines` vec
+/// produced by [`super::ui::wrap_to_width`]. When `dragging` is `true`,
+/// the user is still holding the mouse button and the selection updates
+/// live. When `false`, the selection is stable — Ctrl+C will copy it.
+#[derive(Debug, Clone)]
+pub struct SelectionState {
+    /// Start line index in the wrapped `all_lines` vec (inclusive).
+    pub start_line: usize,
+    /// End line index (inclusive). May be less than `start_line` while
+    /// dragging upward; normalized to `start_line ≤ end_line` on mouse up.
+    pub end_line: usize,
+    /// `true` while the user is still holding the left mouse button.
+    pub dragging: bool,
+}
+
 // ── TuiCommand ───────────────────────────────────────────────────────────────────
 
 /// Commands sent from the TUI thread to the agent background task.

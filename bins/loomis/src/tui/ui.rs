@@ -38,6 +38,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .split(area);
 
+    // Cache chat area for mouse coordinate mapping.
+    app.chat_area = layout[0];
+
     draw_chat(frame, layout[0], app);
     draw_input(frame, layout[1], app);
     draw_status(frame, layout[2], app);
@@ -67,7 +70,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// The entire `area` is cleared before rendering so that scrollbar
 /// appear/disappear transitions never leave residual characters at the
 /// right edge.
-fn draw_chat(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_chat(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Chat ")
@@ -89,6 +92,9 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &App) {
     let all_lines = wrap_to_width(raw_lines, text_width);
     let total_lines = all_lines.len();
     let has_scrollbar = total_lines > visible_height;
+    // Cache for mouse-to-line coordinate mapping.
+    app.total_rendered_lines = total_lines;
+    app.visible_chat_height = visible_height;
 
     // When scrollbar is visible, shrink the paragraph's rendering area by
     // 1 column so text and scrollbar don't overlap.
@@ -158,6 +164,27 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &App) {
                         .fg(Color::Rgb(60, 60, 60))
                         .add_modifier(Modifier::DIM),
                 );
+            }
+        }
+    }
+
+    // ── Selection highlight overlay ────────────────────────────
+    if let Some(ref sel) = app.selection {
+        let start = sel.start_line.min(sel.end_line);
+        let end = sel.start_line.max(sel.end_line);
+        let highlight_bg = Color::Rgb(50, 60, 90); // blue-gray selection bg
+
+        for visible_row in 0..visible_height {
+            let actual_line = scroll as usize + visible_row;
+            if actual_line >= start && actual_line <= end {
+                let y = inner.y + visible_row as u16;
+                for x in inner.x..inner.x + inner.width {
+                if let Some(cell) = frame.buffer_mut().cell_mut((x, y))
+                    && cell.symbol() != " "
+                {
+                    cell.bg = highlight_bg;
+                }
+                }
             }
         }
     }

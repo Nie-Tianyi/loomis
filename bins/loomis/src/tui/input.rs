@@ -129,6 +129,27 @@ impl App {
 
             // ── Exit / Cancel ──────────────────────────────────
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // If a finalized selection is active, copy it to the
+                // system clipboard and clear the highlight.
+                if let Some(ref sel) = self.selection
+                    && !sel.dragging
+                {
+                    let text = self.get_selection_text();
+                    match arboard::Clipboard::new() {
+                        Ok(mut clipboard) => {
+                            let _ = clipboard.set_text(text);
+                        }
+                        Err(e) => {
+                            self.messages.push(ChatMessage::System {
+                                content: format!("Clipboard error: {e}"),
+                                timestamp: ChatMessage::now_timestamp(),
+                            });
+                        }
+                    }
+                    self.selection = None;
+                    return None;
+                }
+                // Normal behavior: cancel streaming or exit.
                 if self.streaming {
                     self.streaming = false;
                     return Some(TuiCommand::CancelGeneration);
@@ -148,6 +169,11 @@ impl App {
             }
 
             KeyCode::Esc => {
+                // If there's a selection, clear it first.
+                if self.selection.is_some() {
+                    self.selection = None;
+                    return None;
+                }
                 if self.streaming {
                     self.streaming = false;
                     return Some(TuiCommand::CancelGeneration);

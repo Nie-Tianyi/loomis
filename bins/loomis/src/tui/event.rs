@@ -17,7 +17,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crossterm::event::{Event, KeyEventKind, MouseEventKind};
+use crossterm::event::{Event, KeyEventKind};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
@@ -167,18 +167,8 @@ fn run_event_loop(
                     app.scroll_offset = 0;
                     app.auto_scroll = true;
                 }
-                Event::Mouse(mouse_event) => match mouse_event.kind {
-                    MouseEventKind::ScrollUp => {
-                        app.scroll_offset = app.scroll_offset.saturating_add(4);
-                        app.auto_scroll = false;
-                    }
-                    MouseEventKind::ScrollDown => {
-                        app.scroll_offset = app.scroll_offset.saturating_sub(4);
-                        if app.scroll_offset == 0 {
-                            app.auto_scroll = true;
-                        }
-                    }
-                    _ => {}
+                Event::Mouse(mouse_event) => {
+                    app.handle_mouse_event(&mouse_event);
                 },
                 _ => {}
             }
