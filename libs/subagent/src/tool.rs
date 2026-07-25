@@ -353,24 +353,16 @@ fn forward_event_to_progress(event: engine::AgentEvent, tx: &mpsc::UnboundedSend
     use engine::AgentEvent;
 
     match event {
-        AgentEvent::Token(text) => {
-            // Only forward non-empty tokens.
-            if !text.is_empty() {
-                let _ = tx.send(Progress::InProgress(text));
-            }
-        }
-        AgentEvent::ReasoningToken(text) => {
-            if !text.is_empty() {
-                let _ = tx.send(Progress::InProgress(text));
-            }
-        }
+        // Token streaming is intentionally NOT forwarded — sub-agent
+        // output would flood the parent conversation.  The final answer
+        // is delivered via Progress::Done in run_subagent().
+        AgentEvent::Token(_) | AgentEvent::ReasoningToken(_) => {}
         AgentEvent::ToolCallStart { name, .. } => {
             let _ = tx.send(Progress::InProgress(format!("🔧 {name}")));
         }
         AgentEvent::ToolCall {
             name, arguments, ..
         } => {
-            // Truncate long arguments for readability.
             let args_summary = if arguments.len() > TRUNCATE_ARGS_CHARS {
                 let boundary = arguments.floor_char_boundary(TRUNCATE_ARGS_CHARS);
                 format!("{}…", &arguments[..boundary])
@@ -395,12 +387,8 @@ fn forward_event_to_progress(event: engine::AgentEvent, tx: &mpsc::UnboundedSend
             )));
         }
         // Terminal events — the caller produces the final Done from these.
-        AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. } | AgentEvent::Cancelled => {
-            // The caller handles these to produce final Progress::Done.
-        }
-        AgentEvent::Done | AgentEvent::RunStarted { .. } | AgentEvent::InterventionRequired(_) => {
-            // Ignored — not forwarded to parent.
-        }
+        AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. } | AgentEvent::Cancelled => {}
+        AgentEvent::Done | AgentEvent::RunStarted { .. } | AgentEvent::InterventionRequired(_) => {}
     }
 }
 

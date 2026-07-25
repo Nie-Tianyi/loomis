@@ -43,6 +43,7 @@ agent_oxide/
 │   ├── tools/              # Tool trait, ToolRegistry, WorkspaceFs, ProgressStream
 │   ├── tools-macros/       # #[tool] proc macro
 │   ├── memory/             # Memory buffer, PendingHints, conversation persistence
+│   ├── skills/             # SkillDef, SkillRegistry, ActiveSkills — skill discovery & loading
 │   ├── hooks/              # MicroCompactHook + MacroCompactHook
 │   ├── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent, ResponseRouter
 │   ├── subagent/           # SubagentTool — spawn child agents as tools
@@ -61,18 +62,19 @@ agent_oxide/
 provider (no internal deps)
     ↑
     ├── deepseek ──────── (impl LLMClient)
-    ├── tools ─────────── (uses ToolDef)
-    ├── memory ────────── (uses Message)
+    ├── tools ─────────── (uses provider + tools-macros)
+    ├── memory ────────── (uses provider)
+    ├── skills ────────── (no workspace deps)
     ↑
     ├── engine ────────── (uses provider + tools + memory)
     │       ↑
     ├── hooks ─────────── (uses provider + memory + engine)
     │       ↑
+    ├── observability ─── (uses provider + engine + memory)
+    │       ↑
     ├── subagent ──────── (uses provider + tools + engine + memory + observability)
     │       ↑
-    ├── observability ─── (uses provider)
-    │       ↑
-    └── loomis (bin) ──── (uses all libs)
+    └── loomis (bin) ──── (uses all libs including skills)
 ```
 
 ## Key patterns
@@ -86,6 +88,12 @@ Sync and object-safe. `execute_stream()` returns `ProgressStream` — short
 tools emit a single `Progress::Done`, long-running tools (shell) emit
 `Progress::InProgress` updates then `Progress::Done`. Use
 `tokio::sync::mpsc` from a spawned thread for async I/O.
+
+### `#[tool]` proc macro
+Annotate a struct with `#[tool(name = "...", description = "...", args = ArgsType)]`.
+Generates `Tool` trait impl — the struct must define an inherent
+`execute_stream(&self, args: ArgsType) -> Result<ProgressStream, ToolError>`.
+JSON Schema is lazily generated from `ArgsType` via `schemars`.
 
 ### `AgentHook` trait — 9 lifecycle callbacks
 All have default no-ops. Naming convention:
@@ -142,18 +150,19 @@ user `!command` invocations.
 
 ### Two-tier compaction (hooks crate)
 1. **MicroCompact** — `on_llm_start()` clears old tool outputs from
-   high-volume tools (read, shell, grep, glob, edit, write, ls) in-place.
-2. **MacroCompact** — `on_llm_start()` checks `total_chars()`; when over
-   threshold, drains old non-System messages (keeping last N), calls a
-   compact model for summarisation via `block_on`, inserts summary as
-   System message.
+   high-volume tools (`read`, `shell`, `grep`, `glob`, `edit`, `write`, `ls`)
+   in-place, keeping the most recent N intact (default 10).
+2. **MacroCompact** — `on_llm_start()` checks `prompt_tokens` from the last
+   `Usage` against a token threshold (default 1,000,000 tokens); when over,
+   drains old non-System messages (keeping last N), calls a compact model
+   for summarisation via `block_on`, inserts summary as System message.
 
 ### Sandbox (defense in depth)
 
 | Layer | Component | Role |
 | --- | --- | --- |
 | 1 | `WorkspaceFs` | Path sandbox — canonicalization, file-size caps, extension blocklist, hidden-file protection, binary detection, TOCTOU re-check |
-| 2 | `ShellFilter` | Command classification — auto-approve (prefixes: `git`, `cargo`), deny (patterns: `rm -rf /`, `sudo`), prompt user for rest |
+| 2 | `ShellFilter` | Command classification — auto-approve (prefixes: `git`, `cargo`, `npm`, `node`, `python`, etc.), deny (patterns: `rm -rf /`, `sudo`), prompt user for rest |
 | 3 | `SandboxHook` | Orchestrator — checks quotas, classifies commands, prompts user via `InterventionRequired`, logs to `AuditLogger`. Uses `ResponseRouter` + rendezvous channel for blocking approval |
 | 4 | `EnvSanitizer` | Clears dangerous env vars before spawning child processes |
 | 5 | Watchdog | Kills process tree on timeout (`taskkill /F /T` on Windows) |
@@ -165,24 +174,58 @@ Shell output is capped at **100 KB**.
 `ObservabilityHook` captures lifecycle events with timing data and token
 counts via a side channel (`Arc<TraceStore>`) shared between agent task and
 TUI. `TraceStore` is a thread-safe ring buffer (4096 entries) with lock-free
-`RunMetrics` atomics. All trace events are automatically written to `.loomis/logs/loomis.log` (daily rolling).
+`RunMetrics` atomics. All trace events are automatically written to
+`.loomis/logs/loomis.log` (daily rolling).
 
 ### Plan Mode (read-only research & planning)
 Toggled via `/plan`. `PlanModeHook` runs at position 1 — `before_tool_call`
 blocks write/edit/shell (except `.loomis/plan.md`). Allowed tools: `read`,
 `ls`, `glob`, `grep`, `calculator`, `ask_user_question`, `todo`, `task`/
-`subagent`, `write` (only to `.loomis/plan.md`). `/approve` exits plan mode.
+`subagent`, `enter_plan_mode`, `exit_plan_mode`, `write` (only to
+`.loomis/plan.md`). `/approve` exits plan mode.
 
-### Concrete tools (13)
+### Skills system
+Skills provide reusable domain knowledge and specialized instructions as
+System messages. Three components work together:
+
+| Component | Crate | Role |
+| --- | --- | --- |
+| `SkillRegistry` | `libs/skills` | Discover + parse `.md` skill files (YAML frontmatter + body) from skill directories |
+| `SkillTool` | `bins/loomis` | Tool (`name = "skill"`) — loaded as System message, gives the agent the skill's instructions |
+| `SkillHook` | `bins/loomis` | Maintains `[SKILL: name]` System messages in memory, synced with `ActiveSkills` |
+
+Skill files live in `bins/loomis/skills/` (discovered at startup, listed in
+the system prompt via `{skill_list}`). The `/skill <name>` slash command loads
+a skill manually. `ActiveSkills` (`Arc<RwLock<HashMap<String, String>>`) is
+shared between the TUI, SkillTool, and SkillHook.
+
+### Profile system
+`ProfileHook` builds a user profile across sessions and injects a `[PROFILE]`
+System message at index 0 into every LLM call. Two-tier design:
+
+1. **Real-time** (zero-token): language detection from user input (CJK heuristic),
+   per-tool invocation counters, session count + timestamp.
+2. **LLM synthesis** (every 5 sessions): uses a cheap flash model to analyze
+   recent conversation context and extract preferences, avoidances, expertise
+   signals, coding conventions, verbosity, and language preference.
+
+Profile is persisted to `.loomis/profile.json` in the workspace. Merging is
+conservative — only non-empty synthesis fields overwrite existing values.
+
+### Concrete tools (14)
 `Calculator`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Ls`, `Shell`,
-`Subagent`, `AskUserQuestion`, `Todo`, `EnterPlanMode`, `ExitPlanMode`
+`Subagent`/`task`, `AskUserQuestion`, `Todo`, `EnterPlanMode`, `ExitPlanMode`,
+`Skill`
 
-Note: `EchoTool` exists in source but is not registered in `build_coding_agent()`.
-
-### Concrete hooks (6 loomis + 2 from hooks crate)
-`SystemPromptHook` (seed prompts), `PlanModeHook` (tool restriction),
-`ObservabilityHook` (trace collection), `PersistenceHook` (auto-save),
-`TodoListHook` (sync todo state), `SandboxHook` (security) +
+### Concrete hooks (8 loomis + 2 from hooks crate)
+`SystemPromptHook` (seed prompts with tool list + skill list + env context + project rules),
+`PlanModeHook` (tool restriction),
+`ObservabilityHook` (trace collection),
+`PersistenceHook` (auto-save),
+`TodoListHook` (sync todo state),
+`SkillHook` (sync active skills to `[SKILL: ...]` System messages),
+`ProfileHook` (build + inject `[PROFILE]` System message),
+`SandboxHook` (security) +
 `MicroCompactHook` + `MacroCompactHook<C>` from the hooks crate.
 
 ### TUI module (`bins/loomis/src/tui/`)
@@ -196,7 +239,8 @@ agent_rx ←────── AgentEvent ─────── agent_tx
 ```
 
 **Slash commands**: `/exit`, `/new`, `/plan`, `/approve`, `/save <name>`,
-`/resume [name]`, `/threads`, `/stats`, `/tools`, `/help`
+`/resume [name]`, `/threads`, `/stats`, `/tools`, `/help`, `/skill <name>`,
+`/init`
 
 **Bang prefix**: `!command` — runs shell, output shared with agent.
 
