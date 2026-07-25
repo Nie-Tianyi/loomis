@@ -13,6 +13,7 @@ mod registry;
 pub mod sandbox;
 mod schema;
 mod tool;
+pub mod watchdog;
 
 pub use error::{FsError, ToolError};
 pub use fs::{DirEntry, EntryType, GrepMatch, WorkspaceFs};

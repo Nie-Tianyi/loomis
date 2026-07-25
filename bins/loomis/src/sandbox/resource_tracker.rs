@@ -92,3 +92,116 @@ impl Default for SessionStats {
         }
     }
 }
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_tracker() -> ResourceTracker {
+        ResourceTracker::new(&SandboxConfig::default())
+    }
+
+    fn make_tracker_with_limits(max_total: usize, max_shells: usize) -> ResourceTracker {
+        let mut config = SandboxConfig::default();
+        config.quotas.max_total_operations = max_total;
+        config.quotas.max_concurrent_shells = max_shells;
+        ResourceTracker::new(&config)
+    }
+
+    #[test]
+    fn test_check_passes_within_limits() {
+        let tracker = make_tracker();
+        assert!(tracker.check("s1", "read").is_ok());
+        assert!(tracker.check("s1", "grep").is_ok());
+    }
+
+    #[test]
+    fn test_check_fails_total_operations() {
+        let tracker = make_tracker_with_limits(1, 10);
+        // check() passes — no operations recorded yet.
+        assert!(tracker.check("s1", "read").is_ok());
+        // record() increments the counter.
+        tracker.record("s1", "read");
+        // Now the next check should fail because total >= max (1).
+        let err = tracker.check("s1", "write").unwrap_err();
+        assert!(err.contains("quota exceeded"), "got: {err}");
+    }
+
+    #[test]
+    fn test_check_fails_concurrent_shells() {
+        let tracker = make_tracker_with_limits(100, 1);
+        assert!(tracker.check("s1", "shell").is_ok());
+        let err = tracker.check("s1", "shell").unwrap_err();
+        assert!(err.contains("too many concurrent shells"), "got: {err}");
+    }
+
+    #[test]
+    fn test_record_decrements_active_shells() {
+        let tracker = make_tracker_with_limits(100, 1);
+        tracker.check("s1", "shell").unwrap();
+        // Record the shell as done; concurrent counter should drop.
+        tracker.record("s1", "shell");
+        // Now another shell should be allowed.
+        assert!(tracker.check("s1", "shell").is_ok());
+    }
+
+    #[test]
+    fn test_cancel_decrements_active_shells() {
+        let tracker = make_tracker_with_limits(100, 1);
+        tracker.check("s1", "shell").unwrap();
+        // Cancel (no execution) — concurrent counter should drop.
+        tracker.cancel("s1", "shell");
+        // Now another shell should be allowed.
+        assert!(tracker.check("s1", "shell").is_ok());
+    }
+
+    #[test]
+    fn test_cancel_non_shell_noop() {
+        let tracker = make_tracker();
+        // Cancelling a non-shell tool should not panic.
+        tracker.check("s1", "read").unwrap();
+        tracker.cancel("s1", "read");
+    }
+
+    #[test]
+    fn test_multiple_sessions_independent() {
+        let tracker = make_tracker_with_limits(100, 1);
+        // Session 1 takes the shell slot.
+        assert!(tracker.check("s1", "shell").is_ok());
+        // Session 2 is independent — should also be allowed.
+        assert!(tracker.check("s2", "shell").is_ok());
+        // Session 1 should be blocked on second shell.
+        assert!(tracker.check("s1", "shell").is_err());
+    }
+
+    #[test]
+    fn test_record_creates_session_if_missing() {
+        let tracker = make_tracker();
+        // Recording on a never-seen session should not panic.
+        tracker.record("new_session", "read");
+    }
+
+    #[test]
+    fn test_record_increments_total_operations() {
+        let tracker = make_tracker_with_limits(2, 10);
+        assert!(tracker.check("s1", "read").is_ok());
+        tracker.record("s1", "read");
+        assert!(tracker.check("s1", "grep").is_ok());
+        tracker.record("s1", "grep");
+        // Third operation should fail (limit is 2).
+        let err = tracker.check("s1", "ls").unwrap_err();
+        assert!(err.contains("quota exceeded"), "got: {err}");
+    }
+
+    #[test]
+    fn test_total_operations_only_after_record() {
+        // check() alone doesn't increment the total counter.
+        // A new session starts at 0, so max=0 means the first check
+        // sees total_operations (0) >= max_operations (0) — rejected.
+        let tracker = make_tracker_with_limits(0, 10);
+        let err = tracker.check("s1", "read").unwrap_err();
+        assert!(err.contains("quota exceeded"), "got: {err}");
+    }
+}

@@ -106,24 +106,17 @@ impl<C: LLMClient + Clone + 'static> SubagentTool<C> {
         let subagent_tools = Arc::clone(&self.subagent_tools);
         let parent_memory = Arc::clone(&self.parent_memory);
         let trace_store = self.trace_store.clone();
-        let description = args.description;
-        let prompt = args.prompt;
+        let run = SubagentRun {
+            description: args.description,
+            prompt: args.prompt,
+            progress_tx,
+        };
 
         // Spawn the sub-agent on the current tokio runtime.
         // `execute_stream` is called from within the async agent loop,
         // so `tokio::spawn` always has an active runtime context.
         tokio::spawn(async move {
-            run_subagent(
-                llm,
-                config,
-                subagent_tools,
-                parent_memory,
-                trace_store,
-                description,
-                prompt,
-                progress_tx,
-            )
-            .await;
+            run_subagent(llm, config, subagent_tools, parent_memory, trace_store, run).await;
         });
 
         // Return a ProgressStream backed by the channel receiver.
@@ -136,16 +129,28 @@ impl<C: LLMClient + Clone + 'static> SubagentTool<C> {
 
 // ── Async runner ─────────────────────────────────────────────────────────────
 
+/// Bundled task inputs for a subagent run — groups the task description,
+/// prompt, and progress channel so [`run_subagent`] stays under the
+/// argument-count threshold.
+struct SubagentRun {
+    description: String,
+    prompt: String,
+    progress_tx: mpsc::UnboundedSender<Progress>,
+}
+
 async fn run_subagent<C: LLMClient + 'static>(
     llm: C,
     config: SubagentConfig,
     subagent_tools: Arc<ToolRegistry>,
     parent_memory: SharedMemory,
     trace_store: Option<Arc<TraceStore>>,
-    description: String,
-    prompt: String,
-    progress_tx: mpsc::UnboundedSender<Progress>,
+    run: SubagentRun,
 ) {
+    let SubagentRun {
+        description,
+        prompt,
+        progress_tx,
+    } = run;
     let start = Instant::now();
 
     // 1. Build fresh, isolated memory (user prompt is pushed automatically
@@ -404,7 +409,8 @@ fn summarize_output(output: &str) -> String {
     let first_line = output.lines().next().unwrap_or("");
     let trimmed = first_line.trim();
     if trimmed.len() > OUTPUT_SUMMARY_CHARS {
-        format!("{}…", &trimmed[..OUTPUT_SUMMARY_CHARS])
+        let boundary = trimmed.floor_char_boundary(OUTPUT_SUMMARY_CHARS);
+        format!("{}…", &trimmed[..boundary])
     } else if trimmed.is_empty() {
         "(empty output)".into()
     } else {
@@ -423,6 +429,17 @@ mod tests {
         let long = "a".repeat(200);
         let s = summarize_output(&long);
         assert!(s.ends_with('…'));
+        assert!(s.len() <= OUTPUT_SUMMARY_CHARS + "…".len());
+    }
+
+    #[test]
+    fn summarize_truncates_cjk_boundary() {
+        // Chinese characters are 3 bytes each in UTF-8.
+        // 160 bytes could land mid-character; must not panic.
+        let cjk = "将".repeat(100); // 300 bytes, well over 160
+        let s = summarize_output(&cjk);
+        assert!(s.ends_with('…'));
+        // Should be on a valid char boundary — no panic is the real test.
         assert!(s.len() <= OUTPUT_SUMMARY_CHARS + "…".len());
     }
 

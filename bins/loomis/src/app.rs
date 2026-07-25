@@ -82,7 +82,7 @@ fn seed_default_skills(workspace_root: &Path) {
         let has_md = std::fs::read_dir(&skills_dir)
             .map(|rd| {
                 rd.flatten()
-                    .any(|e| e.path().extension().map_or(false, |ext| ext == "md"))
+                    .any(|e| e.path().extension().is_some_and(|ext| ext == "md"))
             })
             .unwrap_or(false);
         if has_md {
@@ -121,7 +121,21 @@ fn seed_default_skills(workspace_root: &Path) {
     }
 }
 
-/// Build a fully-wired coding agent with all channels and hooks.
+/// Build a fully-wired coding agent with all channels, tools, and hooks.
+///
+/// # Assembly order
+///
+/// ```text
+/// 1. Channels           — agent_tx/agent_rx, response_router
+/// 2. Sandbox components — workspace, shell filter, resource tracker, audit
+/// 3. Skills             — discover from .loomis/skills/ and ~/.loomis/skills/
+/// 4. Tools              — file ops → subagent → meta → skill (see build_tool_registry)
+/// 5. LLM clients        — DeepSeek, subagent, profile, compaction
+/// 6. Hooks              — 10 hooks in registration order (see build_hooks)
+/// 7. Engine context     — wire everything into Agent + EngineContext
+/// ```
+///
+/// The returned [`AgentKit`] carries all shared state the TUI needs.
 pub fn build_coding_agent(
     api_key: &str,
     workspace_root: &Path,

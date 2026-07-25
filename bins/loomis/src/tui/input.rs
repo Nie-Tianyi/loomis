@@ -170,6 +170,15 @@ impl App {
             }
 
             // ── Multi-line / History navigation ────────────────
+            //
+            // Multi-line cursor Up algorithm:
+            // 1. Find the start of the current line (rfind '\n' or 0).
+            // 2. Find the start of the previous line.
+            // 3. Compute the cursor's column offset within the current line.
+            // 4. Clamp that offset to the length of the previous line.
+            // 5. Set cursor to prev_line_start + clamped_offset.
+            // If the cursor is already on the first line, fall through
+            // to input history navigation.
             KeyCode::Up => {
                 // If not navigating history and cursor is below first line,
                 // move cursor up within multi-line input.
@@ -221,6 +230,13 @@ impl App {
                 }
                 None
             }
+            // Multi-line cursor Down: mirror of the Up algorithm.
+            // 1. Find the end of the current line.
+            // 2. Find the end of the next line.
+            // 3. Compute column offset within the current line.
+            // 4. Clamp to the next line's length.
+            // 5. Set cursor to next_line_start + clamped_offset.
+            // Falls through to history navigation when already on the last line.
             KeyCode::Down => {
                 // If not navigating history, try to move cursor down in multi-line input.
                 if self.history_index.is_none() {

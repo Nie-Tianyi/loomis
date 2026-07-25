@@ -32,6 +32,7 @@ mod agent;
 mod builder;
 mod context;
 mod hooks;
+pub mod intervention;
 mod response_router;
 
 pub use agent::{

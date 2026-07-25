@@ -20,9 +20,7 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use engine::{
-    AgentError, AgentEvent, AgentHook, InterventionRequest, InterventionResponse, RunOutcome,
-};
+use engine::{AgentError, AgentEvent, AgentHook, RunOutcome};
 use memory::SharedMemory;
 use provider::ToolCall;
 use tokio::sync::mpsc;
@@ -30,7 +28,8 @@ use tokio::sync::mpsc;
 use crate::sandbox::audit_logger::{AuditEntry, AuditLogger};
 use crate::sandbox::resource_tracker::ResourceTracker;
 use crate::sandbox::shell_filter::{CommandVerdict, ShellFilter};
-use engine::{ResponseRouter, next_request_id};
+use engine::ResponseRouter;
+use engine::intervention::{self, InterventionError};
 
 pub struct SandboxHook {
     /// Sends agent events to the TUI (intervention requests, etc.).
@@ -76,66 +75,56 @@ impl SandboxHook {
         _tool_call: &ToolCall,
         command: &str,
     ) -> Result<(), AgentError> {
-        let request_id = next_request_id();
+        let agent_tx = self
+            .agent_tx
+            .get()
+            .ok_or_else(|| AgentError::ToolRejected {
+                name: "shell".into(),
+                reason: "Agent event channel not configured".into(),
+            })?;
 
-        // Create per-request rendezvous channel and register with the
-        // response router so the TUI can deliver the answer.
-        let (tx, rx) = std::sync::mpsc::sync_channel::<InterventionResponse>(0);
-        self.response_router.register(request_id.clone(), tx);
+        // Delegate the common request/response plumbing to the shared helper.
+        let response = intervention::request_intervention(
+            &self.response_router,
+            agent_tx,
+            "Approve shell command?".into(),
+            command.to_string(),
+            vec!["Approve".into(), "Deny".into(), "Other…".into()],
+            Duration::from_secs(120),
+        );
 
-        // Notify the TUI to render an interactive intervention prompt.
-        if let Some(agent_tx) = self.agent_tx.get() {
-            let _ = agent_tx.send(AgentEvent::InterventionRequired(InterventionRequest {
-                request_id: request_id.clone(),
-                title: "Approve shell command?".into(),
-                description: command.to_string(),
-                options: vec!["Approve".into(), "Deny".into(), "Other…".into()],
-            }));
-        }
-
-        // Block until the TUI responds (with timeout to prevent deadlock).
-        let response = match rx.recv_timeout(Duration::from_secs(120)) {
-            Ok(resp) => resp,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // Timeout — treat as deny.
-                self.response_router.unregister(&request_id);
-                InterventionResponse {
-                    chosen: Some(1), // "Deny"
-                    custom_text: None,
+        match response {
+            Ok(resp) => match resp.chosen {
+                Some(0) => Ok(()), // "Approve"
+                Some(2) => {
+                    // "Other…" — user provided custom input; approve.
+                    let _ = resp.custom_text;
+                    Ok(())
                 }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                // Channel closed — treat as deny.
-                InterventionResponse {
-                    chosen: Some(1), // "Deny"
-                    custom_text: None,
+                _ => {
+                    // Deny, cancel, or unknown.
+                    Err(AgentError::ToolRejected {
+                        name: "shell".into(),
+                        reason: "User denied shell command execution".into(),
+                    })
                 }
-            }
-        };
-
-        // Cleanup (no-op if the TUI's route() already removed the entry).
-        self.response_router.unregister(&request_id);
-
-        match response.chosen {
-            Some(0) => Ok(()), // "Approve"
-            Some(2) => {
-                // "Other…" — user provided custom input; approve with
-                // the custom text (which can be logged / used later).
-                let _ = response.custom_text;
-                Ok(())
-            }
-            _ => {
-                // Deny, cancel, or unknown option.
+            },
+            Err(InterventionError::Timeout) => {
+                // Treat timeout as deny.
                 Err(AgentError::ToolRejected {
                     name: "shell".into(),
-                    reason: "User denied shell command execution".into(),
+                    reason: "Shell command approval timed out (2 minutes)".into(),
                 })
             }
+            Err(InterventionError::Disconnected) => Err(AgentError::ToolRejected {
+                name: "shell".into(),
+                reason: "Intervention channel disconnected (TUI may have exited)".into(),
+            }),
         }
     }
 
     /// Extract the command string from shell tool arguments.
-    fn parse_command(args: &str) -> String {
+    pub(crate) fn parse_command(args: &str) -> String {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
             v.get("command")
                 .and_then(|c| c.as_str())
@@ -294,16 +283,29 @@ impl AgentHook for SandboxHook {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn test_iso8601_now_produces_correct_format() {
-        let ts = memory::iso8601_now();
-        // Should look like "2026-07-09T12:34:56Z"
-        assert!(ts.ends_with('Z'), "got {ts}");
-        assert_eq!(ts.len(), 20, "got {ts}");
-        assert!(ts.starts_with("20"), "got {ts}");
-        let parts: Vec<&str> = ts[..19].split('T').collect();
-        assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0].len(), 10);
-        assert_eq!(parts[1].len(), 8);
+    fn test_parse_command_extracts_shell_arg() {
+        let cmd = SandboxHook::parse_command(r#"{"command": "echo hello"}"#);
+        assert_eq!(cmd, "echo hello");
+    }
+
+    #[test]
+    fn test_parse_command_empty_args() {
+        let cmd = SandboxHook::parse_command("");
+        assert_eq!(cmd, "");
+    }
+
+    #[test]
+    fn test_parse_command_missing_command_field() {
+        let cmd = SandboxHook::parse_command(r#"{"other": "value"}"#);
+        assert_eq!(cmd, "");
+    }
+
+    #[test]
+    fn test_parse_command_raw_string_fallback() {
+        let cmd = SandboxHook::parse_command("not json at all");
+        assert_eq!(cmd, "not json at all");
     }
 }

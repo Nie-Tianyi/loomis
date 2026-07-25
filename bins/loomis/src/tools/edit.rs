@@ -1,9 +1,11 @@
-//! [`EditTool`] — 行级文件编辑工具。
+//! [`EditTool`] — Line-level file editing (replace or delete lines).
 //!
-//! 替换文件中指定行范围的内容。支持删除行（传入空字符串）。
+//! Replaces a specific range of lines in a file by line number.
+//! Pass an empty string as `new_content` to delete the range.
 //!
-//! 通过 [`Progress::InProgress`] 事件将替换内容流式预览到 TUI，
-//! 让用户在工具执行期间即时看到编辑的内容。
+//! Streams the replacement content to the TUI via
+//! [`Progress::InProgress`] events so the user sees what's being
+//! edited while the tool executes.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -17,7 +19,7 @@ use tools::{FsError, Progress, ProgressStream, ToolError, tool};
 #[cfg(test)]
 use tools::SandboxConfig;
 
-/// Edit 工具的参数。
+/// Arguments for the edit tool.
 #[derive(JsonSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EditArgs {
@@ -46,9 +48,9 @@ pub(crate) struct EditArgs {
     pub new_content: String,
 }
 
-/// 用行号替换文件内容的工具。
+/// Tool for replacing file content by line number.
 ///
-/// # 参数
+/// # Arguments
 ///
 /// ```json
 /// {
@@ -59,7 +61,7 @@ pub(crate) struct EditArgs {
 /// }
 /// ```
 ///
-/// 行号是 1-indexed，`start_line` 和 `end_line` 都是包含的。
+/// Line numbers are 1-indexed; `start_line` and `end_line` are both inclusive.
 #[tool(
     name = "edit",
     description = "Replace a specific range of lines in a file by line number. \
@@ -253,7 +255,7 @@ mod tests {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "a\nb\n");
 
-        // 替换超出行范围的"append"行为（替换不存在的行就变成 append）
+        // "append" behavior when replacing beyond file range (replacing non-existent lines appends)
         stream_done(
             Tool::execute_stream(
                 &tool,

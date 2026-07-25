@@ -1,7 +1,7 @@
-//! [`ReadTool`] — 文件读取工具。
+//! [`ReadTool`] — File reading with line-numbered output.
 //!
-//! 读取文件内容并以 `cat -n` 风格的行号格式返回。
-//! 支持可选的行偏移和行数限制。
+//! Reads file contents and returns them in `cat -n` style with
+//! line numbers. Supports optional line offset and limit.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -12,7 +12,7 @@ use tools::SandboxConfig;
 use tools::WorkspaceFs;
 use tools::{FsError, ProgressStream, ToolError, tool};
 
-/// Read 工具的参数。
+/// Arguments for the read tool.
 #[derive(JsonSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ReadArgs {
@@ -33,15 +33,15 @@ pub(crate) struct ReadArgs {
     pub limit: Option<u64>,
 }
 
-/// 读取文件内容的工具。
+/// Tool for reading file contents.
 ///
-/// # 参数
+/// # Arguments
 ///
 /// ```json
 /// {"file_path": "src/main.rs", "offset": 10, "limit": 50}
 /// ```
 ///
-/// `offset` 和 `limit` 为可选的整数。
+/// `offset` and `limit` are optional integers.
 #[tool(
     name = "read",
     description = "Read a file from the workspace and return its contents with line numbers \
@@ -82,7 +82,7 @@ impl ReadTool {
     }
 }
 
-/// 将 FsError 映射为 ToolError。
+/// Map an FsError to a ToolError.
 fn map_fs_err(e: FsError) -> ToolError {
     match e {
         FsError::NotFound(_) | FsError::NotAFile(_) | FsError::WorkspaceEscape(_) => {

@@ -1,6 +1,6 @@
-//! [`LsTool`] — 目录列表工具。
+//! [`LsTool`] — Directory listing tool.
 //!
-//! 列出目录内容，显示名称、类型和大小。目录优先排序。
+//! Lists directory contents showing name, type, and size. Directories are listed first.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -11,7 +11,7 @@ use tools::SandboxConfig;
 use tools::WorkspaceFs;
 use tools::{EntryType, FsError, ProgressStream, ToolError, tool};
 
-/// Ls 工具的参数。
+/// Arguments for the ls tool.
 #[derive(JsonSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LsArgs {
@@ -22,15 +22,15 @@ pub(crate) struct LsArgs {
     pub path: Option<String>,
 }
 
-/// 列出目录内容的工具。
+/// Tool for listing directory contents.
 ///
-/// # 参数
+/// # Arguments
 ///
 /// ```json
 /// {"path": "src/"}
 /// ```
 ///
-/// `path` 是可选的；省略时列出工作空间根目录。
+/// `path` is optional; omitting it lists the workspace root.
 #[tool(
     name = "ls",
     description = "List the contents of a directory in the workspace. Entries are shown with \
@@ -86,7 +86,7 @@ impl LsTool {
     }
 }
 
-/// 人类可读的文件大小。
+/// Human-readable file size.
 fn format_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "K", "M", "G"];
     let mut size = bytes as f64;
@@ -161,7 +161,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("bar")).unwrap();
 
         let result = Tool::execute_stream(&tool, r#"{}"#).unwrap().poll_done();
-        // 目录优先
+        // Directories first
         let lines: Vec<&str> = result.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("d"));
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn test_ls_without_path_param() {
         let (_dir, tool) = setup();
-        // 不传 path 参数应列出根目录
+        // Omitting path should list the root directory
         let result = Tool::execute_stream(&tool, "{}").unwrap().poll_done();
         assert!(result.contains("(empty directory)"));
     }

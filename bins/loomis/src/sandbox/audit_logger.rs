@@ -11,12 +11,16 @@ use std::path::Path;
 use std::sync::Mutex;
 use tools::SandboxConfig;
 
+/// Maximum number of entries kept in the in-memory ring buffer.
+/// Capacity hint and eviction threshold use the same constant to
+/// prevent drift between allocation and logic.
+const RING_CAPACITY: usize = 256;
+
 /// Append-only JSONL audit log.
 pub struct AuditLogger {
     enabled: bool,
     file: Option<Mutex<File>>,
     ring: Mutex<VecDeque<AuditEntry>>,
-    max_ring: usize,
 }
 
 /// A single audit record.
@@ -50,8 +54,7 @@ impl AuditLogger {
         Self {
             enabled: config.audit.enabled,
             file,
-            ring: Mutex::new(VecDeque::with_capacity(256)),
-            max_ring: 256,
+            ring: Mutex::new(VecDeque::with_capacity(RING_CAPACITY)),
         }
     }
 
@@ -62,7 +65,7 @@ impl AuditLogger {
 
         // In-memory ring buffer
         if let Ok(mut ring) = self.ring.lock() {
-            if ring.len() >= self.max_ring {
+            if ring.len() >= RING_CAPACITY {
                 ring.pop_front();
             }
             ring.push_back(entry.clone());

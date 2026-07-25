@@ -1,6 +1,6 @@
-//! [`GlobTool`] — 文件模式匹配工具。
+//! [`GlobTool`] — File glob pattern matching.
 //!
-//! 使用 glob 模式查找匹配的文件，返回排序后的相对路径列表。
+//! Finds files matching a glob pattern, returning a sorted list of relative paths.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -11,7 +11,7 @@ use tools::SandboxConfig;
 use tools::WorkspaceFs;
 use tools::{FsError, ProgressStream, ToolError, tool};
 
-/// Glob 工具的参数。
+/// Arguments for the glob tool.
 #[derive(JsonSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GlobArgs {
@@ -22,9 +22,9 @@ pub(crate) struct GlobArgs {
     pub pattern: String,
 }
 
-/// 使用 glob 模式查找文件的工具。
+/// Tool for finding files with glob patterns.
 ///
-/// # 参数
+/// # Arguments
 ///
 /// ```json
 /// {"pattern": "**/*.rs"}

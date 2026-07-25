@@ -557,4 +557,19 @@ mod tests {
         let name = sanitize_filename("a__b");
         assert_eq!(name, "a_b");
     }
+
+    // ── iso8601_now ─────────────────────────────────────────
+
+    #[test]
+    fn test_iso8601_now_produces_correct_format() {
+        let ts = iso8601_now();
+        // Should look like "2026-07-09T12:34:56Z"
+        assert!(ts.ends_with('Z'), "got {ts}");
+        assert_eq!(ts.len(), 20, "got {ts}");
+        assert!(ts.starts_with("20"), "got {ts}");
+        let parts: Vec<&str> = ts[..19].split('T').collect();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].len(), 10);
+        assert_eq!(parts[1].len(), 8);
+    }
 }

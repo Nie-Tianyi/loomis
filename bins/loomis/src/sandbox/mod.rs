@@ -6,6 +6,7 @@
 //! be shared with the `WorkspaceFs` sandbox.
 
 pub mod audit_logger;
+pub(crate) mod encoding;
 pub mod env_sanitizer;
 pub mod resource_tracker;
 pub mod shell_filter;

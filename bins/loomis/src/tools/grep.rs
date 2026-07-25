@@ -1,6 +1,6 @@
-//! [`GrepTool`] — 文件内容搜索工具。
+//! [`GrepTool`] — Regex content search across files.
 //!
-//! 使用正则表达式在文件内容中搜索，返回匹配的文件路径、行号和行内容。
+//! Searches file contents using regular expressions, returning matching file paths, line numbers, and line content.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -11,7 +11,7 @@ use tools::SandboxConfig;
 use tools::WorkspaceFs;
 use tools::{FsError, ProgressStream, ToolError, tool};
 
-/// Grep 工具的参数。
+/// Arguments for the grep tool.
 #[derive(JsonSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GrepArgs {
@@ -28,15 +28,15 @@ pub(crate) struct GrepArgs {
     pub path_glob: Option<String>,
 }
 
-/// 使用正则表达式搜索文件内容的工具。
+/// Tool for searching file content with regular expressions.
 ///
-/// # 参数
+/// # Arguments
 ///
 /// ```json
 /// {"pattern": "fn\\s+main", "path_glob": "src/**/*.rs"}
 /// ```
 ///
-/// `path_glob` 是可选的；默认搜索所有文件。
+/// `path_glob` is optional; defaults to searching all files.
 #[tool(
     name = "grep",
     description = "Search file contents using a regular expression. Returns every matching \
@@ -192,7 +192,7 @@ mod tests {
         let result = Tool::execute_stream(&tool, r#"{"pattern": "fn"}"#)
             .unwrap()
             .poll_done();
-        // 格式: file_path:line_number: line_content
+        // Format: file_path:line_number: line_content
         assert!(result.contains("test.rs:1: fn hello()"));
     }
 }

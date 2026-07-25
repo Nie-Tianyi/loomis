@@ -22,22 +22,17 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use tools::{ProgressStream, SandboxConfig, ToolError, tool};
 
+use crate::sandbox::encoding::{self, MAX_OUTPUT_BYTES};
 use crate::sandbox::env_sanitizer;
 use crate::sandbox::shell_filter::ShellFilter;
-
-/// Maximum output bytes returned to the model. Prevents a single command
-/// from flooding the conversation context.
-const MAX_OUTPUT_BYTES: usize = 100_000;
+use tools::watchdog::Watchdog;
 
 /// Arguments for shell command execution.
 #[derive(JsonSchema, Deserialize)]
@@ -156,38 +151,8 @@ impl ShellTool {
 
         let pid = child.id();
 
-        // ── Watchdog thread (kills entire process tree) ──────────────
-        let done = Arc::new(AtomicBool::new(false));
-        let done_signal = Arc::clone(&done);
-        let timeout = Duration::from_secs(timeout_secs);
-
-        let watchdog = thread::spawn(move || {
-            let deadline = Instant::now() + timeout;
-            while Instant::now() < deadline {
-                if done_signal.load(Ordering::Relaxed) {
-                    return;
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-            // Timeout reached — kill the entire process tree.
-            #[cfg(target_os = "windows")]
-            {
-                // /T = tree kill (child processes too)
-                let _ = Command::new("taskkill")
-                    .args(["/F", "/T", "/PID", &pid.to_string()])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                let _ = Command::new("kill")
-                    .args(["-9", &pid.to_string()])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-            }
-        });
+        // ── Watchdog (kills entire process tree on timeout) ───────
+        let watchdog = Watchdog::spawn(pid, Duration::from_secs(timeout_secs));
 
         // ── Wait for process ─────────────────────────────────────
         let output = child
@@ -195,32 +160,20 @@ impl ShellTool {
             .map_err(|e| ToolError::Execution(format!("Failed to wait on command: {e}")))?;
 
         // Signal the watchdog to exit, then join (returns within 100ms).
-        done.store(true, Ordering::Relaxed);
-        let _ = watchdog.join();
+        watchdog.disarm();
 
         // ── Build result ─────────────────────────────────────────
-        let stdout = decode_stdout(&output.stdout);
-        let stderr = decode_stdout(&output.stderr);
+        let stdout = encoding::decode_stdout(&output.stdout);
+        let stderr = encoding::decode_stdout(&output.stderr);
         let exit_code = output.status.code();
 
         let mut result = String::new();
-
-        // Truncate helpers
-        let truncate = |s: &str, max: usize| -> String {
-            if s.len() <= max {
-                s.to_string()
-            } else {
-                // Find valid UTF-8 boundary at or before max
-                let boundary = s.floor_char_boundary(max);
-                format!("{}…\n[output truncated at {max} bytes]", &s[..boundary])
-            }
-        };
 
         let stdout_clean = stdout.trim_end();
         let stderr_clean = stderr.trim_end();
 
         if !stdout_clean.is_empty() {
-            result.push_str(&truncate(stdout_clean, MAX_OUTPUT_BYTES));
+            result.push_str(&encoding::truncate_output(stdout_clean, MAX_OUTPUT_BYTES));
         }
 
         if !stderr_clean.is_empty() {
@@ -232,7 +185,7 @@ impl ShellTool {
             // But don't exceed remaining budget
             let remaining = MAX_OUTPUT_BYTES.saturating_sub(result.len());
             let stderr_limit = stderr_max.min(remaining);
-            result.push_str(&truncate(stderr_clean, stderr_limit));
+            result.push_str(&encoding::truncate_output(stderr_clean, stderr_limit));
         }
 
         // If nothing was produced, still indicate the command ran
@@ -254,82 +207,6 @@ impl ShellTool {
         let output = result;
         Ok(ProgressStream::done(output))
     }
-}
-
-// ── Encoding Helpers ──────────────────────────────────────────────────────────
-
-/// Decodes child-process stdout/stderr bytes to a Rust string.
-///
-/// On Windows, many CLI tools (especially cmd built-ins like `dir`, `echo`,
-/// and older programs) output in the system ANSI code page (e.g. GBK/CP936 for
-/// Chinese-locale machines). Modern tools (git, cargo, rustc, python 3.7+)
-/// typically output UTF-8 when stdout is not a TTY.
-///
-/// Strategy: try UTF-8 first — if every byte is valid UTF-8, use it directly.
-/// Otherwise fall back to the Windows [`GetACP`] code page via
-/// [`MultiByteToWideChar`]. On Unix this is just [`String::from_utf8_lossy`].
-#[cfg(target_os = "windows")]
-fn decode_stdout(bytes: &[u8]) -> String {
-    if bytes.is_empty() {
-        return String::new();
-    }
-    // Try UTF-8 first — modern tools output valid UTF-8.
-    if let Ok(utf8) = std::str::from_utf8(bytes) {
-        return utf8.to_string();
-    }
-    // Fall back to the system ANSI code page.
-    unsafe {
-        let acp = GetACP();
-        // CP 65001 IS UTF-8 — if the system already uses UTF-8, just
-        // replace invalid sequences (shouldn't happen since from_utf8 failed).
-        if acp == 65001 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        // Determine how many UTF-16 code units we need.
-        let wide_len = MultiByteToWideChar(
-            acp,
-            0,
-            bytes.as_ptr() as *const i8,
-            bytes.len() as i32,
-            std::ptr::null_mut(),
-            0,
-        );
-        if wide_len <= 0 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        let mut wide: Vec<u16> = vec![0; wide_len as usize];
-        let written = MultiByteToWideChar(
-            acp,
-            0,
-            bytes.as_ptr() as *const i8,
-            bytes.len() as i32,
-            wide.as_mut_ptr(),
-            wide_len,
-        );
-        if written <= 0 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        wide.truncate(written as usize);
-        String::from_utf16_lossy(&wide)
-    }
-}
-
-#[cfg(target_os = "windows")]
-unsafe extern "system" {
-    fn GetACP() -> u32;
-    fn MultiByteToWideChar(
-        Codepage: u32,
-        dwFlags: u32,
-        lpMultiByteStr: *const i8,
-        cbMultiByte: i32,
-        lpWideCharStr: *mut u16,
-        cchWideChar: i32,
-    ) -> i32;
-}
-
-#[cfg(not(target_os = "windows"))]
-fn decode_stdout(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

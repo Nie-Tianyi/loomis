@@ -3,7 +3,6 @@ members = ["libs/*", "bins/*"]
 resolver = "2"
 
 [workspace.package]
-name = "agent_oxide"
 version = "0.1.0"
 edition = "2024"
 

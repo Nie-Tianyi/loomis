@@ -20,13 +20,14 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use engine::{AgentEvent, InterventionRequest, InterventionResponse};
+use engine::AgentEvent;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tools::{ProgressStream, ToolError, tool};
 
-use engine::{ResponseRouter, next_request_id};
+use engine::ResponseRouter;
+use engine::intervention::{self, InterventionError};
 
 // ── Args ────────────────────────────────────────────────────────────────────
 
@@ -123,61 +124,47 @@ impl AskUserQuestionTool {
 
     /// Core logic — blocks the agent task until the user responds.
     fn execute_stream(&self, args: AskUserQuestionArgs) -> Result<ProgressStream, ToolError> {
-        let request_id = next_request_id();
+        let agent_tx = self
+            .agent_tx
+            .get()
+            .ok_or_else(|| ToolError::Execution("Agent event channel not configured".into()))?;
 
         // Default to a single free-text option if none provided.
-        // Clone options now — we'll need them again later to resolve
-        // the chosen index to a label.
         let options: Vec<String> = args
             .options
             .clone()
             .filter(|opts| !opts.is_empty())
             .unwrap_or_else(|| vec!["Answer…".into()]);
 
-        // Create per-request rendezvous channel and register with the
-        // response router so the TUI can deliver the answer.
-        let (tx, rx) = std::sync::mpsc::sync_channel::<InterventionResponse>(0);
-        self.response_router.register(request_id.clone(), tx);
+        // Delegate the common request/response plumbing to the shared helper.
+        let response = intervention::request_intervention(
+            &self.response_router,
+            agent_tx,
+            args.question,
+            args.description.unwrap_or_default(),
+            options.clone(),
+            Duration::from_secs(300),
+        );
 
-        // Send intervention request to the TUI.
-        if let Some(agent_tx) = self.agent_tx.get() {
-            let _ = agent_tx.send(AgentEvent::InterventionRequired(InterventionRequest {
-                request_id: request_id.clone(),
-                title: args.question,
-                description: args.description.unwrap_or_default(),
-                options: options.clone(),
-            }));
-        }
-
-        // Block until the user responds (5-minute timeout).
-        let response = match rx.recv_timeout(Duration::from_secs(300)) {
+        let response = match response {
             Ok(resp) => resp,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                self.response_router.unregister(&request_id);
+            Err(InterventionError::Timeout) => {
                 return Err(ToolError::Execution(
                     "Timed out waiting for user response (5 minutes)".into(),
                 ));
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(InterventionError::Disconnected) => {
                 return Err(ToolError::Execution(
                     "Intervention channel disconnected (TUI may have exited)".into(),
                 ));
             }
         };
 
-        // Cleanup (no-op if the TUI's route() already removed the entry).
-        self.response_router.unregister(&request_id);
-
         // Build output from the user's response.
-        // The `options` local is still valid — we cloned it into the
-        // InterventionRequest above.
-
         match (response.chosen, response.custom_text) {
             (None, _) => Err(ToolError::Execution("User cancelled the question".into())),
-            (Some(_idx), Some(custom)) => {
+            (Some(_), Some(custom)) => {
                 // User selected "…" option and typed custom text.
-                // Return just the custom text — the option label is
-                // boilerplate like "Other…".
                 Ok(ProgressStream::done(custom))
             }
             (Some(idx), None) => {

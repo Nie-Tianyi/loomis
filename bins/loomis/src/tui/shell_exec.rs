@@ -1,25 +1,23 @@
 //! Shell command execution for `!command` (user-initiated) invocations.
 //!
 //! Spawns a child process in the workspace root, captures stdout/stderr,
-//! enforces a 30-second timeout via watchdog thread, and decodes output
-//! respecting the system ANSI code page on Windows.
+//! enforces a 30-second timeout via [`Watchdog`](crate::sandbox::watchdog),
+//! and decodes output respecting the system ANSI code page on Windows via
+//! [`decode_stdout`](crate::sandbox::encoding).
 
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::sandbox::encoding::{self, MAX_OUTPUT_BYTES};
 use crate::sandbox::env_sanitizer;
-
-/// Maximum output bytes returned — mirrors the `ShellTool` limit.
-const MAX_OUTPUT_BYTES: usize = 100_000;
+use tools::watchdog::Watchdog;
 
 /// Executes a shell command in the workspace root, capturing stdout and stderr.
 ///
 /// On Windows, uses `cmd /C` for near-instant startup (unlike PowerShell which
 /// loads .NET CLR on every invocation). Encoding is handled via
-/// [`decode_windows_stdout`], which tries UTF-8 first and falls back to the
+/// [`encoding::decode_stdout`], which tries UTF-8 first and falls back to the
 /// system ANSI code page.
 ///
 /// Environment is sanitised via [`env_sanitizer::sanitize`] before spawning,
@@ -50,39 +48,9 @@ pub fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
     let pid = child.id();
 
     // Watchdog: polls every 100ms, kills the process if it exceeds the
-    // timeout. An AtomicBool signal lets it exit early when the command
-    // completes quickly — without this, join() would block for the full
-    // timeout duration even for a 15ms `dir`.
-    let done = Arc::new(AtomicBool::new(false));
-    let done_signal = Arc::clone(&done);
-
-    let timeout = Duration::from_secs(30);
-    let watchdog = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + timeout;
-        while std::time::Instant::now() < deadline {
-            if done_signal.load(Ordering::Relaxed) {
-                return; // command finished, no kill needed
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        // Timeout reached — best-effort kill.
-        #[cfg(target_os = "windows")]
-        {
-            let _ = Command::new("taskkill")
-                .args(["/F", "/T", "/PID", &pid.to_string()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-        }
-    });
+    // timeout. The Watchdog struct encapsulates the AtomicBool signal
+    // so disarm() returns within 100ms even for fast commands.
+    let watchdog = Watchdog::spawn(pid, Duration::from_secs(30));
 
     let output = match child.wait_with_output() {
         Ok(o) => o,
@@ -90,13 +58,10 @@ pub fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
     };
 
     // Signal the watchdog that the command is done, then join.
-    // The watchdog checks the flag every 100ms, so join returns
-    // within 100ms instead of blocking for the full 30s timeout.
-    done.store(true, Ordering::Relaxed);
-    let _ = watchdog.join();
+    watchdog.disarm();
 
-    let stdout = decode_stdout(&output.stdout);
-    let stderr = decode_stdout(&output.stderr);
+    let stdout = encoding::decode_stdout(&output.stdout);
+    let stderr = encoding::decode_stdout(&output.stderr);
     let exit_code = output.status.code();
 
     let stdout_clean = stdout.trim_end();
@@ -104,7 +69,7 @@ pub fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
 
     let mut result = String::new();
     if !stdout_clean.is_empty() {
-        result.push_str(&truncate_output(stdout_clean, MAX_OUTPUT_BYTES));
+        result.push_str(&encoding::truncate_output(stdout_clean, MAX_OUTPUT_BYTES));
     }
     if !stderr_clean.is_empty() {
         if !result.is_empty() {
@@ -114,7 +79,7 @@ pub fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
         let stderr_max = (MAX_OUTPUT_BYTES / 5).max(10_240);
         let remaining = MAX_OUTPUT_BYTES.saturating_sub(result.len());
         let stderr_limit = stderr_max.min(remaining);
-        result.push_str(&truncate_output(stderr_clean, stderr_limit));
+        result.push_str(&encoding::truncate_output(stderr_clean, stderr_limit));
     }
 
     // If nothing was produced, indicate the command ran
@@ -135,86 +100,88 @@ pub fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
     result
 }
 
-/// Truncate a string at `max` bytes, preserving a valid UTF-8 boundary.
-fn truncate_output(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        let boundary = s.floor_char_boundary(max);
-        format!("{}…\n[output truncated at {max} bytes]", &s[..boundary])
-    }
-}
+// ── Tests ──────────────────────────────────────────────────────────────────────
 
-/// Decodes child-process stdout/stderr bytes to a Rust string.
-///
-/// On Windows, many CLI tools (especially cmd built-ins like `dir`, `echo`,
-/// and older programs) output in the system ANSI code page (e.g. GBK/CP936 for
-/// Chinese-locale machines). Modern tools (git, cargo, rustc, python 3.7+)
-/// typically output UTF-8 when stdout is not a TTY.
-///
-/// Strategy: try UTF-8 first. If every byte is valid UTF-8, use it. Otherwise
-/// use the Windows [`GetACP`] code page via [`MultiByteToWideChar`]. On Unix
-/// this is just [`String::from_utf8_lossy`].
-#[cfg(target_os = "windows")]
-fn decode_stdout(bytes: &[u8]) -> String {
-    if bytes.is_empty() {
-        return String::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn workspace_root() -> PathBuf {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     }
-    // Try UTF-8 first — modern tools output valid UTF-8.
-    if let Ok(utf8) = std::str::from_utf8(bytes) {
-        return utf8.to_string();
+
+    #[test]
+    fn test_execute_echo() {
+        #[cfg(target_os = "windows")]
+        let cmd = "echo hello";
+        #[cfg(not(target_os = "windows"))]
+        let cmd = "echo hello";
+
+        let output = execute_shell_command(cmd, &workspace_root());
+        assert!(output.contains("hello"), "got: {output}");
     }
-    // Fall back to the system ANSI code page (e.g. CP936 for zh-CN).
-    unsafe {
-        let acp = GetACP();
-        // CP 65001 IS UTF-8 — if the system already uses UTF-8, just
-        // replace invalid sequences (shouldn't happen if from_utf8 failed).
-        if acp == 65001 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        // Determine how many UTF-16 code units we need.
-        let wide_len = MultiByteToWideChar(
-            acp,
-            0,
-            bytes.as_ptr() as *const i8,
-            bytes.len() as i32,
-            std::ptr::null_mut(),
-            0,
+
+    #[test]
+    fn test_execute_empty_output() {
+        #[cfg(target_os = "windows")]
+        let cmd = "cd .";
+        #[cfg(not(target_os = "windows"))]
+        let cmd = "true";
+
+        let output = execute_shell_command(cmd, &workspace_root());
+        assert!(
+            output.contains("no output") || output.is_empty(),
+            "got: {output}"
         );
-        if wide_len <= 0 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        let mut wide: Vec<u16> = vec![0; wide_len as usize];
-        let written = MultiByteToWideChar(
-            acp,
-            0,
-            bytes.as_ptr() as *const i8,
-            bytes.len() as i32,
-            wide.as_mut_ptr(),
-            wide_len,
-        );
-        if written <= 0 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        wide.truncate(written as usize);
-        String::from_utf16_lossy(&wide)
     }
-}
 
-#[cfg(target_os = "windows")]
-unsafe extern "system" {
-    fn GetACP() -> u32;
-    fn MultiByteToWideChar(
-        CodePage: u32,
-        dwFlags: u32,
-        lpMultiByteStr: *const i8,
-        cbMultiByte: i32,
-        lpWideCharStr: *mut u16,
-        cchWideChar: i32,
-    ) -> i32;
-}
+    #[test]
+    fn test_execute_stderr_captured() {
+        #[cfg(target_os = "windows")]
+        let cmd = "cmd /C echo error text >&2";
+        #[cfg(not(target_os = "windows"))]
+        let cmd = "echo error text >&2";
 
-#[cfg(not(target_os = "windows"))]
-fn decode_stdout(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
+        let output = execute_shell_command(cmd, &workspace_root());
+        assert!(output.contains("error text"), "got: {output}");
+    }
+
+    #[test]
+    fn test_execute_non_zero_exit() {
+        #[cfg(target_os = "windows")]
+        let cmd = "cmd /C exit /b 42";
+        #[cfg(not(target_os = "windows"))]
+        let cmd = "exit 42";
+
+        let output = execute_shell_command(cmd, &workspace_root());
+        assert!(
+            output.contains("exit code") || output.contains("42"),
+            "got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_execute_missing_command() {
+        let output = execute_shell_command("nonexistent_command_xyz_123", &workspace_root());
+        // Should not panic; output may contain an error or exit code.
+        assert!(!output.is_empty(), "should produce some output");
+    }
+
+    #[test]
+    fn test_large_output_truncated() {
+        // Generate a command that outputs >100KB of text
+        #[cfg(target_os = "windows")]
+        let cmd = "powershell -Command \"'x' * 200000\"";
+        #[cfg(not(target_os = "windows"))]
+        let cmd = "printf 'x%.0s' $(seq 1 200000)";
+
+        let output = execute_shell_command(cmd, &workspace_root());
+        // The output should be truncated
+        assert!(
+            output.contains("[output truncated at") || output.len() <= MAX_OUTPUT_BYTES + 100,
+            "large output should be truncated, got {} bytes",
+            output.len()
+        );
+    }
 }

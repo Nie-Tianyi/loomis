@@ -14,13 +14,14 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use engine::{AgentEvent, InterventionRequest, InterventionResponse};
+use engine::AgentEvent;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tools::{ProgressStream, ToolError, tool};
 
-use engine::{ResponseRouter, next_request_id};
+use engine::ResponseRouter;
+use engine::intervention::{self, InterventionError};
 
 use crate::hooks::PlanModeState;
 
@@ -103,6 +104,11 @@ impl ExitPlanModeTool {
             ));
         }
 
+        let agent_tx = self
+            .agent_tx
+            .get()
+            .ok_or_else(|| ToolError::Execution("Agent event channel not configured".into()))?;
+
         // Read the plan file content.
         let plan_content = std::fs::read_to_string(&self.plan_file_path)
             .unwrap_or_else(|e| format!("(Could not read plan file: {e})"));
@@ -114,8 +120,6 @@ impl ExitPlanModeTool {
             plan_content
         };
 
-        // Build the intervention request.
-        let request_id = next_request_id();
         let description = format!(
             "The agent has completed its plan and requests approval to proceed.\n\n\
              ─── Plan File: {} ───\n\n\
@@ -124,39 +128,30 @@ impl ExitPlanModeTool {
             self.plan_file_path.display()
         );
 
-        // Create a per-request rendezvous channel and register with the router.
-        let (tx, rx) = std::sync::mpsc::sync_channel::<InterventionResponse>(0);
-        self.response_router.register(request_id.clone(), tx);
+        // Delegate the common request/response plumbing to the shared helper.
+        let response = intervention::request_intervention(
+            &self.response_router,
+            agent_tx,
+            "Approve Plan?".into(),
+            description,
+            vec!["Approve".into(), "Suggest changes…".into(), "Cancel".into()],
+            Duration::from_secs(300),
+        );
 
-        // Send the intervention request to the TUI.
-        if let Some(agent_tx) = self.agent_tx.get() {
-            let _ = agent_tx.send(AgentEvent::InterventionRequired(InterventionRequest {
-                request_id: request_id.clone(),
-                title: "Approve Plan?".into(),
-                description,
-                options: vec!["Approve".into(), "Suggest changes…".into(), "Cancel".into()],
-            }));
-        }
-
-        // Block until the user responds (5-minute timeout).
-        let response = match rx.recv_timeout(Duration::from_secs(300)) {
+        let response = match response {
             Ok(resp) => resp,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                self.response_router.unregister(&request_id);
+            Err(InterventionError::Timeout) => {
                 return Err(ToolError::Execution(
                     "Timed out waiting for plan approval (5 minutes). Staying in plan mode.".into(),
                 ));
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(InterventionError::Disconnected) => {
                 return Err(ToolError::Execution(
                     "Intervention channel disconnected (TUI may have exited). Staying in plan mode."
                         .into(),
                 ));
             }
         };
-
-        // Cleanup (no-op if the TUI's route() already removed the entry).
-        self.response_router.unregister(&request_id);
 
         match response.chosen {
             // User pressed Esc / cancelled.

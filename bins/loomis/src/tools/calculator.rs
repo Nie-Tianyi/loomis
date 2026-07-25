@@ -1,17 +1,18 @@
-//! [`CalculatorTool`] — 四则运算表达式求值工具。
+//! [`CalculatorTool`] — Arithmetic expression evaluator.
 //!
-//! # 表达式求值器
+//! # Expression evaluator
 //!
-//! 手写递归下降解析器，支持以下运算（按优先级从低到高）：
+//! Hand-written recursive-descent parser supporting the following
+//! operations (in order of increasing precedence):
 //!
-//! | 优先级 | 运算符 | 结合性 |
-//! |--------|--------|--------|
-//! | 1 (低) | `+` `-` | 左结合 |
-//! | 2 (高) | `*` `/` | 左结合 |
-//! | 3 (前缀) | `+` `-` | 右结合（一元） |
-//! | - | `( )` | 分组 |
+//! | Precedence | Operators | Associativity |
+//! |---|---|---|
+//! | 1 (lowest) | `+` `-` | Left |
+//! | 2 | `*` `/` | Left |
+//! | 3 (prefix) | `+` `-` | Right (unary) |
+//! | - | `( )` | Grouping |
 //!
-//! 文法：
+//! Grammar:
 //! ```text
 //! expr   → term (('+' | '-') term)*
 //! term   → unary (('*' | '/') unary)*
@@ -19,12 +20,13 @@
 //! primary → NUMBER | '(' expr ')'
 //! ```
 //!
-//! # 实现选择
+//! # Design choice
 //!
-//! 手写解析器而非引入 `meval` 等 crate，原因：
-//! - 零额外依赖
-//! - 展示递归下降解析器的经典实现模式（教学目的）
-//! - 对于教学项目来说，~100 行的解析器比一个黑盒 crate 更有价值
+//! Hand-written parser instead of pulling in a crate like `meval`:
+//! - Zero extra dependencies
+//! - Demonstrates the classic recursive-descent pattern (teaching purpose)
+//! - For a teaching project, ~100 lines of parser is more valuable
+//!   than an opaque crate
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -33,7 +35,7 @@ use tools::{ProgressStream, ToolError, tool};
 
 // ── CalculatorTool ────────────────────────────────────────────────────────────
 
-/// Calculator 工具的参数。
+/// Arguments for the calculator tool.
 #[derive(JsonSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CalculatorArgs {
@@ -44,19 +46,19 @@ pub(crate) struct CalculatorArgs {
     pub expression: String,
 }
 
-/// 安全地求值数学表达式。
+/// Safely evaluate a mathematical expression.
 ///
-/// # 示例输入
+/// # Example input
 ///
 /// ```json
 /// {"expression": "2 + 3 * (4 - 1)"}
 /// ```
 ///
-/// # 错误
+/// # Errors
 ///
-/// - 除零 → [`ToolError::Execution`]
-/// - 非法字符（如 `^`）→ [`ToolError::Execution`]
-/// - 缺少 `expression` 字段 → [`ToolError::InvalidArgs`]
+/// - Division by zero → [`ToolError::Execution`]
+/// - Illegal characters (e.g. `^`) → [`ToolError::Execution`]
+/// - Missing `expression` field → [`ToolError::InvalidArgs`]
 #[tool(
     name = "calculator",
     description = "Evaluate a mathematical expression and return the numeric result. Supports \
@@ -82,7 +84,7 @@ impl CalculatorTool {
             ToolError::Execution(format!("at position {}: {e}", e.position.unwrap_or(0)))
         })?;
 
-        // 整数结果去掉尾随 ".0"
+        // Strip trailing ".0" for integer results
         let output = if result == result.trunc() && result.is_finite() {
             format!("{}", result as i64)
         } else {
@@ -95,7 +97,7 @@ impl CalculatorTool {
 
 // ── Expression evaluator ──────────────────────────────────────────────────────
 
-/// 解析错误信息。
+/// Parse error information.
 #[derive(Debug, Clone, PartialEq)]
 struct ParseError {
     message: String,
@@ -110,7 +112,7 @@ impl std::fmt::Display for ParseError {
 
 // ── Token ─────────────────────────────────────────────────────────────────────
 
-/// 词法单元。
+/// Lexical token.
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Number(f64),
@@ -124,9 +126,9 @@ enum Token {
 
 // ── Lexer ─────────────────────────────────────────────────────────────────────
 
-/// 词法分析器：将字符串切分为 [`Token`] 流。
+/// Lexer: tokenizes a string into a stream of [`Token`]s.
 ///
-/// 跳过空白字符，将运算符映射为对应 Token，数字字面量解析为 `f64`。
+/// Skips whitespace, maps operators to Tokens, parses number literals as `f64`.
 struct Lexer {
     chars: Vec<char>,
     pos: usize,
@@ -140,12 +142,12 @@ impl Lexer {
         }
     }
 
-    /// 当前字符位置（用于错误报告）。
+    /// Current character position (for error reporting).
     fn current_pos(&self) -> usize {
         self.pos
     }
 
-    /// 消费并返回下一个 token。到达输入末尾时返回 `None`。
+    /// Consumes and returns the next token. Returns `None` at end of input.
     fn next_token(&mut self) -> Option<Token> {
         self.skip_whitespace();
 
@@ -178,7 +180,7 @@ impl Lexer {
             }
             c if c.is_ascii_digit() || c == '.' => self.read_number(),
             _ => {
-                // 非法字符 — 不推进位置，让 evaluate() 的尾部检查捕获
+                // Illegal character — don't advance position; let evaluate()'s trailing check catch it
                 return None;
             }
         })
@@ -228,14 +230,14 @@ impl Lexer {
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
-/// 递归下降解析器。
+/// Recursive-descent parser.
 ///
-/// 持有 [`Lexer`] 和一个前瞻 token（lookahead），
-/// 通过 `advance()` 消费 token 并加载下一个。
+/// Holds a [`Lexer`] and a lookahead token;
+/// consumes tokens via `advance()` and loads the next one.
 struct Parser {
     lexer: Lexer,
     lookahead: Option<Token>,
-    /// 当前 token 在输入中的位置，用于错误报告。
+    /// Position of the current token in the input, for error reporting.
     token_pos: usize,
 }
 
@@ -255,7 +257,7 @@ impl Parser {
         let mut parser = Self::new(input);
         let result = parser.parse_expr()?;
 
-        // 检查一：不应有未被消费的合法 token
+        // Check 1: no unconsumed legal tokens should remain
         if parser.lookahead.is_some() {
             return Err(ParseError {
                 message: "unexpected token after expression".into(),
@@ -263,7 +265,7 @@ impl Parser {
             });
         }
 
-        // 检查二：所有输入字符都应被消费（跳过尾部空白后）
+        // Check 2: all input characters should be consumed (after skipping trailing whitespace)
         parser.lexer.skip_whitespace();
         if parser.lexer.current_pos() < parser.lexer.chars.len() {
             return Err(ParseError {
@@ -275,7 +277,7 @@ impl Parser {
         Ok(result)
     }
 
-    /// 检查当前 token 是否匹配，若匹配则消费。
+    /// Check if the current token matches; if so, consume it.
     fn eat(&mut self, expected: Token) -> bool {
         if self.lookahead == Some(expected) {
             self.advance();
@@ -341,10 +343,10 @@ impl Parser {
     // unary → ('+' | '-') unary | primary
     fn parse_unary(&mut self) -> Result<f64, ParseError> {
         if self.eat(Token::Plus) {
-            // 一元加号：直接穿透
+            // Unary plus: pass through
             self.parse_unary()
         } else if self.eat(Token::Minus) {
-            // 一元减号：取反
+            // Unary minus: negate
             Ok(-self.parse_unary()?)
         } else {
             self.parse_primary()
@@ -379,7 +381,7 @@ impl Parser {
     }
 }
 
-/// 便捷入口：对输入字符串求值。
+/// Convenience entry point: evaluate an input string.
 type ExprEvaluator = Parser;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -389,7 +391,7 @@ mod tests {
     use super::*;
     use tools::{Tool, ToolError};
 
-    // ── 辅助函数 ───────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────
 
     fn calc(expr: &str) -> String {
         Tool::execute_stream(&CalculatorTool, &format!(r#"{{"expression": "{}"}}"#, expr))
@@ -402,7 +404,7 @@ mod tests {
             .unwrap_err()
     }
 
-    // ── CalculatorTool 集成测试 ─────────────────────────────
+    // ── CalculatorTool integration tests ─────────────────────────────
 
     #[test]
     fn test_name() {
@@ -513,7 +515,7 @@ mod tests {
         assert!(matches!(calc_err("(2 + 3"), ToolError::Execution(_)));
     }
 
-    // ── 解析器单元测试 ─────────────────────────────────────
+    // ── Parser unit tests ─────────────────────────────────────
 
     #[test]
     fn test_parser_simple_addition() {

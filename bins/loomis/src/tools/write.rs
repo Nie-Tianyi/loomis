@@ -1,9 +1,9 @@
-//! [`WriteTool`] — 文件写入工具。
+//! [`WriteTool`] — File writing tool.
 //!
-//! 创建或覆写文件内容。自动创建缺失的父目录。
+//! Creates or overwrites file content. Missing parent directories are created automatically.
 //!
-//! 通过 [`Progress::InProgress`] 事件将写入内容流式预览到 TUI，
-//! 让用户在工具执行期间即时看到正在写入的内容。
+//! Streams the written content to the TUI via [`Progress::InProgress`] events
+//! so the user sees what's being written while the tool executes.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -17,7 +17,7 @@ use tools::{FsError, Progress, ProgressStream, ToolError, tool};
 #[cfg(test)]
 use tools::SandboxConfig;
 
-/// Write 工具的参数。
+/// Arguments for the write tool.
 #[derive(JsonSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WriteArgs {
@@ -34,9 +34,9 @@ pub(crate) struct WriteArgs {
     pub content: String,
 }
 
-/// 写入文件内容的工具。
+/// Tool for writing file content.
 ///
-/// # 参数
+/// # Arguments
 ///
 /// ```json
 /// {"file_path": "output/result.md", "content": "# Hello\n\nWorld"}
