@@ -1191,13 +1191,23 @@ fn draw_slash_completion(frame: &mut Frame, input_area: Rect, sc: &SlashCompleti
         .border_style(Style::default().fg(theme::ACCENT))
         .style(Style::default().bg(theme::OVERLAY_BG));
 
+    // Slide the visible window so the selected item is always in view.
+    let start = if sc.selected < max_visible {
+        0
+    } else {
+        (sc.selected + 1)
+            .saturating_sub(max_visible)
+            .min(sc.matches.len().saturating_sub(max_visible))
+    };
+
     let lines: Vec<Line<'_>> = sc
         .matches
         .iter()
+        .skip(start)
         .take(max_visible)
         .enumerate()
         .map(|(i, cmd)| {
-            let is_selected = i == sc.selected;
+            let is_selected = i + start == sc.selected;
             let (marker, style) = if is_selected {
                 (
                     theme::ICON_SELECTED,
