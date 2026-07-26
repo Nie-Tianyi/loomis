@@ -57,6 +57,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         plan_mode,
         skill_registry,
         active_skills,
+        shell_filter,
     } = kit;
 
     // ── Create command channel ────────────────────────────────────
@@ -106,6 +107,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         plan_mode,
         skill_registry,
         active_skills,
+        shell_filter,
     );
 
     // ── Event loop ───────────────────────────────────────────────────
@@ -140,6 +142,18 @@ fn run_event_loop(
     let mut pending_events: Vec<AgentEvent> = Vec::new();
 
     loop {
+        // ── Advance spinner ──────────────────────────────────────────
+        // The loop wakes at least every 50ms (poll timeout below), so the
+        // spinner ticks without any extra timer machinery.
+        let now = std::time::Instant::now();
+        if app.streaming
+            && now.duration_since(app.last_spinner_tick)
+                >= std::time::Duration::from_millis(super::theme::SPINNER_INTERVAL_MS)
+        {
+            app.spinner_frame = (app.spinner_frame + 1) % super::theme::SPINNER_FRAMES.len();
+            app.last_spinner_tick = now;
+        }
+
         // ── Render ───────────────────────────────────────────────────
         terminal.draw(|frame| super::ui::draw(frame, app))?;
 
@@ -169,7 +183,7 @@ fn run_event_loop(
                 }
                 Event::Mouse(mouse_event) => {
                     app.handle_mouse_event(&mouse_event);
-                },
+                }
                 _ => {}
             }
         }

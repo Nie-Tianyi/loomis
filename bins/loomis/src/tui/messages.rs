@@ -125,6 +125,97 @@ pub enum TuiCommand {
     Exit,
 }
 
+// ── Slash Completion ─────────────────────────────────────────────────────────────
+
+/// Static metadata for one slash command — drives the completion popup
+/// (Nielsen #6: recognition rather than recall).
+#[derive(Debug)]
+pub struct CommandInfo {
+    /// Command name without the leading `/`.
+    pub name: &'static str,
+    /// Usage line shown in the popup, e.g. `/save <name>`.
+    pub usage: &'static str,
+    /// One-line description shown dimmed next to the usage.
+    pub desc: &'static str,
+}
+
+/// All slash commands in display order.
+pub static SLASH_COMMANDS: &[CommandInfo] = &[
+    CommandInfo {
+        name: "exit",
+        usage: "/exit",
+        desc: "Quit the application",
+    },
+    CommandInfo {
+        name: "new",
+        usage: "/new",
+        desc: "Start a new conversation",
+    },
+    CommandInfo {
+        name: "init",
+        usage: "/init",
+        desc: "Initialize project rules (LOOMIS.md)",
+    },
+    CommandInfo {
+        name: "plan",
+        usage: "/plan",
+        desc: "Toggle plan mode",
+    },
+    CommandInfo {
+        name: "approve",
+        usage: "/approve",
+        desc: "Approve plan and exit plan mode",
+    },
+    CommandInfo {
+        name: "save",
+        usage: "/save <name>",
+        desc: "Save conversation as a named thread",
+    },
+    CommandInfo {
+        name: "resume",
+        usage: "/resume [name]",
+        desc: "Restore a saved thread",
+    },
+    CommandInfo {
+        name: "threads",
+        usage: "/threads",
+        desc: "Open the thread picker",
+    },
+    CommandInfo {
+        name: "stats",
+        usage: "/stats",
+        desc: "Show memory statistics",
+    },
+    CommandInfo {
+        name: "tools",
+        usage: "/tools",
+        desc: "List registered tools",
+    },
+    CommandInfo {
+        name: "skill",
+        usage: "/skill <name>",
+        desc: "Load a named skill",
+    },
+    CommandInfo {
+        name: "help",
+        usage: "/help",
+        desc: "Show the help message",
+    },
+];
+
+/// State for the slash-command completion popup.
+///
+/// `Some` while the input starts with `/` and at least one command matches
+/// the typed prefix. Keyboard input is intercepted until the popup is
+/// accepted (Tab/Enter) or dismissed (Esc).
+#[derive(Debug, Clone)]
+pub struct SlashCompletionState {
+    /// Commands matching the current input prefix.
+    pub matches: Vec<&'static CommandInfo>,
+    /// Currently highlighted index in `matches`.
+    pub selected: usize,
+}
+
 // ── ThreadPicker ──────────────────────────────────────────────────────────────────
 
 /// State for the thread-selection overlay.

@@ -35,6 +35,7 @@ mod input;
 mod markdown;
 mod messages;
 mod shell_exec;
+mod theme;
 mod ui;
 
 pub use app::App;

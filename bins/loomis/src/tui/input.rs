@@ -10,7 +10,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use provider::{Message, Role};
 
 use super::app::App;
-use super::messages::{ChatMessage, TuiCommand, is_valid_thread_name, truncate_for_display};
+use super::messages::{
+    ChatMessage, SLASH_COMMANDS, SlashCompletionState, TuiCommand, is_valid_thread_name,
+    truncate_for_display,
+};
+use crate::sandbox::shell_filter::CommandVerdict;
 
 // ── Keyboard Handling ────────────────────────────────────────────────────────────
 
@@ -31,6 +35,33 @@ impl App {
             return self.handle_intervene_key(key);
         }
 
+        // ── Shell confirmation (y/n) intercepts most keys ───────
+        if self.pending_shell_confirm.is_some() {
+            return self.handle_shell_confirm_key(key);
+        }
+
+        // ── Help overlay swallows keys until dismissed ──────────
+        if self.show_help {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::F(1) => {
+                    self.show_help = false;
+                }
+                _ => {} // swallow everything else while help is open
+            }
+            return None;
+        }
+
+        // ── F1 opens help from anywhere (except modals above) ───
+        if key.code == KeyCode::F(1) {
+            self.show_help = true;
+            return None;
+        }
+
+        // ── Slash completion intercepts navigation/editing ──────
+        if self.slash_completion.is_some() {
+            return self.handle_slash_completion_key(key);
+        }
+
         match key.code {
             // ── Submit / Newline ───────────────────────────────
             KeyCode::Enter => {
@@ -40,6 +71,10 @@ impl App {
                     self.input_cursor += 1;
                     return None;
                 }
+
+                // Any real submission ends the completion session.
+                self.slash_completion = None;
+                self.slash_dismissed = false;
 
                 let input = self.input.trim().to_string();
                 if input.is_empty() {
@@ -91,7 +126,28 @@ impl App {
                         });
                         return None;
                     }
-                    return Some(TuiCommand::RunShell(command));
+                    // Classify with the same sandbox policy the SandboxHook
+                    // applies to LLM-initiated shell calls (Nielsen #5).
+                    match self.shell_filter.classify(&command) {
+                        CommandVerdict::AutoApproved => {
+                            return Some(TuiCommand::RunShell(command));
+                        }
+                        CommandVerdict::Blocked { reason } => {
+                            self.messages.push(ChatMessage::Error {
+                                content: format!("Blocked by sandbox policy: {reason}"),
+                                timestamp: ChatMessage::now_timestamp(),
+                            });
+                            return None;
+                        }
+                        CommandVerdict::RequiresApproval => {
+                            self.messages.push(ChatMessage::System {
+                                content: format!("Run shell command `!{command}`? (y/n)"),
+                                timestamp: ChatMessage::now_timestamp(),
+                            });
+                            self.pending_shell_confirm = Some(command);
+                            return None;
+                        }
+                    }
                 }
 
                 // Check for slash commands
@@ -123,6 +179,8 @@ impl App {
                 self.auto_scroll = true;
                 self.scroll_offset = 0;
                 self.streaming = true;
+                // Remember for Ctrl+R retry after a failure.
+                self.last_submitted_input = Some(input.clone());
 
                 Some(TuiCommand::RunAgent(input))
             }
@@ -149,13 +207,19 @@ impl App {
                     self.selection = None;
                     return None;
                 }
-                // Normal behavior: cancel streaming or exit.
+                // Cancel streaming — Ctrl+C is the "interrupt" key here.
                 if self.streaming {
                     self.streaming = false;
                     return Some(TuiCommand::CancelGeneration);
                 }
-                self.should_quit = true;
-                Some(TuiCommand::Exit)
+                // Idle: Ctrl+C does NOT quit (Nielsen #4: consistency — the
+                // key means copy/cancel everywhere). Point at the real exit
+                // bindings instead.
+                self.messages.push(ChatMessage::System {
+                    content: "Press Ctrl+D to exit, or type /exit.".into(),
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+                None
             }
 
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -166,6 +230,26 @@ impl App {
                 // Otherwise: delete forward
                 self.delete_at_cursor();
                 None
+            }
+
+            // ── Retry last submission (Nielsen #9) ───────────────
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.streaming {
+                    return None;
+                }
+                let Some(last) = self.last_submitted_input.clone() else {
+                    return None;
+                };
+                // Re-submit the previous input as-is. Not pushed to history
+                // again — it's already there from the first submission.
+                self.messages.push(ChatMessage::User {
+                    content: last.clone(),
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+                self.auto_scroll = true;
+                self.scroll_offset = 0;
+                self.streaming = true;
+                Some(TuiCommand::RunAgent(last))
             }
 
             KeyCode::Esc => {
@@ -341,6 +425,8 @@ impl App {
                     self.input.remove(prev);
                     self.input_cursor = prev;
                 }
+                // Editing the filter text starts a new completion session.
+                self.slash_dismissed = false;
                 None
             }
             KeyCode::Delete => {
@@ -358,10 +444,22 @@ impl App {
                     return self.handle_intervene_key(key);
                 }
 
+                // `?` on an empty, idle input opens the help overlay
+                // instead of inserting a character (Nielsen #10).
+                if c == '?' && self.input.is_empty() && !self.streaming {
+                    self.show_help = true;
+                    return None;
+                }
+
                 // On some terminals Shift+Enter sends a newline char
                 // (handled above via Enter). Plain char insertion:
                 self.input.insert(self.input_cursor, c);
                 self.input_cursor += c.len_utf8();
+
+                // Activate slash completion when typing a `/` prefix.
+                if !self.streaming && !self.slash_dismissed && self.input.starts_with('/') {
+                    self.update_slash_completion();
+                }
                 None
             }
 
@@ -373,6 +471,151 @@ impl App {
 // ── Slash Commands ───────────────────────────────────────────────────────────────
 
 impl App {
+    /// Key handling while a `!command` is awaiting y/n confirmation.
+    ///
+    /// `y`/`Enter` executes, `n`/`Esc` cancels; everything else is
+    /// swallowed so the confirmation can't be bypassed accidentally.
+    fn handle_shell_confirm_key(&mut self, key: KeyEvent) -> Option<TuiCommand> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                let cmd = self
+                    .pending_shell_confirm
+                    .take()
+                    .expect("pending_shell_confirm checked before dispatch");
+                self.auto_scroll = true;
+                Some(TuiCommand::RunShell(cmd))
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                let cmd = self
+                    .pending_shell_confirm
+                    .take()
+                    .expect("pending_shell_confirm checked before dispatch");
+                self.messages.push(ChatMessage::System {
+                    content: format!("Shell command cancelled: !{cmd}"),
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Recomputes the completion popup contents from the current input.
+    ///
+    /// Called after every character insertion while the input starts with
+    /// `/`. Shows all commands on a bare `/`, filters by name prefix as the
+    /// user types, and closes the popup when nothing matches.
+    fn update_slash_completion(&mut self) {
+        let filter = self.input[1..].to_lowercase();
+        let matches: Vec<&'static super::messages::CommandInfo> = SLASH_COMMANDS
+            .iter()
+            .filter(|c| filter.is_empty() || c.name.starts_with(&filter))
+            .collect();
+
+        if matches.is_empty() {
+            self.slash_completion = None;
+            return;
+        }
+
+        // Keep the previous selection when it's still in range.
+        let selected = self
+            .slash_completion
+            .as_ref()
+            .map(|s| s.selected.min(matches.len() - 1))
+            .unwrap_or(0);
+        self.slash_completion = Some(SlashCompletionState { matches, selected });
+    }
+
+    /// Replaces the input with the full command name of the currently
+    /// highlighted completion entry.
+    fn accept_slash_completion(&mut self) {
+        if let Some(ref sc) = self.slash_completion
+            && let Some(cmd) = sc.matches.get(sc.selected)
+        {
+            self.input = format!("/{} ", cmd.name);
+            self.input_cursor = self.input.len();
+        }
+        self.slash_completion = None;
+    }
+
+    /// Key handling while the completion popup is open.
+    ///
+    /// Navigation keys are consumed by the popup; printable characters and
+    /// Backspace edit the filter and re-filter; Esc dismisses without
+    /// touching the input; Tab/Right accepts; Enter accepts and submits.
+    fn handle_slash_completion_key(&mut self, key: KeyEvent) -> Option<TuiCommand> {
+        match key.code {
+            KeyCode::Esc => {
+                // Dismiss the popup only — the typed text stays. Further
+                // typing won't reopen it until the filter text changes.
+                self.slash_completion = None;
+                self.slash_dismissed = true;
+                None
+            }
+            KeyCode::Up => {
+                if let Some(ref mut sc) = self.slash_completion {
+                    sc.selected = sc.selected.saturating_sub(1);
+                }
+                None
+            }
+            KeyCode::Down => {
+                if let Some(ref mut sc) = self.slash_completion {
+                    sc.selected = (sc.selected + 1).min(sc.matches.len().saturating_sub(1));
+                }
+                None
+            }
+            KeyCode::Tab | KeyCode::Right => {
+                // Accept the highlighted command, keep editing.
+                self.accept_slash_completion();
+                None
+            }
+            KeyCode::Enter => {
+                // Commands with required arguments (`/save <name>`) are
+                // accepted but not submitted — the user still has to type
+                // the argument (Nielsen #5: error prevention).
+                let needs_args = self
+                    .slash_completion
+                    .as_ref()
+                    .and_then(|sc| sc.matches.get(sc.selected))
+                    .map(|cmd| cmd.usage.contains('<'))
+                    .unwrap_or(false);
+                self.accept_slash_completion();
+                if needs_args {
+                    None
+                } else {
+                    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+                    self.handle_key(enter)
+                }
+            }
+            KeyCode::Backspace => {
+                if self.input_cursor > 0 {
+                    let prev = self.prev_char_boundary();
+                    self.input.remove(prev);
+                    self.input_cursor = prev;
+                }
+                // Deleted past the `/`? Close for good this session.
+                if !self.input.starts_with('/') {
+                    self.slash_completion = None;
+                } else {
+                    self.update_slash_completion();
+                }
+                None
+            }
+            KeyCode::Char(c) => {
+                self.input.insert(self.input_cursor, c);
+                self.input_cursor += c.len_utf8();
+                self.update_slash_completion();
+                None
+            }
+            // Anything else (Home/End/Left/PgUp/…): close the popup and
+            // re-dispatch through the normal handler.
+            _ => {
+                self.slash_completion = None;
+                self.handle_key(key)
+            }
+        }
+    }
+
     /// Handles slash commands that don't need the agent. Returns
     /// `Some(TuiCommand)` when the command needs agent-thread action.
     fn handle_slash_command(&mut self, input: &str) -> Option<Option<TuiCommand>> {

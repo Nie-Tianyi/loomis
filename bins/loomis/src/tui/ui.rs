@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -17,7 +17,10 @@ use serde_json;
 
 use super::app::App;
 use super::markdown::render_markdown;
-use super::messages::{ChatMessage, ThreadPicker, ToolCallState};
+use super::messages::{
+    ChatMessage, SLASH_COMMANDS, SlashCompletionState, ThreadPicker, ToolCallState,
+};
+use super::theme;
 
 // ── Layout ───────────────────────────────────────────────────────────────────────
 
@@ -45,9 +48,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_input(frame, layout[1], app);
     draw_status(frame, layout[2], app);
 
+    // ── Slash Completion Popup ─────────────────────────────────
+    if let Some(ref sc) = app.slash_completion {
+        draw_slash_completion(frame, layout[1], sc);
+    }
+
     // ── Thread Picker Overlay ──────────────────────────────────
     if let Some(ref picker) = app.thread_picker {
         draw_thread_picker(frame, area, picker);
+    }
+
+    // ── Help Overlay ───────────────────────────────────────────
+    if app.show_help {
+        draw_help_overlay(frame, area);
     }
 
     // Place the hardware cursor inside the input area.
@@ -71,10 +84,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// appear/disappear transitions never leave residual characters at the
 /// right edge.
 fn draw_chat(frame: &mut Frame, area: Rect, app: &mut App) {
+    // Show the current thread name in the border title so the user always
+    // knows which conversation they're in (Nielsen #1: system status).
+    let thread = app
+        .conversation_title
+        .as_deref()
+        .map(|t| truncate_to_width(t, 40))
+        .unwrap_or_else(|| "new".to_string());
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Chat ")
-        .border_style(Style::default().fg(Color::DarkGray));
+        .title(format!(" Chat — {thread} "))
+        .border_style(Style::default().fg(theme::BORDER));
 
     let inner = block.inner(area);
     let visible_height = inner.height.max(1) as usize;
@@ -87,7 +107,9 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &mut App) {
     let raw_lines: Vec<Line<'_>> = app
         .messages
         .iter()
-        .flat_map(|msg| message_to_lines(msg, text_width, app.intervene_selection))
+        .flat_map(|msg| {
+            message_to_lines(msg, text_width, app.intervene_selection, app.spinner_frame)
+        })
         .collect();
     let all_lines = wrap_to_width(raw_lines, text_width);
     let total_lines = all_lines.len();
@@ -152,16 +174,16 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &mut App) {
                 frame.buffer_mut().set_string(
                     scrollbar_area.x,
                     y,
-                    "█",
-                    Style::default().fg(Color::DarkGray),
+                    theme::SCROLL_THUMB,
+                    Style::default().fg(theme::SCROLLBAR_THUMB),
                 );
             } else {
                 frame.buffer_mut().set_string(
                     scrollbar_area.x,
                     y,
-                    "│",
+                    theme::SCROLL_TRACK,
                     Style::default()
-                        .fg(Color::Rgb(60, 60, 60))
+                        .fg(theme::SCROLLBAR_TRACK)
                         .add_modifier(Modifier::DIM),
                 );
             }
@@ -172,18 +194,18 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &mut App) {
     if let Some(ref sel) = app.selection {
         let start = sel.start_line.min(sel.end_line);
         let end = sel.start_line.max(sel.end_line);
-        let highlight_bg = Color::Rgb(50, 60, 90); // blue-gray selection bg
+        let highlight_bg = theme::SELECTION_BG;
 
         for visible_row in 0..visible_height {
             let actual_line = scroll as usize + visible_row;
             if actual_line >= start && actual_line <= end {
                 let y = inner.y + visible_row as u16;
                 for x in inner.x..inner.x + inner.width {
-                if let Some(cell) = frame.buffer_mut().cell_mut((x, y))
-                    && cell.symbol() != " "
-                {
-                    cell.bg = highlight_bg;
-                }
+                    if let Some(cell) = frame.buffer_mut().cell_mut((x, y))
+                        && cell.symbol() != " "
+                    {
+                        cell.bg = highlight_bg;
+                    }
                 }
             }
         }
@@ -198,11 +220,10 @@ fn message_to_lines(
     msg: &ChatMessage,
     area_width: u16,
     intervene_selection: Option<usize>,
+    spinner_frame: usize,
 ) -> Vec<Line<'_>> {
     // ── Timestamp style (shared across all variants) ───────────────
-    let ts_style = Style::default()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::DIM);
+    let ts_style = theme::ts_style();
 
     match msg {
         ChatMessage::User { content, timestamp } => {
@@ -213,17 +234,17 @@ fn message_to_lines(
                     lines.push(Line::from(vec![
                         Span::styled(format!("{timestamp} "), ts_style),
                         Span::styled(
-                            "> ",
+                            theme::ICON_USER,
                             Style::default()
-                                .fg(Color::Cyan)
+                                .fg(theme::ACCENT)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(*line, Style::default().fg(Color::White)),
+                        Span::styled(*line, Style::default().fg(theme::TEXT_PRIMARY)),
                     ]));
                 } else {
                     lines.push(Line::from(vec![
                         Span::raw("       "), // align with timestamp + "> "
-                        Span::styled(*line, Style::default().fg(Color::White)),
+                        Span::styled(*line, Style::default().fg(theme::TEXT_PRIMARY)),
                     ]));
                 }
             }
@@ -244,7 +265,7 @@ fn message_to_lines(
 
         ChatMessage::Reasoning { content, timestamp } => {
             let reasoning_style = Style::default()
-                .fg(Color::Yellow)
+                .fg(theme::WARNING)
                 .add_modifier(Modifier::DIM)
                 .add_modifier(Modifier::ITALIC);
             let content_lines: Vec<&str> = content.lines().collect();
@@ -286,37 +307,41 @@ fn message_to_lines(
                         lines.push(Line::from(vec![
                             Span::styled(format!("{timestamp} "), ts_style),
                             Span::styled(
-                                "$ ",
+                                theme::ICON_SHELL,
                                 Style::default()
-                                    .fg(Color::Green)
+                                    .fg(theme::SUCCESS)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(args.as_str(), Style::default().fg(Color::Green)),
+                            Span::styled(args.as_str(), Style::default().fg(theme::SUCCESS)),
                         ]));
                         lines.push(Line::from(vec![
                             Span::raw("       "),
                             Span::styled(
                                 "Running…",
                                 Style::default()
-                                    .fg(Color::Yellow)
+                                    .fg(theme::WARNING)
                                     .add_modifier(Modifier::DIM),
                             ),
                         ]));
                     } else {
                         // Header: spinner + tool name + resource summary — yellow.
+                        // The spinner icon animates: the event loop advances
+                        // `spinner_frame` every SPINNER_INTERVAL_MS.
+                        let spinner_icon =
+                            theme::SPINNER_FRAMES[spinner_frame % theme::SPINNER_FRAMES.len()];
                         let resource = tool_resource_summary(name, args);
                         let mut header_spans = vec![
                             Span::styled(format!("{timestamp} "), ts_style),
                             Span::styled(
-                                "◌ ",
+                                format!("{spinner_icon} "),
                                 Style::default()
-                                    .fg(Color::Yellow)
+                                    .fg(theme::WARNING)
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(
                                 name.as_str(),
                                 Style::default()
-                                    .fg(Color::Yellow)
+                                    .fg(theme::WARNING)
                                     .add_modifier(Modifier::BOLD),
                             ),
                         ];
@@ -327,7 +352,7 @@ fn message_to_lines(
                             header_spans.push(Span::styled(
                                 res.to_owned(),
                                 Style::default()
-                                    .fg(Color::White)
+                                    .fg(theme::TEXT_PRIMARY)
                                     .add_modifier(Modifier::DIM),
                             ));
                         }
@@ -345,7 +370,7 @@ fn message_to_lines(
                             Span::styled(
                                 truncated,
                                 Style::default()
-                                    .fg(Color::Yellow)
+                                    .fg(theme::WARNING)
                                     .add_modifier(Modifier::DIM),
                             ),
                         ]));
@@ -358,12 +383,12 @@ fn message_to_lines(
                         lines.push(Line::from(vec![
                             Span::styled(format!("{timestamp} "), ts_style),
                             Span::styled(
-                                "$ ",
+                                theme::ICON_SHELL,
                                 Style::default()
-                                    .fg(Color::Green)
+                                    .fg(theme::SUCCESS)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(args.as_str(), Style::default().fg(Color::Green)),
+                            Span::styled(args.as_str(), Style::default().fg(theme::SUCCESS)),
                         ]));
                         // Multi-line output — dim gray, like old ShellOutput.
                         for line in output.lines() {
@@ -371,7 +396,9 @@ fn message_to_lines(
                                 Span::raw("       "),
                                 Span::styled(
                                     line,
-                                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                                    Style::default()
+                                        .fg(theme::TEXT_OUTPUT)
+                                        .add_modifier(Modifier::DIM),
                                 ),
                             ]));
                         }
@@ -380,15 +407,15 @@ fn message_to_lines(
                         lines.push(Line::from(vec![
                             Span::styled(format!("{timestamp} "), ts_style),
                             Span::styled(
-                                "✓ ",
+                                theme::ICON_SUCCESS,
                                 Style::default()
-                                    .fg(Color::Green)
+                                    .fg(theme::SUCCESS)
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(
                                 name.as_str(),
                                 Style::default()
-                                    .fg(Color::Green)
+                                    .fg(theme::SUCCESS)
                                     .add_modifier(Modifier::BOLD),
                             ),
                         ]));
@@ -401,7 +428,7 @@ fn message_to_lines(
                                     Span::styled(
                                         preview,
                                         Style::default()
-                                            .fg(Color::Gray)
+                                            .fg(theme::TEXT_OUTPUT)
                                             .add_modifier(Modifier::DIM),
                                     ),
                                 ]));
@@ -415,15 +442,15 @@ fn message_to_lines(
                     lines.push(Line::from(vec![
                         Span::styled(format!("{timestamp} "), ts_style),
                         Span::styled(
-                            "⊘ ",
+                            theme::ICON_REJECTED,
                             Style::default()
-                                .fg(Color::Yellow)
+                                .fg(theme::WARNING)
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
                             name.as_str(),
                             Style::default()
-                                .fg(Color::Yellow)
+                                .fg(theme::WARNING)
                                 .add_modifier(Modifier::BOLD),
                         ),
                     ]));
@@ -435,7 +462,7 @@ fn message_to_lines(
                             Span::styled(
                                 preview,
                                 Style::default()
-                                    .fg(Color::Yellow)
+                                    .fg(theme::WARNING)
                                     .add_modifier(Modifier::DIM),
                             ),
                         ]));
@@ -447,12 +474,16 @@ fn message_to_lines(
                     lines.push(Line::from(vec![
                         Span::styled(format!("{timestamp} "), ts_style),
                         Span::styled(
-                            "✗ ",
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                            theme::ICON_ERROR,
+                            Style::default()
+                                .fg(theme::ERROR)
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
                             name.as_str(),
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(theme::ERROR)
+                                .add_modifier(Modifier::BOLD),
                         ),
                     ]));
                     // Error message — red, dimmed.
@@ -462,7 +493,9 @@ fn message_to_lines(
                             Span::raw("       "),
                             Span::styled(
                                 preview,
-                                Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
+                                Style::default()
+                                    .fg(theme::ERROR)
+                                    .add_modifier(Modifier::DIM),
                             ),
                         ]));
                     }
@@ -482,9 +515,9 @@ fn message_to_lines(
                         vec![
                             Span::styled(format!("{timestamp} "), ts_style),
                             Span::styled(
-                                "ℹ ",
+                                theme::ICON_INFO,
                                 Style::default()
-                                    .fg(Color::Magenta)
+                                    .fg(theme::INFO)
                                     .add_modifier(Modifier::BOLD),
                             ),
                         ]
@@ -523,29 +556,29 @@ fn message_to_lines(
                 lines.push(Line::from(vec![
                     Span::styled(format!("{timestamp} "), ts_style),
                     Span::styled(
-                        "✓ ",
+                        theme::ICON_SUCCESS,
                         Style::default()
-                            .fg(Color::Green)
+                            .fg(theme::SUCCESS)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(title.as_str(), Style::default().fg(Color::Yellow)),
+                    Span::styled(title.as_str(), Style::default().fg(theme::WARNING)),
                     Span::raw(" "),
-                    Span::styled(summary, Style::default().fg(Color::White)),
+                    Span::styled(summary, Style::default().fg(theme::TEXT_PRIMARY)),
                 ]));
             } else {
                 // Title
                 lines.push(Line::from(vec![
                     Span::styled(format!("{timestamp} "), ts_style),
                     Span::styled(
-                        "⚡ ",
+                        theme::ICON_INTERVENTION,
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme::WARNING)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         title.as_str(),
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme::WARNING)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
@@ -553,7 +586,7 @@ fn message_to_lines(
                 for desc_line in description.lines() {
                     lines.push(Line::from(vec![
                         Span::raw("       "),
-                        Span::styled(desc_line, Style::default().fg(Color::Cyan)),
+                        Span::styled(desc_line, Style::default().fg(theme::ACCENT)),
                     ]));
                 }
                 // Options — each on its own line, highlighted when selected.
@@ -564,14 +597,14 @@ fn message_to_lines(
                             (
                                 "  ▶ ",
                                 Style::default()
-                                    .fg(Color::Yellow)
+                                    .fg(theme::WARNING)
                                     .add_modifier(Modifier::BOLD),
                             )
                         } else {
                             (
                                 "    ",
                                 Style::default()
-                                    .fg(Color::DarkGray)
+                                    .fg(theme::TEXT_SECONDARY)
                                     .add_modifier(Modifier::DIM),
                             )
                         };
@@ -586,7 +619,9 @@ fn message_to_lines(
         }
 
         ChatMessage::Error { content, timestamp } => {
-            let error_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+            let error_style = Style::default()
+                .fg(theme::ERROR)
+                .add_modifier(Modifier::BOLD);
             let content_lines: Vec<&str> = content.lines().collect();
             content_lines
                 .iter()
@@ -814,15 +849,46 @@ fn split_at_display_width(text: &str, max_width: usize) -> (&str, &str) {
 /// highlighting on the active line.
 fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     let has_intervene = app.has_pending_intervene();
+    let plan_active = app.plan_mode.active.load(Ordering::SeqCst);
+    let spinner_icon = theme::SPINNER_FRAMES[app.spinner_frame % theme::SPINNER_FRAMES.len()];
 
+    // Title/border reflect the current interaction mode (Nielsen #1):
+    // intervention > shell confirm > plan mode > streaming > idle.
     let (style, title) = if has_intervene && app.intervene_text_mode {
-        (Style::default().fg(Color::Magenta), " Answer ")
+        (
+            Style::default().fg(theme::BORDER_CHOOSE),
+            " Answer ".to_string(),
+        )
     } else if has_intervene {
-        (Style::default().fg(Color::Magenta), " Choose ")
+        (
+            Style::default().fg(theme::BORDER_CHOOSE),
+            " Choose ".to_string(),
+        )
+    } else if app.pending_shell_confirm.is_some() {
+        (
+            Style::default().fg(theme::BORDER_CONFIRM),
+            " Confirm Shell ".to_string(),
+        )
+    } else if plan_active && app.streaming {
+        (
+            Style::default().fg(theme::BORDER_PLAN),
+            format!(" [PLAN] {spinner_icon} Inject "),
+        )
+    } else if plan_active {
+        (
+            Style::default().fg(theme::BORDER_PLAN),
+            " [PLAN] Input ".to_string(),
+        )
     } else if app.streaming {
-        (Style::default().fg(Color::Yellow), " Inject ")
+        (
+            Style::default().fg(theme::BORDER_INJECT),
+            format!(" {spinner_icon} Inject "),
+        )
     } else {
-        (Style::default().fg(Color::Cyan), " Input ")
+        (
+            Style::default().fg(theme::BORDER_INPUT),
+            " Input ".to_string(),
+        )
     };
 
     let block = Block::default()
@@ -831,22 +897,32 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
         .border_style(style);
 
     let cursor_style = if app.streaming {
-        Style::default().bg(Color::DarkGray).fg(Color::White)
+        Style::default()
+            .bg(theme::TEXT_SECONDARY)
+            .fg(theme::TEXT_PRIMARY)
     } else {
-        Style::default().bg(Color::White).fg(Color::Black)
+        Style::default()
+            .bg(theme::TEXT_PRIMARY)
+            .fg(theme::CURSOR_FG)
     };
 
     let display_lines = build_input_lines(app, cursor_style);
 
     // Show a hint when the input is empty
-    let lines: Vec<Line<'_>> = if app.input.is_empty() && has_intervene && app.intervene_text_mode {
+    let lines: Vec<Line<'_>> = if app.pending_shell_confirm.is_some() {
+        vec![
+            Line::from(Span::raw(" ")),
+            Line::from(Span::styled(
+                " y/Enter run  ·  n/Esc cancel",
+                theme::hint_style(),
+            )),
+        ]
+    } else if app.input.is_empty() && has_intervene && app.intervene_text_mode {
         vec![
             Line::from(Span::raw(" ")),
             Line::from(Span::styled(
                 " Type your response and press Enter. Esc to go back.",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
+                theme::hint_style(),
             )),
         ]
     } else if app.input.is_empty() && has_intervene {
@@ -854,9 +930,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
             Line::from(Span::raw(" ")),
             Line::from(Span::styled(
                 " ↑↓ to navigate  ·  Enter to select  ·  Esc to cancel",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
+                theme::hint_style(),
             )),
         ]
     } else if app.input.is_empty() && app.streaming {
@@ -864,9 +938,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
             Line::from(Span::raw(" ")),
             Line::from(Span::styled(
                 " Type to inject a hint while the agent is running. Enter to send.",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
+                theme::hint_style(),
             )),
         ]
     } else if app.input.is_empty() && !app.streaming {
@@ -874,9 +946,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
             Line::from(Span::raw(" ")),
             Line::from(Span::styled(
                 " Type a message and press Enter. Shift+Enter for newline. /help for commands.",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
+                theme::hint_style(),
             )),
         ]
     } else {
@@ -911,9 +981,9 @@ fn build_input_lines(app: &App, cursor_style: Style) -> Vec<Line<'_>> {
 
         // Prompt prefix on every line
         spans.push(Span::styled(
-            "> ",
+            theme::ICON_USER,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ));
 
@@ -950,9 +1020,9 @@ fn build_input_lines(app: &App, cursor_style: Style) -> Vec<Line<'_>> {
         // No content — show cursor on empty first line
         lines.push(Line::from(vec![
             Span::styled(
-                "> ",
+                theme::ICON_USER,
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" ", cursor_style),
@@ -966,38 +1036,54 @@ fn build_input_lines(app: &App, cursor_style: Style) -> Vec<Line<'_>> {
 
 /// Renders the single-line status bar at the bottom with better styling.
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
-    let bg_color = Color::Rgb(30, 40, 50);
-    let fg_color = Color::Rgb(180, 190, 200);
-    let accent = if app.streaming {
-        Color::Rgb(255, 180, 50)
-    } else {
-        Color::Rgb(80, 200, 120)
-    };
+    let (left_spans, accent_text, right) = build_status_content(app);
 
-    let (left, right, accent_text) = build_status_content(app);
-
-    let left_width = UnicodeWidthStr::width(left.as_str());
+    let left_width: usize = left_spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
     let accent_width = UnicodeWidthStr::width(accent_text.as_str());
     let right_width = UnicodeWidthStr::width(right.as_str());
     let total_space = area.width as usize;
 
-    let gap = if left_width + accent_width + right_width < total_space {
-        total_space - left_width - accent_width - right_width
+    // When space runs out, drop the right-side hint first — it is
+    // nice-to-have, while the left side carries the actual state.
+    let right = if left_width + accent_width + right_width + 1 > total_space {
+        String::new()
     } else {
-        1
+        right
     };
+    let right_width = UnicodeWidthStr::width(right.as_str());
 
-    let line = Line::from(vec![
-        Span::styled(left, Style::default().fg(fg_color).bg(bg_color)),
-        Span::styled(" ".repeat(gap), Style::default().fg(fg_color).bg(bg_color)),
-        Span::styled(accent_text, Style::default().fg(accent).bg(bg_color)),
-        Span::styled(right, Style::default().fg(Color::DarkGray).bg(bg_color)),
-    ]);
+    let gap = total_space
+        .saturating_sub(left_width + accent_width + right_width)
+        .max(1);
+
+    let mut spans = left_spans;
+    spans.push(Span::styled(
+        " ".repeat(gap),
+        Style::default().fg(theme::STATUS_FG).bg(theme::STATUS_BG),
+    ));
+    let accent_color = if app.streaming {
+        theme::STATUS_ACCENT_STREAMING
+    } else {
+        theme::STATUS_ACCENT_IDLE
+    };
+    spans.push(Span::styled(
+        accent_text,
+        Style::default().fg(accent_color).bg(theme::STATUS_BG),
+    ));
+    spans.push(Span::styled(
+        right,
+        Style::default()
+            .fg(theme::TEXT_SECONDARY)
+            .bg(theme::STATUS_BG),
+    ));
 
     // Clear residual characters from previous frame before rendering.
     frame.render_widget(Clear, area);
 
-    let paragraph = Paragraph::new(line);
+    let paragraph = Paragraph::new(Line::from(spans));
     frame.render_widget(paragraph, area);
 }
 
@@ -1030,8 +1116,8 @@ fn draw_thread_picker(frame: &mut Frame, area: Rect, picker: &ThreadPicker) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Resume Conversation ")
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Rgb(20, 25, 35)));
+        .border_style(Style::default().fg(theme::ACCENT))
+        .style(Style::default().bg(theme::OVERLAY_BG));
 
     let inner = block.inner(popup_rect);
 
@@ -1052,10 +1138,10 @@ fn draw_thread_picker(frame: &mut Frame, area: Rect, picker: &ThreadPicker) {
 
         let style = if is_selected {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme::TEXT_SECONDARY)
         };
 
         lines.push(Line::from(vec![
@@ -1073,10 +1159,144 @@ fn draw_thread_picker(frame: &mut Frame, area: Rect, picker: &ThreadPicker) {
     let footer = Line::from(Span::styled(
         " ↑↓ navigate   Enter select   Esc cancel ",
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme::TEXT_SECONDARY)
             .add_modifier(Modifier::DIM),
     ));
     lines.push(footer);
+
+    let paragraph = Paragraph::new(Text::from(lines)).block(block);
+    frame.render_widget(paragraph, popup_rect);
+}
+
+// ── Slash Completion Popup ──────────────────────────────────────────────────────
+
+/// Draws the slash-command completion popup directly above the input area
+/// (Nielsen #6: recognition rather than recall). Covers the bottom rows of
+/// the chat area — standard popup behavior, same as the thread picker.
+fn draw_slash_completion(frame: &mut Frame, input_area: Rect, sc: &SlashCompletionState) {
+    let max_visible = sc.matches.len().min(8);
+    let popup_height = (max_visible + 2) as u16; // + top/bottom border
+    let popup_rect = Rect {
+        x: input_area.x,
+        y: input_area.y.saturating_sub(popup_height),
+        width: input_area.width.min(60),
+        height: popup_height,
+    };
+
+    frame.render_widget(Clear, popup_rect);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Commands — Tab accept · Enter run · Esc dismiss ")
+        .border_style(Style::default().fg(theme::ACCENT))
+        .style(Style::default().bg(theme::OVERLAY_BG));
+
+    let lines: Vec<Line<'_>> = sc
+        .matches
+        .iter()
+        .take(max_visible)
+        .enumerate()
+        .map(|(i, cmd)| {
+            let is_selected = i == sc.selected;
+            let (marker, style) = if is_selected {
+                (
+                    theme::ICON_SELECTED,
+                    Style::default()
+                        .fg(theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                ("  ", Style::default().fg(theme::TEXT_SECONDARY))
+            };
+            Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(format!("{:<14}", cmd.usage), style),
+                Span::styled(
+                    cmd.desc,
+                    Style::default()
+                        .fg(theme::TEXT_DIM)
+                        .add_modifier(Modifier::DIM),
+                ),
+            ])
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(Text::from(lines)).block(block);
+    frame.render_widget(paragraph, popup_rect);
+}
+
+// ── Help Overlay ────────────────────────────────────────────────────────────────
+
+/// Draws a centered help overlay with all commands, key bindings, and shell
+/// prefixes (Nielsen #10: help and documentation). Dismissed by any key.
+fn draw_help_overlay(frame: &mut Frame, area: Rect) {
+    let popup_width = ((area.width as f32 * 0.75) as u16).min(76);
+    let popup_height = area.height.saturating_sub(4).min(32);
+    let popup_rect = Rect {
+        x: area.x + area.width.saturating_sub(popup_width) / 2,
+        y: area.y + area.height.saturating_sub(popup_height) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(Clear, popup_rect);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Help — press any key to close ")
+        .border_style(Style::default().fg(theme::ACCENT))
+        .style(Style::default().bg(theme::OVERLAY_BG));
+
+    let section = |title: &str| {
+        Line::from(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ))
+    };
+    let text = Style::default().fg(theme::TEXT_DIM);
+    let dim = theme::hint_style();
+
+    let mut lines: Vec<Line<'static>> = vec![section("Commands")];
+    for cmd in SLASH_COMMANDS {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:<16}", cmd.usage), text),
+            Span::styled(cmd.desc, dim),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(section("Keys"));
+    for (k, d) in [
+        ("Enter", "send · inject hint while running"),
+        ("Shift+Enter", "insert newline"),
+        ("Tab / Right", "accept slash completion"),
+        ("Up / Down", "input history · completion nav"),
+        ("PgUp / PgDn", "scroll chat · mouse wheel works too"),
+        ("Esc", "cancel generation · close popup · clear selection"),
+        ("Ctrl+C", "copy selection · cancel generation"),
+        ("Ctrl+D", "exit (empty input) · delete char forward"),
+        ("Ctrl+R", "retry the last submission after a failure"),
+        ("? / F1", "toggle this help"),
+    ] {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:<16}", k), text),
+            Span::styled(d, dim),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(section("Shell"));
+    for (k, d) in [
+        ("!<cmd>", "run a shell command, share output with the agent"),
+        ("!!text", "send a literal message starting with !"),
+    ] {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:<16}", k), text),
+            Span::styled(d, dim),
+        ]));
+    }
 
     let paragraph = Paragraph::new(Text::from(lines)).block(block);
     frame.render_widget(paragraph, popup_rect);
@@ -1093,10 +1313,25 @@ fn format_human(n: usize, suffix_lower: &str, suffix_upper: &str) -> String {
     }
 }
 
-/// Builds the left, accent, and right portions of the status bar.
-fn build_status_content(app: &App) -> (String, String, String) {
-    let model = &app.model;
+/// Builds the left spans, accent text, and right hint of the status bar.
+fn build_status_content(app: &App) -> (Vec<Span<'static>>, String, String) {
+    let base = Style::default().fg(theme::STATUS_FG).bg(theme::STATUS_BG);
     let msgs = app.messages.len();
+
+    let mut left_spans: Vec<Span<'static>> = vec![Span::styled(" ", base)];
+
+    // Plan-mode badge — bold amber so the restrictive mode is hard to miss
+    // (Nielsen #1: visibility of system status).
+    if app.plan_mode.active.load(Ordering::SeqCst) {
+        left_spans.push(Span::styled(
+            " PLAN ",
+            Style::default()
+                .fg(theme::WARNING)
+                .bg(theme::STATUS_BG)
+                .add_modifier(Modifier::BOLD),
+        ));
+        left_spans.push(Span::styled("| ", base));
+    }
 
     // Build todo progress snippet
     let todo_part = {
@@ -1126,45 +1361,51 @@ fn build_status_content(app: &App) -> (String, String, String) {
             let llm = m.llm_calls();
             let tools = m.tool_calls();
             let tokens = format_human(m.total_tokens() as usize, "K", "M");
-            format!("#{steps} · {llm} LLM · {tools} tools · {tokens} | ")
+            format!("#{steps} · {llm} LLM · {tools} tools · {tokens} tok | ")
         } else {
             String::new()
         }
     };
 
-    // Plan mode indicator
-    let plan_part = if app.plan_mode.active.load(Ordering::SeqCst) {
-        " PLAN | ".to_string()
+    let model = truncate_to_width(&app.model, 20);
+    left_spans.push(Span::styled(
+        format!("{todo_part}{trace_part}{model} | {msgs} msgs "),
+        base,
+    ));
+
+    // Accent: animated spinner + elapsed seconds while the agent runs —
+    // the primary "system is working" signal (Nielsen #1).
+    let accent = if app.streaming {
+        let frame = theme::SPINNER_FRAMES[app.spinner_frame % theme::SPINNER_FRAMES.len()];
+        let elapsed = app
+            .run_started_at
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
+        format!(" {frame} thinking… {elapsed}s ")
     } else {
         String::new()
     };
 
-    let left = format!(" {plan_part}{todo_part}{trace_part}{model} | {msgs} msgs ");
-
-    let (accent, right) = if app.streaming {
-        let indicator = " ⚡ STREAMING ";
-        let right = format!(
-            "PgUp/Dn/🖱 scroll{}  ",
+    // Right: context-sensitive key hints (Nielsen #6: recognition rather
+    // than recall) — the bindings that matter in the current state.
+    let right = if app.has_pending_intervene() {
+        " ↑↓ nav · Enter select · Esc cancel  ".to_string()
+    } else if app.streaming {
+        format!(
+            "Esc cancel · Enter inject{}  ",
             if app.scroll_offset > 0 {
-                format!(" ↑{}", app.scroll_offset)
+                format!(" · ↑{}", app.scroll_offset)
             } else {
                 String::new()
             }
-        );
-        (indicator.to_string(), right)
+        )
+    } else if app.scroll_offset > 0 {
+        format!("↑{} scrolled · PgDn bottom  ", app.scroll_offset)
     } else {
-        let right = format!(
-            "{}  ",
-            if app.scroll_offset > 0 {
-                format!("↑{} scrolled", app.scroll_offset)
-            } else {
-                String::new()
-            }
-        );
-        (String::new(), right)
+        " Enter send · ↑ hist · / cmds · ? help  ".to_string()
     };
 
-    (left, accent, right)
+    (left_spans, accent, right)
 }
 
 // ── Line Count Estimation ────────────────────────────────────────────────────────

@@ -25,6 +25,10 @@ pub enum CommandVerdict {
 }
 
 /// Compiled shell-command policy from [`SandboxConfig`].
+///
+/// `Clone` so the same policy can be shared between the [`SandboxHook`]
+/// (LLM-initiated calls) and the TUI (user `!command` invocations).
+#[derive(Clone)]
 pub struct ShellFilter {
     auto_approve_prefixes: Vec<String>,
     deny_patterns: Vec<Regex>,

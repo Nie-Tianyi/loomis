@@ -9,9 +9,11 @@
 use pulldown_cmark::{
     Alignment, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
 };
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
+
+use super::theme;
 
 // ── Public API ────────────────────────────────────────────────────────────────────
 
@@ -24,18 +26,6 @@ pub fn render_markdown(content: &str, area_width: u16) -> Vec<Line<'_>> {
     renderer.render(content);
     renderer.finish()
 }
-
-// ── Color Palette ─────────────────────────────────────────────────────────────────
-
-const HEADING_COLOR: Color = Color::Rgb(100, 180, 255); // soft blue
-const HEADING2_COLOR: Color = Color::Rgb(130, 200, 255);
-const CODE_BG: Color = Color::Rgb(40, 44, 52); // dark bg for code
-const INLINE_CODE_BG: Color = Color::Rgb(55, 55, 65);
-const QUOTE_BORDER_COLOR: Color = Color::Rgb(100, 140, 180);
-const QUOTE_TEXT_COLOR: Color = Color::Rgb(170, 180, 195);
-const LINK_COLOR: Color = Color::Rgb(80, 160, 220);
-const RULE_COLOR: Color = Color::Rgb(70, 70, 80);
-const BULLET_COLOR: Color = Color::Rgb(130, 160, 190);
 
 // ── Renderer ──────────────────────────────────────────────────────────────────────
 
@@ -91,7 +81,7 @@ impl<'a> MdRenderer<'a> {
             lines: Vec::new(),
             current_spans: Vec::new(),
             style_stack: Vec::new(),
-            base_style: Style::default().fg(Color::White),
+            base_style: Style::default().fg(theme::TEXT_PRIMARY),
             block: BlockCtx::Normal,
             pending_block_start: true,
             list_number: 0,
@@ -118,7 +108,7 @@ impl<'a> MdRenderer<'a> {
                         self.push_span(Span::styled(
                             html.into_string(),
                             Style::default()
-                                .fg(Color::DarkGray)
+                                .fg(theme::TEXT_SECONDARY)
                                 .add_modifier(Modifier::DIM),
                         ));
                     }
@@ -146,7 +136,7 @@ impl<'a> MdRenderer<'a> {
                     let rule = "─".repeat(w.saturating_sub(2));
                     self.lines.push(Line::from(Span::styled(
                         rule,
-                        Style::default().fg(RULE_COLOR).add_modifier(Modifier::DIM),
+                        Style::default().fg(theme::RULE).add_modifier(Modifier::DIM),
                     )));
                     self.lines.push(Line::from(Span::raw(""))); // blank after rule
                     self.pending_block_start = true;
@@ -156,7 +146,7 @@ impl<'a> MdRenderer<'a> {
                     self.push_span(Span::styled(
                         marker,
                         Style::default()
-                            .fg(BULLET_COLOR)
+                            .fg(theme::BULLET)
                             .add_modifier(Modifier::DIM),
                     ));
                 }
@@ -197,9 +187,9 @@ impl<'a> MdRenderer<'a> {
 
                 // Push heading style
                 let (color, size_mod) = match lvl {
-                    1 => (HEADING_COLOR, Modifier::BOLD),
-                    2 => (HEADING2_COLOR, Modifier::BOLD),
-                    _ => (HEADING2_COLOR, Modifier::BOLD),
+                    1 => (theme::HEADING, Modifier::BOLD),
+                    2 => (theme::HEADING2, Modifier::BOLD),
+                    _ => (theme::HEADING2, Modifier::BOLD),
                 };
                 self.style_stack
                     .push(Style::default().fg(color).add_modifier(size_mod));
@@ -225,7 +215,7 @@ impl<'a> MdRenderer<'a> {
                     self.lines.push(Line::from(Span::styled(
                         format!("  ┌─ {lang} "),
                         Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(theme::TEXT_SECONDARY)
                             .add_modifier(Modifier::DIM),
                     )));
                 }
@@ -310,7 +300,7 @@ impl<'a> MdRenderer<'a> {
                 // Push link style and store URL to render after text
                 self.style_stack.push(
                     Style::default()
-                        .fg(LINK_COLOR)
+                        .fg(theme::LINK)
                         .add_modifier(Modifier::UNDERLINED),
                 );
                 // We'll render the URL as a trailing dim span after the link text
@@ -318,7 +308,7 @@ impl<'a> MdRenderer<'a> {
                 self.style_stack.push(Style::default()); // placeholder for URL marker
                 self.style_stack.push(
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme::TEXT_SECONDARY)
                         .add_modifier(Modifier::DIM),
                 ); // URL style
                 // Push the URL string onto... hmm. We need a different approach.
@@ -330,7 +320,7 @@ impl<'a> MdRenderer<'a> {
                 // Images: just show placeholder
                 self.style_stack.push(
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme::TEXT_SECONDARY)
                         .add_modifier(Modifier::DIM),
                 );
             }
@@ -381,7 +371,7 @@ impl<'a> MdRenderer<'a> {
                 self.lines.push(Line::from(Span::styled(
                     "  └─".to_string(),
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme::TEXT_SECONDARY)
                         .add_modifier(Modifier::DIM),
                 )));
                 self.lines.push(Line::from(Span::raw("")));
@@ -513,8 +503,8 @@ impl<'a> MdRenderer<'a> {
         }
 
         let style = Style::default()
-            .fg(Color::Rgb(200, 200, 180))
-            .bg(INLINE_CODE_BG);
+            .fg(theme::CODE_TEXT)
+            .bg(theme::INLINE_CODE_BG);
 
         self.current_spans
             .push(Span::styled(format!(" {text} "), style));
@@ -530,7 +520,7 @@ impl<'a> MdRenderer<'a> {
                 self.current_spans.push(Span::styled(
                     "  ",
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme::TEXT_SECONDARY)
                         .add_modifier(Modifier::DIM),
                 ));
             }
@@ -538,9 +528,9 @@ impl<'a> MdRenderer<'a> {
                 // Push quote border with depth
                 for d in 0..self.quote_depth {
                     let color = if d == self.quote_depth - 1 {
-                        QUOTE_BORDER_COLOR
+                        theme::QUOTE_BORDER
                     } else {
-                        Color::DarkGray
+                        theme::TEXT_SECONDARY
                     };
                     self.current_spans
                         .push(Span::styled("▎", Style::default().fg(color)));
@@ -556,7 +546,7 @@ impl<'a> MdRenderer<'a> {
                 self.current_spans.push(Span::styled(
                     bullet,
                     Style::default()
-                        .fg(BULLET_COLOR)
+                        .fg(theme::BULLET)
                         .add_modifier(Modifier::BOLD),
                 ));
             }
@@ -569,10 +559,8 @@ impl<'a> MdRenderer<'a> {
     /// Compute the effective style by folding the style stack over the base.
     fn compute_current_style(&self) -> Style {
         let mut style = match self.block {
-            BlockCtx::CodeBlock { .. } => {
-                Style::default().fg(Color::Rgb(200, 200, 180)).bg(CODE_BG)
-            }
-            BlockCtx::BlockQuote => self.base_style.fg(QUOTE_TEXT_COLOR),
+            BlockCtx::CodeBlock { .. } => Style::default().fg(theme::CODE_TEXT).bg(theme::CODE_BG),
+            BlockCtx::BlockQuote => self.base_style.fg(theme::QUOTE_TEXT),
             _ => self.base_style,
         };
 
@@ -687,12 +675,12 @@ impl<'a> MdRenderer<'a> {
         };
 
         let border_style = Style::default()
-            .fg(Color::Rgb(80, 85, 95))
+            .fg(theme::TABLE_BORDER)
             .add_modifier(Modifier::DIM);
         let header_style = Style::default()
-            .fg(Color::White)
+            .fg(theme::TEXT_PRIMARY)
             .add_modifier(Modifier::BOLD);
-        let body_style = Style::default().fg(Color::Rgb(220, 225, 235));
+        let body_style = Style::default().fg(theme::TABLE_BODY);
 
         // ── Blank line before table ────────────────────────────────
         self.lines.push(Line::from(Span::raw("")));
@@ -731,7 +719,7 @@ impl<'a> MdRenderer<'a> {
                 self.lines.push(Line::from(Span::styled(
                     border_line('├', '┼', '┤'),
                     Style::default()
-                        .fg(Color::Rgb(50, 55, 60))
+                        .fg(theme::TABLE_SEPARATOR)
                         .add_modifier(Modifier::DIM),
                 )));
             }
@@ -866,9 +854,11 @@ mod tests {
     #[test]
     fn test_inline_code() {
         let lines = render_markdown("Use `cargo build` to compile.", 80);
-        let has_code_bg = lines
-            .iter()
-            .any(|l| l.spans.iter().any(|s| s.style.bg == Some(INLINE_CODE_BG)));
+        let has_code_bg = lines.iter().any(|l| {
+            l.spans
+                .iter()
+                .any(|s| s.style.bg == Some(theme::INLINE_CODE_BG))
+        });
         assert!(has_code_bg, "inline code background missing");
     }
 

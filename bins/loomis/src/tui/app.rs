@@ -13,6 +13,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use engine::{AgentEvent, CallOrigin};
 use memory::{PendingHints, PersistenceConfig, SharedMemory};
@@ -52,6 +53,13 @@ pub struct App {
 
     // ── Agent status ──
     pub streaming: bool,
+    /// When the current agent run started — `Some` while streaming.
+    /// Drives the elapsed-time readout in the status bar.
+    pub run_started_at: Option<Instant>,
+    /// Current spinner animation frame index, advanced by the event loop.
+    pub spinner_frame: usize,
+    /// Last time the spinner frame was advanced.
+    pub last_spinner_tick: Instant,
 
     // ── Shared state ──
     pub model: String,
@@ -74,6 +82,20 @@ pub struct App {
 
     // ── Thread picker overlay ──
     pub thread_picker: Option<super::messages::ThreadPicker>,
+
+    // ── Slash-command completion ──
+    /// Active completion popup state — `Some` while the input starts with
+    /// `/` and at least one command matches the typed prefix.
+    pub slash_completion: Option<super::messages::SlashCompletionState>,
+    /// Set when the user dismisses the popup with Esc; suppresses
+    /// re-activation until the filter text changes (Backspace) or the
+    /// input is cleared.
+    pub slash_dismissed: bool,
+
+    // ── Help overlay ──
+    /// `true` while the help overlay is shown; all keys are swallowed
+    /// except the dismiss keys.
+    pub show_help: bool,
 
     // ── Conversation auto-save ──
     /// Thread name for auto-save, set from the first user message.
@@ -121,6 +143,18 @@ pub struct App {
     pub skill_registry: Arc<SkillRegistry>,
     /// Currently active skills — written by `/skill` and [`SkillTool`].
     pub active_skills: skills::ActiveSkills,
+
+    // ── Sandbox ──
+    /// Shell-command policy for user `!command` invocations — the same
+    /// rules the [`SandboxHook`] applies to LLM-initiated shell calls.
+    pub shell_filter: crate::sandbox::shell_filter::ShellFilter,
+    /// A `!command` awaiting y/n confirmation (policy: RequiresApproval).
+    pub pending_shell_confirm: Option<String>,
+
+    // ── Retry ──
+    /// The last input submitted to the agent — enables Ctrl+R retry
+    /// after a failed run (Nielsen #9: recover from errors).
+    pub last_submitted_input: Option<String>,
 }
 
 impl App {
@@ -138,6 +172,7 @@ impl App {
         plan_mode: Arc<PlanModeState>,
         skill_registry: Arc<SkillRegistry>,
         active_skills: skills::ActiveSkills,
+        shell_filter: crate::sandbox::shell_filter::ShellFilter,
     ) -> Self {
         let model = model.into();
         Self {
@@ -151,6 +186,9 @@ impl App {
             scroll_offset: 0,
             auto_scroll: true,
             streaming: false,
+            run_started_at: None,
+            spinner_frame: 0,
+            last_spinner_tick: Instant::now(),
             model,
             memory,
             tool_names,
@@ -161,6 +199,9 @@ impl App {
             history_index: None,
             draft_input: String::new(),
             thread_picker: None,
+            slash_completion: None,
+            slash_dismissed: false,
+            show_help: false,
             conversation_title: None,
             intervene_selection: None,
             intervene_text_mode: false,
@@ -176,6 +217,9 @@ impl App {
             plan_mode,
             skill_registry,
             active_skills,
+            shell_filter,
+            pending_shell_confirm: None,
+            last_submitted_input: None,
         }
     }
 }
@@ -194,22 +238,30 @@ impl App {
             // ── Run lifecycle ────────────────────────────────────────
             AgentEvent::RunStarted { .. } => {
                 self.streaming = true;
+                self.run_started_at = Some(Instant::now());
             }
 
             AgentEvent::RunCompleted { .. } => {
                 self.streaming = false;
+                self.run_started_at = None;
             }
 
             AgentEvent::RunFailed { error } => {
                 self.selection = None;
+                self.run_started_at = None;
+                let content = format!(
+                    "{}\n\nPress Ctrl+R to retry the last submission.",
+                    improve_error_message(&error)
+                );
                 self.messages.push(ChatMessage::Error {
-                    content: error,
+                    content,
                     timestamp: ChatMessage::now_timestamp(),
                 });
             }
 
             AgentEvent::Cancelled => {
                 self.selection = None;
+                self.run_started_at = None;
                 self.messages.push(ChatMessage::System {
                     content: "[Cancelled]".into(),
                     timestamp: ChatMessage::now_timestamp(),
@@ -359,6 +411,7 @@ impl App {
             // ── Terminal sentinel ────────────────────────────────────
             AgentEvent::Done => {
                 self.streaming = false;
+                self.run_started_at = None;
             }
         }
 
@@ -367,6 +420,33 @@ impl App {
         if self.auto_scroll {
             self.scroll_offset = 0;
         }
+    }
+}
+
+/// Appends an actionable hint to common error categories so the user
+/// knows what to do next (Nielsen #9: help users recognize, diagnose,
+/// and recover from errors). Unknown errors pass through unchanged.
+fn improve_error_message(error: &str) -> String {
+    let lower = error.to_lowercase();
+    let hint = if lower.contains("api key")
+        || lower.contains("apikey")
+        || lower.contains("unauthorized")
+        || lower.contains("401")
+    {
+        Some("Check that DEEPSEEK_API is set correctly in your environment or .env file.")
+    } else if lower.contains("rate limit") || lower.contains("429") {
+        Some("Rate limited — wait a moment before retrying.")
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        Some("The request timed out — check your network connection and try again.")
+    } else if lower.contains("connect") || lower.contains("dns") || lower.contains("network") {
+        Some("Network error — check your connection and proxy settings.")
+    } else {
+        None
+    };
+
+    match hint {
+        Some(h) => format!("{error}\nHint: {h}"),
+        None => error.to_string(),
     }
 }
 
@@ -438,8 +518,7 @@ impl App {
                     } => {
                         if *responded {
                             if let Some(idx) = chosen {
-                                let label =
-                                    options.get(*idx).map(|s| s.as_str()).unwrap_or("?");
+                                let label = options.get(*idx).map(|s| s.as_str()).unwrap_or("?");
                                 if let Some(text) = custom_text {
                                     format!("{title}: {label}: {text}")
                                 } else {
@@ -472,24 +551,26 @@ impl App {
     /// Checks whether terminal coordinates (col, row) fall inside the chat
     /// inner area (i.e. inside the border of the chat block).
     fn is_in_chat_area(&self, col: u16, row: u16) -> bool {
-        let block = ratatui::widgets::Block::default()
-            .borders(ratatui::widgets::Borders::ALL);
+        let block = ratatui::widgets::Block::default().borders(ratatui::widgets::Borders::ALL);
         let inner = block.inner(self.chat_area);
-        col >= inner.x && col < inner.x + inner.width
-            && row >= inner.y && row < inner.y + inner.height
+        col >= inner.x
+            && col < inner.x + inner.width
+            && row >= inner.y
+            && row < inner.y + inner.height
     }
 
     /// Converts terminal screen coordinates to a line index in the wrapped
     /// `all_lines` vec (used for mouse-to-text mapping).
     fn screen_to_line(&self, _col: u16, row: u16) -> usize {
-        let block = ratatui::widgets::Block::default()
-            .borders(ratatui::widgets::Borders::ALL);
+        let block = ratatui::widgets::Block::default().borders(ratatui::widgets::Borders::ALL);
         let inner = block.inner(self.chat_area);
         let visible_row = (row.saturating_sub(inner.y)) as usize;
         let max_scroll = self
             .total_rendered_lines
             .saturating_sub(self.visible_chat_height);
-        let scroll = max_scroll.saturating_sub(self.scroll_offset).min(max_scroll);
+        let scroll = max_scroll
+            .saturating_sub(self.scroll_offset)
+            .min(max_scroll);
         scroll + visible_row
     }
 
@@ -568,6 +649,9 @@ mod tests {
         let plan_mode = Arc::new(PlanModeState::default());
         let skill_registry = Arc::new(SkillRegistry::empty());
         let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
+        let shell_filter = crate::sandbox::shell_filter::ShellFilter::from_config(
+            &tools::SandboxConfig::default(),
+        );
         App::new(
             "test-model",
             memory,
@@ -580,10 +664,49 @@ mod tests {
             plan_mode,
             skill_registry,
             active_skills,
+            shell_filter,
         )
     }
 
     // ── apply_event ─────────────────────────────────────────────
+
+    #[test]
+    fn test_spinner_run_lifecycle() {
+        let mut app = make_app();
+        assert!(app.run_started_at.is_none());
+
+        app.apply_event(AgentEvent::RunStarted {
+            session_id: "s1".into(),
+            user_input: "hi".into(),
+        });
+        assert!(app.run_started_at.is_some());
+        assert!(app.streaming);
+
+        app.apply_event(AgentEvent::RunCompleted {
+            answer: "done".into(),
+        });
+        assert!(app.run_started_at.is_none());
+
+        // Failed run also clears the timer.
+        app.apply_event(AgentEvent::RunStarted {
+            session_id: "s2".into(),
+            user_input: "hi".into(),
+        });
+        assert!(app.run_started_at.is_some());
+        app.apply_event(AgentEvent::RunFailed {
+            error: "boom".into(),
+        });
+        assert!(app.run_started_at.is_none());
+
+        // Done sentinel clears it too.
+        app.apply_event(AgentEvent::RunStarted {
+            session_id: "s3".into(),
+            user_input: "hi".into(),
+        });
+        app.apply_event(AgentEvent::Done);
+        assert!(app.run_started_at.is_none());
+        assert!(!app.streaming);
+    }
 
     #[test]
     fn test_apply_token_creates_assistant() {
@@ -787,9 +910,25 @@ mod tests {
     }
 
     #[test]
-    fn test_ctrl_c_while_idle_exits() {
+    fn test_ctrl_c_while_idle_shows_hint_instead_of_exiting() {
         let mut app = make_app();
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let result = app.handle_key(key);
+        // Nielsen #4: Ctrl+C means copy/cancel everywhere — never "quit".
+        assert!(result.is_none());
+        assert!(!app.should_quit);
+        match app.messages.last() {
+            Some(ChatMessage::System { content, .. }) => {
+                assert!(content.contains("Ctrl+D"));
+            }
+            other => panic!("expected System hint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ctrl_d_while_idle_exits() {
+        let mut app = make_app();
+        let key = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
         let result = app.handle_key(key);
         assert!(matches!(result, Some(TuiCommand::Exit)));
         assert!(app.should_quit);
@@ -803,6 +942,315 @@ mod tests {
         let result = app.handle_key(key);
         assert!(matches!(result, Some(TuiCommand::CancelGeneration)));
         assert!(!app.streaming);
+    }
+
+    // ── Slash completion ────────────────────────────────────────
+
+    fn type_str(app: &mut App, s: &str) {
+        for c in s.chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    }
+
+    #[test]
+    fn test_slash_completion_activates_on_slash() {
+        let mut app = make_app();
+        type_str(&mut app, "/");
+        let sc = app.slash_completion.as_ref().expect("popup should open");
+        assert_eq!(sc.matches.len(), crate::tui::messages::SLASH_COMMANDS.len());
+        assert_eq!(sc.selected, 0);
+    }
+
+    #[test]
+    fn test_slash_completion_filters_by_prefix() {
+        let mut app = make_app();
+        type_str(&mut app, "/s");
+        let sc = app
+            .slash_completion
+            .as_ref()
+            .expect("popup should stay open");
+        let names: Vec<&str> = sc.matches.iter().map(|c| c.name).collect();
+        assert!(names.contains(&"save"));
+        assert!(names.contains(&"stats"));
+        assert!(names.contains(&"skill"));
+        assert!(!names.contains(&"exit"));
+    }
+
+    #[test]
+    fn test_slash_completion_tab_accepts() {
+        let mut app = make_app();
+        type_str(&mut app, "/exi");
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.input, "/exit ");
+        assert!(app.slash_completion.is_none());
+    }
+
+    #[test]
+    fn test_slash_completion_arrow_navigation() {
+        let mut app = make_app();
+        type_str(&mut app, "/");
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.slash_completion.as_ref().unwrap().selected, 1);
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.slash_completion.as_ref().unwrap().selected, 0);
+        // Up at the top stays put (no wrap).
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.slash_completion.as_ref().unwrap().selected, 0);
+    }
+
+    #[test]
+    fn test_slash_completion_esc_dismisses_until_text_changes() {
+        let mut app = make_app();
+        type_str(&mut app, "/");
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.slash_completion.is_none());
+        assert!(app.slash_dismissed);
+        // Typing more does not reopen the popup.
+        type_str(&mut app, "ex");
+        assert!(app.slash_completion.is_none());
+        // Backspace signals a fresh session — typing reopens it.
+        app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(!app.slash_dismissed);
+        type_str(&mut app, "x");
+        assert!(app.slash_completion.is_some());
+    }
+
+    #[test]
+    fn test_slash_completion_enter_submits_argless_command() {
+        let mut app = make_app();
+        type_str(&mut app, "/exi");
+        let result = app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, Some(TuiCommand::Exit)));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_slash_completion_enter_only_accepts_command_with_args() {
+        let mut app = make_app();
+        type_str(&mut app, "/sa");
+        let result = app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        // `/save <name>` requires an argument — accepted, not submitted.
+        assert!(result.is_none());
+        assert_eq!(app.input, "/save ");
+        assert!(app.slash_completion.is_none());
+    }
+
+    #[test]
+    fn test_slash_completion_closes_on_no_match() {
+        let mut app = make_app();
+        type_str(&mut app, "/zzz");
+        assert!(app.slash_completion.is_none());
+    }
+
+    #[test]
+    fn test_slash_completion_not_in_streaming() {
+        let mut app = make_app();
+        app.streaming = true;
+        type_str(&mut app, "/st");
+        assert!(app.slash_completion.is_none());
+    }
+
+    // ── Help overlay ────────────────────────────────────────────
+
+    #[test]
+    fn test_help_opens_on_question_mark_when_idle() {
+        let mut app = make_app();
+        app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert!(app.show_help);
+        assert!(app.input.is_empty()); // '?' was not inserted
+    }
+
+    #[test]
+    fn test_help_question_mark_inserts_when_input_nonempty() {
+        let mut app = make_app();
+        type_str(&mut app, "what");
+        app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert!(!app.show_help);
+        assert_eq!(app.input, "what?");
+    }
+
+    #[test]
+    fn test_help_not_opened_while_streaming() {
+        let mut app = make_app();
+        app.streaming = true;
+        app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert!(!app.show_help);
+        assert_eq!(app.input, "?");
+    }
+
+    #[test]
+    fn test_help_dismiss_and_swallow() {
+        let mut app = make_app();
+        app.show_help = true;
+        // Unrelated keys are swallowed, help stays open.
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(app.show_help);
+        assert!(app.input.is_empty());
+        // Esc closes.
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.show_help);
+    }
+
+    #[test]
+    fn test_help_f1_toggles() {
+        let mut app = make_app();
+        app.handle_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
+        assert!(app.show_help);
+        app.handle_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
+        assert!(!app.show_help);
+    }
+
+    // ── Shell confirmation (ShellFilter integration) ────────────
+
+    #[test]
+    fn test_bang_auto_approved_runs_directly() {
+        let mut app = make_app();
+        app.input = "!echo hello".into();
+        app.input_cursor = app.input.len();
+        let result = submit_via_enter(&mut app);
+        assert!(matches!(result, Some(TuiCommand::RunShell(cmd)) if cmd == "echo hello"));
+        assert!(app.pending_shell_confirm.is_none());
+    }
+
+    #[test]
+    fn test_bang_blocked_is_rejected_with_reason() {
+        let mut app = make_app();
+        app.input = "!sudo rm -rf /".into();
+        app.input_cursor = app.input.len();
+        let result = submit_via_enter(&mut app);
+        assert!(result.is_none());
+        assert!(app.pending_shell_confirm.is_none());
+        match app.messages.last() {
+            Some(ChatMessage::Error { content, .. }) => {
+                assert!(content.contains("Blocked by sandbox policy"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_bang_requires_approval_enters_confirm_mode() {
+        let mut app = make_app();
+        app.input = "!curl https://example.com".into();
+        app.input_cursor = app.input.len();
+        let result = submit_via_enter(&mut app);
+        assert!(result.is_none());
+        assert_eq!(
+            app.pending_shell_confirm.as_deref(),
+            Some("curl https://example.com")
+        );
+    }
+
+    #[test]
+    fn test_shell_confirm_y_executes() {
+        let mut app = make_app();
+        app.pending_shell_confirm = Some("curl https://example.com".into());
+        let result = app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(
+            matches!(result, Some(TuiCommand::RunShell(cmd)) if cmd == "curl https://example.com")
+        );
+        assert!(app.pending_shell_confirm.is_none());
+    }
+
+    #[test]
+    fn test_shell_confirm_n_cancels() {
+        let mut app = make_app();
+        app.pending_shell_confirm = Some("curl https://example.com".into());
+        let result = app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(result.is_none());
+        assert!(app.pending_shell_confirm.is_none());
+        match app.messages.last() {
+            Some(ChatMessage::System { content, .. }) => {
+                assert!(content.contains("cancelled"));
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_shell_confirm_swallows_other_keys() {
+        let mut app = make_app();
+        app.pending_shell_confirm = Some("curl https://example.com".into());
+        let result = app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(result.is_none());
+        assert!(app.pending_shell_confirm.is_some()); // still pending
+    }
+
+    // ── Ctrl+R retry ────────────────────────────────────────────
+
+    #[test]
+    fn test_ctrl_r_retries_last_submission() {
+        let mut app = make_app();
+        app.input = "hello agent".into();
+        app.input_cursor = app.input.len();
+        let result = submit_via_enter(&mut app);
+        assert!(matches!(result, Some(TuiCommand::RunAgent(_))));
+        assert_eq!(app.last_submitted_input.as_deref(), Some("hello agent"));
+
+        // Simulate the run ending (failed), then retry.
+        app.streaming = false;
+        let msg_count_before = app.messages.len();
+        let result = app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(matches!(result, Some(TuiCommand::RunAgent(m)) if m == "hello agent"));
+        assert!(app.streaming);
+        assert_eq!(app.messages.len(), msg_count_before + 1); // user msg re-shown
+    }
+
+    #[test]
+    fn test_ctrl_r_without_last_submission_is_noop() {
+        let mut app = make_app();
+        let result = app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(result.is_none());
+        assert!(!app.streaming);
+    }
+
+    #[test]
+    fn test_ctrl_r_ignored_while_streaming() {
+        let mut app = make_app();
+        app.last_submitted_input = Some("hello".into());
+        app.streaming = true;
+        let result = app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(result.is_none());
+    }
+
+    // ── Error message hints ─────────────────────────────────────
+
+    #[test]
+    fn test_improve_error_message_api_key() {
+        let out = improve_error_message("HTTP 401 Unauthorized");
+        assert!(out.contains("DEEPSEEK_API"));
+    }
+
+    #[test]
+    fn test_improve_error_message_timeout() {
+        let out = improve_error_message("request timed out after 30s");
+        assert!(out.contains("network"));
+    }
+
+    #[test]
+    fn test_improve_error_message_rate_limit() {
+        let out = improve_error_message("429 Too Many Requests: rate limit exceeded");
+        assert!(out.contains("wait"));
+    }
+
+    #[test]
+    fn test_improve_error_message_passthrough() {
+        let out = improve_error_message("something completely unexpected");
+        assert_eq!(out, "something completely unexpected");
+    }
+
+    #[test]
+    fn test_run_failed_includes_retry_hint() {
+        let mut app = make_app();
+        app.apply_event(AgentEvent::RunFailed {
+            error: "boom".into(),
+        });
+        match app.messages.last() {
+            Some(ChatMessage::Error { content, .. }) => {
+                assert!(content.contains("Ctrl+R"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 
     #[test]

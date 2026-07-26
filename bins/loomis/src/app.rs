@@ -63,6 +63,10 @@ pub struct AgentKit {
     pub skill_registry: Arc<SkillRegistry>,
     /// Currently active skills — written by [`SkillTool`], read by [`SkillHook`].
     pub active_skills: skills::ActiveSkills,
+    /// Shell-command policy — the same instance backing [`SandboxHook`],
+    /// reused by the TUI to classify user `!command` invocations
+    /// (Nielsen #5: error prevention).
+    pub shell_filter: crate::sandbox::shell_filter::ShellFilter,
 }
 
 /// Seed default skills into `.loomis/skills/` if no `.md` files exist there.
@@ -286,7 +290,7 @@ pub fn build_coding_agent(
 
     // SandboxHook — shell approval, resource tracking, audit logging
     let approval_hook = SandboxHook::new(
-        shell_filter,
+        shell_filter.clone(),
         resource_tracker,
         audit_logger,
         response_router.clone(),
@@ -384,6 +388,7 @@ pub fn build_coding_agent(
         plan_mode,
         skill_registry,
         active_skills,
+        shell_filter,
     }
 }
 
