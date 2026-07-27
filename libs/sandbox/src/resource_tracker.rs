@@ -3,10 +3,10 @@
 //! Tracks cumulative operation counts and concurrent shell invocations
 //! so we can reject tool calls when quotas are exhausted.
 
+use crate::config::SandboxConfig;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use crate::config::SandboxConfig;
 
 /// Tracks resource consumption per session.
 ///

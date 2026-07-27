@@ -4,12 +4,12 @@
 //! in-memory ring buffer holds the most recent entries so the TUI can
 //! display them without re-reading the file.
 
+use crate::config::SandboxConfig;
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
-use crate::config::SandboxConfig;
 
 /// Maximum number of entries kept in the in-memory ring buffer.
 /// Capacity hint and eviction threshold use the same constant to

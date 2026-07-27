@@ -654,9 +654,8 @@ mod tests {
         let plan_dir = PathBuf::from(".loomis/plan");
         let skill_registry = Arc::new(SkillRegistry::empty());
         let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
-        let shell_filter = sandbox::shell_filter::ShellFilter::from_config(
-            &sandbox::SandboxConfig::default(),
-        );
+        let shell_filter =
+            sandbox::shell_filter::ShellFilter::from_config(&sandbox::SandboxConfig::default());
         App::new(
             "test-model",
             memory,

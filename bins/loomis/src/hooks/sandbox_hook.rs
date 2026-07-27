@@ -25,11 +25,11 @@ use memory::SharedMemory;
 use provider::ToolCall;
 use tokio::sync::mpsc;
 
+use engine::ResponseRouter;
+use engine::intervention::{self, InterventionError};
 use sandbox::audit_logger::{AuditEntry, AuditLogger};
 use sandbox::resource_tracker::ResourceTracker;
 use sandbox::shell_filter::{CommandVerdict, ShellFilter};
-use engine::ResponseRouter;
-use engine::intervention::{self, InterventionError};
 
 pub struct SandboxHook {
     /// Sends agent events to the TUI (intervention requests, etc.).
