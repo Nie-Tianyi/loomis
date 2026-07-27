@@ -149,7 +149,7 @@ pub struct App {
     // ── Sandbox ──
     /// Shell-command policy for user `!command` invocations — the same
     /// rules the [`SandboxHook`] applies to LLM-initiated shell calls.
-    pub shell_filter: crate::sandbox::shell_filter::ShellFilter,
+    pub shell_filter: sandbox::shell_filter::ShellFilter,
     /// A `!command` awaiting y/n confirmation (policy: RequiresApproval).
     pub pending_shell_confirm: Option<String>,
 
@@ -175,7 +175,7 @@ impl App {
         plan_dir: PathBuf,
         skill_registry: Arc<SkillRegistry>,
         active_skills: skills::ActiveSkills,
-        shell_filter: crate::sandbox::shell_filter::ShellFilter,
+        shell_filter: sandbox::shell_filter::ShellFilter,
     ) -> Self {
         let model = model.into();
         Self {
@@ -654,8 +654,8 @@ mod tests {
         let plan_dir = PathBuf::from(".loomis/plan");
         let skill_registry = Arc::new(SkillRegistry::empty());
         let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
-        let shell_filter = crate::sandbox::shell_filter::ShellFilter::from_config(
-            &tools::SandboxConfig::default(),
+        let shell_filter = sandbox::shell_filter::ShellFilter::from_config(
+            &sandbox::SandboxConfig::default(),
         );
         App::new(
             "test-model",

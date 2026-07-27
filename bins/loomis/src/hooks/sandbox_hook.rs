@@ -25,9 +25,9 @@ use memory::SharedMemory;
 use provider::ToolCall;
 use tokio::sync::mpsc;
 
-use crate::sandbox::audit_logger::{AuditEntry, AuditLogger};
-use crate::sandbox::resource_tracker::ResourceTracker;
-use crate::sandbox::shell_filter::{CommandVerdict, ShellFilter};
+use sandbox::audit_logger::{AuditEntry, AuditLogger};
+use sandbox::resource_tracker::ResourceTracker;
+use sandbox::shell_filter::{CommandVerdict, ShellFilter};
 use engine::ResponseRouter;
 use engine::intervention::{self, InterventionError};
 

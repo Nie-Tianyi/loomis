@@ -12,7 +12,7 @@
 
 /// Maximum output bytes returned to the model or user.
 /// Prevents a single command from flooding the conversation context.
-pub(crate) const MAX_OUTPUT_BYTES: usize = 100_000;
+pub const MAX_OUTPUT_BYTES: usize = 100_000;
 
 // ── Decode stdout ────────────────────────────────────────────────────────────
 
@@ -27,7 +27,7 @@ pub(crate) const MAX_OUTPUT_BYTES: usize = 100_000;
 /// Otherwise fall back to the Windows [`GetACP`] code page via
 /// [`MultiByteToWideChar`]. On Unix this is just [`String::from_utf8_lossy`].
 #[cfg(target_os = "windows")]
-pub(crate) fn decode_stdout(bytes: &[u8]) -> String {
+pub fn decode_stdout(bytes: &[u8]) -> String {
     if bytes.is_empty() {
         return String::new();
     }
@@ -86,7 +86,7 @@ unsafe extern "system" {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn decode_stdout(bytes: &[u8]) -> String {
+pub fn decode_stdout(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
@@ -98,7 +98,7 @@ pub(crate) fn decode_stdout(bytes: &[u8]) -> String {
 /// nearest character boundary at or below `max`, ensuring the result is
 /// always valid UTF-8. Appends a `"…\n[output truncated at {max} bytes]"`
 /// suffix when truncation occurs.
-pub(crate) fn truncate_output(s: &str, max: usize) -> String {
+pub fn truncate_output(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {

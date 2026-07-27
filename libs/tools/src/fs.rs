@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::error::FsError;
-use super::sandbox::SandboxConfig;
+use crate::SandboxConfig;
 
 /// Sandboxed file-system handle. All operations are confined to `workspace_root`.
 ///

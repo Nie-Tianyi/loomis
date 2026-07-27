@@ -1079,6 +1079,7 @@ dependencies = [
  "pulldown-cmark",
  "ratatui",
  "regex",
+ "sandbox",
  "schemars",
  "serde",
  "serde_json",
@@ -1791,6 +1792,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandbox"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2370,6 +2383,7 @@ dependencies = [
  "glob",
  "provider",
  "regex",
+ "sandbox",
  "schemars",
  "serde",
  "serde_json",

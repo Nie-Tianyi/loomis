@@ -9,7 +9,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
-use tools::SandboxConfig;
+use crate::config::SandboxConfig;
 
 /// Maximum number of entries kept in the in-memory ring buffer.
 /// Capacity hint and eviction threshold use the same constant to

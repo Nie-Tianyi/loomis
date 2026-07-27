@@ -5,6 +5,7 @@ edition = "2024"
 description = "Tool abstraction — Tool trait, ToolRegistry, WorkspaceFs sandbox"
 
 [dependencies]
+sandbox = { path = "../sandbox" }
 provider = { path = "../provider" }
 tools-macros = { path = "../tools-macros" }
 futures-core = { workspace = true }

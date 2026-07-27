@@ -10,7 +10,6 @@ mod error;
 mod fs;
 mod progress;
 mod registry;
-pub mod sandbox;
 mod schema;
 mod tool;
 pub mod watchdog;

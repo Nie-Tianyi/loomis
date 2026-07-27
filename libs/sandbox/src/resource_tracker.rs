@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tools::SandboxConfig;
+use crate::config::SandboxConfig;
 
 /// Tracks resource consumption per session.
 ///

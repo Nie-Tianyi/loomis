@@ -52,7 +52,7 @@ pub fn sanitize(cmd: &mut Command, workspace_root: &Path, enabled: bool) {
 
 /// Returns the values of environment variables that are safe to pass
 /// to child processes.
-pub(crate) fn collect_safe_vars() -> std::collections::HashMap<String, String> {
+pub fn collect_safe_vars() -> std::collections::HashMap<String, String> {
     // Variables we consider safe for child processes.
     let safe_keys: HashSet<&str> = [
         // Standard

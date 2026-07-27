@@ -3,7 +3,6 @@
 pub mod app;
 pub mod hooks;
 pub mod profile;
-pub mod sandbox;
 pub mod tools;
 pub mod tui;
 

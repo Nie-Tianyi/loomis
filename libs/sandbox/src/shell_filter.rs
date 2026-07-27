@@ -11,7 +11,7 @@
 //! 4. **Fallthrough** — anything that passes filters 1-3 requires a user prompt.
 
 use regex::Regex;
-use tools::SandboxConfig;
+use crate::config::SandboxConfig;
 
 /// The outcome of filtering a shell command.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -14,15 +14,15 @@ use subagent::{self, SubagentConfig};
 use tokio::sync::mpsc;
 use tools::ToolRegistry;
 
-use tools::SandboxConfig;
+use sandbox::SandboxConfig;
 
 use crate::hooks::{
     ObservabilityHook, PersistenceHook, PlanModeHook, PlanModeState, ProfileHook, SandboxHook,
     SkillHook, SystemPromptHook, TodoListHook,
 };
-use crate::sandbox::audit_logger::AuditLogger;
-use crate::sandbox::resource_tracker::ResourceTracker;
-use crate::sandbox::shell_filter::ShellFilter;
+use sandbox::audit_logger::AuditLogger;
+use sandbox::resource_tracker::ResourceTracker;
+use sandbox::shell_filter::ShellFilter;
 use crate::tools::{
     AskUserQuestionTool, CalculatorTool, EditTool, EnterPlanModeTool, ExitPlanModeTool, GlobTool,
     GrepTool, LsTool, ReadTool, ShellTool, SkillTool, TodoItem, TodoTool, WriteTool,
@@ -68,7 +68,7 @@ pub struct AgentKit {
     /// Shell-command policy — the same instance backing [`SandboxHook`],
     /// reused by the TUI to classify user `!command` invocations
     /// (Nielsen #5: error prevention).
-    pub shell_filter: crate::sandbox::shell_filter::ShellFilter,
+    pub shell_filter: sandbox::shell_filter::ShellFilter,
 }
 
 /// Seed default skills into `.loomis/skills/` if no `.md` files exist there.

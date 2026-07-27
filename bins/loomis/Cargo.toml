@@ -32,6 +32,7 @@ crossterm = { workspace = true }
 unicode-width = { workspace = true }
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
+sandbox = { path = "../../libs/sandbox" }
 schemars = { workspace = true }
 glob = { workspace = true }
 tracing = { workspace = true }

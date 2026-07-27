@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tools::SandboxConfig;
+use sandbox::SandboxConfig;
 use tracing_appender::non_blocking::WorkerGuard;
 
 const DEFAULT_MODEL: &str = "deepseek-v4-pro";

@@ -14,7 +14,7 @@ use super::messages::{
     ChatMessage, SLASH_COMMANDS, SlashCompletionState, TuiCommand, is_valid_thread_name,
     truncate_for_display,
 };
-use crate::sandbox::shell_filter::CommandVerdict;
+use sandbox::shell_filter::CommandVerdict;
 
 // ── Keyboard Handling ────────────────────────────────────────────────────────────
 
