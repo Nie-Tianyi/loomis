@@ -1,7 +1,7 @@
 //! Agent assembly — wires all components together.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use deepseek::DeepSeekClient;
@@ -59,6 +59,8 @@ pub struct AgentKit {
     pub trace_store: Arc<TraceStore>,
     /// Shared plan-mode toggle between TUI and [`PlanModeHook`].
     pub plan_mode: Arc<PlanModeState>,
+    /// Directory where approved plans are archived (`.loomis/plan/`).
+    pub plan_dir: PathBuf,
     /// Discovered skills — read-only after startup.
     pub skill_registry: Arc<SkillRegistry>,
     /// Currently active skills — written by [`SkillTool`], read by [`SkillHook`].
@@ -176,6 +178,7 @@ pub fn build_coding_agent(
     // can be registered and included in tool_names.
     let plan_mode = Arc::new(PlanModeState::default());
     let plan_file_path = workspace_root.join(".loomis").join("plan.md");
+    let plan_dir = workspace_root.join(".loomis").join("plan");
 
     // ── Seed default skills ──────────────────────────────────
     // If no skills exist yet, seed the default "skill-generator"
@@ -253,10 +256,11 @@ pub fn build_coding_agent(
     registry.register(Arc::new(enter_plan_tool));
 
     // ExitPlanModeTool — lets the LLM present the plan for user approval
-    // and deactivate plan mode.
+    // and deactivate plan mode. On approval, archives the plan to .loomis/plan/.
     let exit_plan_tool = ExitPlanModeTool::new(
         plan_mode.clone(),
         plan_file_path.clone(),
+        plan_dir.clone(),
         response_router.clone(),
     );
     exit_plan_tool.set_agent_tx(agent_tx.clone());
@@ -386,6 +390,7 @@ pub fn build_coding_agent(
         todos: todo_state,
         trace_store,
         plan_mode,
+        plan_dir,
         skill_registry,
         active_skills,
         shell_filter,

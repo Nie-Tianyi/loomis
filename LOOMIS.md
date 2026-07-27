@@ -182,7 +182,9 @@ Toggled via `/plan`. `PlanModeHook` runs at position 1 — `before_tool_call`
 blocks write/edit/shell (except `.loomis/plan.md`). Allowed tools: `read`,
 `ls`, `glob`, `grep`, `calculator`, `ask_user_question`, `todo`, `task`/
 `subagent`, `enter_plan_mode`, `exit_plan_mode`, `write` (only to
-`.loomis/plan.md`). `/approve` exits plan mode.
+`.loomis/plan.md`). On `/approve` or `exit_plan_mode` approval, the plan is
+archived to `.loomis/plan/<summary>.md` so past plans are never overwritten.
+`/approve` exits plan mode.
 
 ### Skills system
 Skills provide reusable domain knowledge and specialized instructions as

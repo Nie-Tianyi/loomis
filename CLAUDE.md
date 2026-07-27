@@ -70,7 +70,7 @@ Config: `.loomis/config.toml` → `SandboxConfig` (safe defaults if missing).
 
 ### Plan Mode
 
-`/plan` toggles read-only mode. Allowed tools: read, ls, glob, grep, calculator, ask_user_question, todo, task/subagent, write (only to `.loomis/plan.md`). Blocked: edit, shell, write (other files). `/approve` exits plan mode.
+`/plan` toggles read-only mode. Allowed tools: read, ls, glob, grep, calculator, ask_user_question, todo, task/subagent, write (only to `.loomis/plan.md`). Blocked: edit, shell, write (other files). `/approve` exits plan mode and archives the plan to `.loomis/plan/<summary>.md`.
 
 ### User Profiling
 

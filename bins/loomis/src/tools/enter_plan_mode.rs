@@ -40,8 +40,8 @@ pub(crate) struct EnterPlanModeArgs {}
     name = "enter_plan_mode",
     description = "Enter plan mode — a read-only mode for research and planning. \
          In plan mode, you can only read files, search code, and write to the \
-         plan file (.loomis/plan.md). You cannot edit source files or run shell \
-         commands.\n\n\
+         plan file (.loomis/plan.md). Plans are archived to .loomis/plan/ on \
+         approval. You cannot edit source files or run shell commands.\n\n\
          When to use:\n\
          - The user asks for a complex multi-step task that requires research first\n\
          - You need to explore the codebase before making changes\n\
@@ -93,6 +93,7 @@ impl EnterPlanModeTool {
              Allowed tools: read, glob, grep, ls, calculator, ask_user_question, \
              todo, task/subagent, write (plan file only).\n\
              Blocked tools: edit, shell.\n\
+             On approval, plans are automatically archived to .loomis/plan/.\n\
              When your plan is ready, call exit_plan_mode to present it for approval.",
             self.plan_file_path.display()
         )))

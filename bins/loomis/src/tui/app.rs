@@ -137,6 +137,8 @@ pub struct App {
     // ── Plan mode ──
     /// Shared plan-mode toggle between TUI and [`PlanModeHook`].
     pub plan_mode: Arc<PlanModeState>,
+    /// Directory where approved plans are archived (`.loomis/plan/`).
+    pub plan_dir: PathBuf,
 
     // ── Skills ──
     /// Discovered skills — read-only after startup, used by `/skill` command.
@@ -170,6 +172,7 @@ impl App {
         persistence_config: PersistenceConfig,
         trace_store: Arc<TraceStore>,
         plan_mode: Arc<PlanModeState>,
+        plan_dir: PathBuf,
         skill_registry: Arc<SkillRegistry>,
         active_skills: skills::ActiveSkills,
         shell_filter: crate::sandbox::shell_filter::ShellFilter,
@@ -215,6 +218,7 @@ impl App {
             persistence_config,
             trace_store,
             plan_mode,
+            plan_dir,
             skill_registry,
             active_skills,
             shell_filter,
@@ -647,6 +651,7 @@ mod tests {
         let todos = Arc::new(RwLock::new(Vec::<TodoItem>::new()));
         let trace_store = Arc::new(TraceStore::new());
         let plan_mode = Arc::new(PlanModeState::default());
+        let plan_dir = PathBuf::from(".loomis/plan");
         let skill_registry = Arc::new(SkillRegistry::empty());
         let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
         let shell_filter = crate::sandbox::shell_filter::ShellFilter::from_config(
@@ -662,6 +667,7 @@ mod tests {
             PersistenceConfig::default(),
             trace_store,
             plan_mode,
+            plan_dir,
             skill_registry,
             active_skills,
             shell_filter,

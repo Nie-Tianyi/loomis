@@ -49,7 +49,8 @@ pub struct PlanModeHook {
     /// Shared toggle between TUI and hook.
     plan_mode: Arc<PlanModeState>,
     /// Absolute canonical path to the plan file — the only writable file
-    /// while in plan mode.
+    /// while in plan mode. On approval, the plan is archived to
+    /// `.loomis/plan/<summary>.md`.
     plan_file_path: PathBuf,
     /// Workspace root, used to resolve relative `file_path` values from
     /// tool-call JSON arguments.

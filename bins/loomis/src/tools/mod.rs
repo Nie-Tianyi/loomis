@@ -21,6 +21,7 @@ pub use calculator::CalculatorTool;
 pub use edit::EditTool;
 pub use enter_plan_mode::EnterPlanModeTool;
 pub use exit_plan_mode::ExitPlanModeTool;
+pub(crate) use exit_plan_mode::archive_plan;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use ls::LsTool;

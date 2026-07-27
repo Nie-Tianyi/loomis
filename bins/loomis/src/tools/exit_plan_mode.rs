@@ -3,13 +3,13 @@
 //!
 //! When the tool is called, it reads the plan file, presents its content
 //! to the user via an interactive prompt ([`InterventionRequired`]), and
-//! waits for approval.  If approved, plan mode is deactivated and full
-//! tool access is restored.
+//! waits for approval.  If approved, the plan is **archived** to
+//! `.loomis/plan/<summary>.md` and plan mode is deactivated.
 //!
 //! Users can also exit plan mode manually via the `/approve` or `/plan`
 //! slash commands.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -24,6 +24,99 @@ use engine::ResponseRouter;
 use engine::intervention::{self, InterventionError};
 
 use crate::hooks::PlanModeState;
+
+// ── Plan archiving ──────────────────────────────────────────────────────────
+
+/// Extract a human-readable plan summary from the plan content.
+///
+/// Uses the first `# Heading` line (without the `# ` prefix) as the
+/// summary. Falls back to the first non-empty, non-code-fence line.
+/// Truncated to 64 chars after sanitisation.
+pub(crate) fn extract_plan_summary(content: &str) -> String {
+    // Try the first # heading.
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(heading) = trimmed.strip_prefix("# ") {
+            let s = sanitize_for_filename(heading);
+            if !s.is_empty() {
+                return truncate_summary(&s);
+            }
+        }
+    }
+
+    // Fallback: first non-empty, non-code-fence line.
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() && !trimmed.starts_with("```") {
+            let s = sanitize_for_filename(trimmed);
+            if !s.is_empty() {
+                return truncate_summary(&s);
+            }
+        }
+    }
+
+    "untitled-plan".to_string()
+}
+
+/// Sanitize a string for use as a filename component.
+fn sanitize_for_filename(s: &str) -> String {
+    let s = s.to_lowercase();
+    let s: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Collapse consecutive dashes, trim leading/trailing dashes.
+    let parts: Vec<&str> = s.split('-').filter(|p| !p.is_empty()).collect();
+    parts.join("-")
+}
+
+/// Truncate a summary string to at most 64 characters.
+fn truncate_summary(s: &str) -> String {
+    if s.len() <= 64 {
+        s.to_string()
+    } else {
+        // Try to truncate at a dash boundary.
+        let end = s[..64].rfind('-').unwrap_or(64);
+        s[..end].to_string()
+    }
+}
+
+/// Archive plan content to `.loomis/plan/<summary>.md`.
+///
+/// Returns the path of the archived plan file.
+/// Handles filename collisions by appending `-2`, `-3`, etc.
+pub(crate) fn archive_plan(content: &str, plan_dir: &Path) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(plan_dir)?;
+
+    let summary = extract_plan_summary(content);
+    let base = summary;
+
+    // Find an available filename (avoid collisions).
+    let mut candidate = plan_dir.join(format!("{base}.md"));
+    if !candidate.exists() {
+        std::fs::write(&candidate, content)?;
+        return Ok(candidate);
+    }
+
+    for n in 2u32.. {
+        candidate = plan_dir.join(format!("{base}-{n}.md"));
+        if !candidate.exists() {
+            std::fs::write(&candidate, content)?;
+            return Ok(candidate);
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "Could not find an available plan filename after 4 billion attempts",
+    ))
+}
 
 // ── Args ────────────────────────────────────────────────────────────────────
 
@@ -50,7 +143,8 @@ pub(crate) struct ExitPlanModeArgs {}
     name = "exit_plan_mode",
     description = "Exit plan mode and present your plan to the user for approval. \
          This reads the plan file, shows it to the user, and asks them to approve, \
-         suggest changes, or cancel.\n\n\
+         suggest changes, or cancel. On approval, the plan is automatically archived \
+         to .loomis/plan/<summary>.md so past plans are never lost.\n\n\
          If the user suggests changes, their feedback is returned to you so you \
          can revise the plan and call exit_plan_mode again.\n\n\
          When to use:\n\
@@ -69,6 +163,8 @@ pub struct ExitPlanModeTool {
     plan_mode: Arc<PlanModeState>,
     /// Absolute path to the plan file — read and presented to the user.
     plan_file_path: PathBuf,
+    /// Directory where approved plans are archived (`.loomis/plan/`).
+    plan_dir: PathBuf,
     /// Sender for agent events — used to emit InterventionRequired.
     agent_tx: OnceLock<mpsc::UnboundedSender<AgentEvent>>,
     /// Shared router for receiving the user's response.
@@ -80,11 +176,13 @@ impl ExitPlanModeTool {
     pub fn new(
         plan_mode: Arc<PlanModeState>,
         plan_file_path: PathBuf,
+        plan_dir: PathBuf,
         response_router: Arc<ResponseRouter>,
     ) -> Self {
         Self {
             plan_mode,
             plan_file_path,
+            plan_dir,
             agent_tx: OnceLock::new(),
             response_router,
         }
@@ -109,9 +207,10 @@ impl ExitPlanModeTool {
             .get()
             .ok_or_else(|| ToolError::Execution("Agent event channel not configured".into()))?;
 
-        // Read the plan file content.
+        // Read the plan file content (cloned so we can use it after the display copy).
         let plan_content = std::fs::read_to_string(&self.plan_file_path)
             .unwrap_or_else(|e| format!("(Could not read plan file: {e})"));
+        let plan_content_for_archive = plan_content.clone();
 
         let is_empty = plan_content.trim().is_empty();
         let display_content = if is_empty {
@@ -161,16 +260,37 @@ impl ExitPlanModeTool {
                  /approve to exit plan mode manually."
                     .into(),
             )),
-            // "Approve" (index 0) — deactivate plan mode.
+            // "Approve" (index 0) — archive the plan, then deactivate plan mode.
             Some(0) => {
+                // Archive the plan before deactivating.
+                let archive_result = if is_empty {
+                    None
+                } else {
+                    match archive_plan(&plan_content_for_archive, &self.plan_dir) {
+                        Ok(archived_path) => Some(archived_path),
+                        Err(e) => {
+                            // If archiving fails, still deactivate — don't
+                            // trap the user in plan mode over a disk error.
+                            self.plan_mode.active.store(false, Ordering::SeqCst);
+                            return Err(ToolError::Execution(format!(
+                                "Plan approved, but failed to archive the plan: {e}. \
+                                 Plan mode deactivated anyway."
+                            )));
+                        }
+                    }
+                };
+
                 self.plan_mode.active.store(false, Ordering::SeqCst);
-                let msg = if is_empty {
-                    "Plan approved! Plan mode deactivated. Full access restored. \
-                     (Note: the plan file was empty.)"
-                        .into()
+                let msg = if let Some(ref archived_path) = archive_result {
+                    format!(
+                        "Plan approved! Plan mode deactivated. Full access restored. \
+                         Plan archived to: {}\n\
+                         You can now execute the plan.",
+                        archived_path.display()
+                    )
                 } else {
                     "Plan approved! Plan mode deactivated. Full access restored. \
-                     You can now execute the plan."
+                     (Note: the plan file was empty — nothing to archive.)"
                         .into()
                 };
                 Ok(ProgressStream::done(msg))
@@ -222,6 +342,12 @@ mod tests {
         tmp.join(".loomis").join("plan.md")
     }
 
+    fn make_plan_dir() -> PathBuf {
+        let tmp = std::env::temp_dir().join("loomis-exit-plan-test");
+        let _ = std::fs::create_dir_all(&tmp);
+        tmp.join(".loomis").join("plan")
+    }
+
     fn make_router() -> Arc<ResponseRouter> {
         Arc::new(ResponseRouter::new())
     }
@@ -229,24 +355,39 @@ mod tests {
     #[test]
     fn test_name() {
         let plan_file = make_plan_file();
-        let tool =
-            ExitPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file, make_router());
+        let plan_dir = make_plan_dir();
+        let tool = ExitPlanModeTool::new(
+            Arc::new(PlanModeState::default()),
+            plan_file,
+            plan_dir,
+            make_router(),
+        );
         assert_eq!(tool.name(), "exit_plan_mode");
     }
 
     #[test]
     fn test_description() {
         let plan_file = make_plan_file();
-        let tool =
-            ExitPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file, make_router());
+        let plan_dir = make_plan_dir();
+        let tool = ExitPlanModeTool::new(
+            Arc::new(PlanModeState::default()),
+            plan_file,
+            plan_dir,
+            make_router(),
+        );
         assert!(tool.description().contains("plan mode"));
     }
 
     #[test]
     fn test_parameters_schema() {
         let plan_file = make_plan_file();
-        let tool =
-            ExitPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file, make_router());
+        let plan_dir = make_plan_dir();
+        let tool = ExitPlanModeTool::new(
+            Arc::new(PlanModeState::default()),
+            plan_file,
+            plan_dir,
+            make_router(),
+        );
         let params = tool.parameter_schema();
         assert_eq!(params["type"], "object");
         assert_eq!(params["additionalProperties"], false);
@@ -255,9 +396,11 @@ mod tests {
     #[test]
     fn test_error_when_not_in_plan_mode() {
         let plan_file = make_plan_file();
+        let plan_dir = make_plan_dir();
         let tool = ExitPlanModeTool::new(
             Arc::new(PlanModeState::default()), // active defaults to false
             plan_file,
+            plan_dir,
             make_router(),
         );
 
@@ -279,9 +422,10 @@ mod tests {
         // test, but we verify that the tool constructs correctly and
         // the guard clause works.
         let plan_file = make_plan_file();
+        let plan_dir = make_plan_dir();
         let state = Arc::new(PlanModeState::default());
         state.active.store(true, Ordering::SeqCst);
-        let tool = ExitPlanModeTool::new(state, plan_file, make_router());
+        let tool = ExitPlanModeTool::new(state, plan_file, plan_dir, make_router());
         // agent_tx is NOT set
         assert!(tool.agent_tx.get().is_none());
         // The tool should still be functional — just can't send events.
@@ -291,8 +435,13 @@ mod tests {
     #[test]
     fn test_invalid_json_rejected() {
         let plan_file = make_plan_file();
-        let tool =
-            ExitPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file, make_router());
+        let plan_dir = make_plan_dir();
+        let tool = ExitPlanModeTool::new(
+            Arc::new(PlanModeState::default()),
+            plan_file,
+            plan_dir,
+            make_router(),
+        );
         let err = Tool::execute_stream(&tool, "garbage").unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
@@ -300,8 +449,13 @@ mod tests {
     #[test]
     fn test_extra_field_rejected() {
         let plan_file = make_plan_file();
-        let tool =
-            ExitPlanModeTool::new(Arc::new(PlanModeState::default()), plan_file, make_router());
+        let plan_dir = make_plan_dir();
+        let tool = ExitPlanModeTool::new(
+            Arc::new(PlanModeState::default()),
+            plan_file,
+            plan_dir,
+            make_router(),
+        );
         let err = Tool::execute_stream(&tool, r#"{"extra": true}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }

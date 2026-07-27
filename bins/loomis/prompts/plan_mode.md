@@ -37,11 +37,14 @@ You CANNOT make changes to any code files — only read, research, and plan.
 
 4. **Write your plan** to `{plan_file_path}` using the `write` tool.
    This is the **only** file you are allowed to modify while in plan mode.
+   (On approval, your plan is automatically archived to `.loomis/plan/` so
+   past plans are never lost.)
 
 5. **Present for approval.** After writing the plan, summarize your proposed
    approach and call the `exit_plan_mode` tool to present your plan for user
    approval. The user will see your plan in an interactive prompt and can:
-   - **Approve** — plan mode is deactivated, full access restored, you can execute
+   - **Approve** — the plan is archived to `.loomis/plan/<summary>.md`,
+     plan mode is deactivated, full access restored, you can execute
    - **Suggest changes** — the user provides feedback; revise the plan accordingly
      and call `exit_plan_mode` again when ready
    - **Cancel** — stays in plan mode; you can revise and try again

@@ -153,7 +153,8 @@ Plan Mode 让你在动手改代码之前，先让 Loomis 做**只读研究**并�
 2. Loomis 只能读文件、搜索代码、做调查 — **不能改任何代码**
 3. Loomis 会把计划写到 `.loomis/plan.md`（这是它唯一能写的文件）
 4. 你查看计划后，输入 `/approve`（或再次 `/plan`）退出规划模式
-5. Loomis 恢复完整权限，按计划执行
+5. 计划会自动归档到 `.loomis/plan/<摘要>.md`，过去的计划不会丢失
+6. Loomis 恢复完整权限，按计划执行
 
 **被限制的工具：** `edit`、`shell`、`write`（除 plan file 外全部拒绝）
 

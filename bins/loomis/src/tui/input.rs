@@ -772,11 +772,33 @@ impl App {
 
             "/approve" => {
                 if self.plan_mode.active.load(Ordering::SeqCst) {
+                    // Archive the plan before deactivating.
+                    let plan_path = self.workspace_root.join(".loomis").join("plan.md");
+                    let plan_dir = self.plan_dir.clone();
+                    let archive_msg = match std::fs::read_to_string(&plan_path) {
+                        Ok(content) if !content.trim().is_empty() => {
+                            // Use the archive_plan helper.
+                            match crate::tools::archive_plan(&content, &plan_dir) {
+                                Ok(archived_path) => {
+                                    format!("Plan archived to: {}", archived_path.display())
+                                }
+                                Err(e) => format!("Warning: failed to archive plan: {e}"),
+                            }
+                        }
+                        _ => String::new(),
+                    };
+
                     self.plan_mode.active.store(false, Ordering::SeqCst);
+                    let content = if archive_msg.is_empty() {
+                        "Plan approved! Plan mode deactivated. You can now execute the plan.".into()
+                    } else {
+                        format!(
+                            "Plan approved! Plan mode deactivated. {archive_msg}. \
+                             You can now execute the plan."
+                        )
+                    };
                     self.messages.push(ChatMessage::System {
-                        content:
-                            "Plan approved! Plan mode deactivated. You can now execute the plan."
-                                .into(),
+                        content,
                         timestamp: ChatMessage::now_timestamp(),
                     });
                 } else {
