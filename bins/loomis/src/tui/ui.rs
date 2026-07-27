@@ -21,6 +21,7 @@ use super::messages::{
     ChatMessage, SLASH_COMMANDS, SlashCompletionState, ThreadPicker, ToolCallState,
 };
 use super::theme;
+use super::welcome;
 
 // ── Layout ───────────────────────────────────────────────────────────────────────
 
@@ -529,6 +530,10 @@ fn message_to_lines(
                     Line::from(spans)
                 })
                 .collect()
+        }
+
+        ChatMessage::Welcome { model, workspace } => {
+            welcome::render(model, workspace, area_width)
         }
 
         ChatMessage::Intervene {
@@ -1511,6 +1516,11 @@ fn estimate_lines(msg: &ChatMessage, width: u16) -> usize {
             }
         }
         ChatMessage::System { content, .. } => format!("  ℹ {content}"),
+        // The banner is ASCII art — its visual line count is exact, no wrapping.
+        // `estimate_lines` receives the full chat width, while `render` sees
+        // the inner text width (borders + scrollbar) — align the threshold
+        // decision by subtracting the same 3 columns.
+        ChatMessage::Welcome { .. } => return welcome::line_count(width.saturating_sub(3)),
         ChatMessage::Intervene {
             title,
             description,

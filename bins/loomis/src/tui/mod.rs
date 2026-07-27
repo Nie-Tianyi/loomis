@@ -28,6 +28,7 @@
 //! | [`ui`] | ratatui rendering: chat area, input area, status bar |
 //! | [`event`] | Event loop, terminal lifecycle, agent background task |
 //! | [`shell_exec`] | User `!command` shell execution + Windows encoding |
+//! | [`welcome`] | Startup banner: ASCII logo + mascot 小织 |
 
 mod app;
 mod event;
@@ -37,6 +38,7 @@ mod messages;
 mod shell_exec;
 mod theme;
 mod ui;
+mod welcome;
 
 pub use app::App;
 pub use event::run;

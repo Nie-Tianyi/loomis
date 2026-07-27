@@ -37,6 +37,10 @@ pub enum ChatMessage {
     },
     /// System-level message (slash commands, info).
     System { content: String, timestamp: String },
+    /// Startup welcome banner — ASCII logo + mascot 小织, rendered by
+    /// [`super::welcome`]. Seeded once by [`super::app::App::new`]; carries
+    /// no timestamp (a banner is not a conversational message).
+    Welcome { model: String, workspace: String },
     /// A hook is requesting user intervention — rendered as an
     /// interactive prompt with navigable options.
     Intervene {

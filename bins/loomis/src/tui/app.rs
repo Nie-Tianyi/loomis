@@ -179,9 +179,9 @@ impl App {
     ) -> Self {
         let model = model.into();
         Self {
-            messages: vec![ChatMessage::System {
-                content: format!("Loomis — Model: {model} | /help for commands"),
-                timestamp: ChatMessage::now_timestamp(),
+            messages: vec![ChatMessage::Welcome {
+                model: model.clone(),
+                workspace: workspace_root.display().to_string(),
             }],
             line_counts: vec![1],
             input: String::new(),
@@ -511,6 +511,7 @@ impl App {
                         }
                     }
                     ChatMessage::System { content, .. } => content.clone(),
+                    ChatMessage::Welcome { model, .. } => format!("Loomis — model {model}"),
                     ChatMessage::Intervene {
                         title,
                         description,
