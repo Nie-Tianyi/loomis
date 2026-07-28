@@ -34,6 +34,7 @@ mod context;
 mod hooks;
 pub mod intervention;
 mod response_router;
+mod rt;
 
 pub use agent::{
     Agent, AgentError, AgentEvent, CallOrigin, InterventionRequest, InterventionResponse,
@@ -43,3 +44,4 @@ pub use builder::AgentBuilder;
 pub use context::{EngineContext, EngineContextBuilder};
 pub use hooks::AgentHook;
 pub use response_router::{ResponseRouter, next_request_id};
+pub use rt::block_on;

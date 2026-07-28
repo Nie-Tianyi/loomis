@@ -532,9 +532,7 @@ fn message_to_lines(
                 .collect()
         }
 
-        ChatMessage::Welcome { model, workspace } => {
-            welcome::render(model, workspace, area_width)
-        }
+        ChatMessage::Welcome { model, workspace } => welcome::render(model, workspace, area_width),
 
         ChatMessage::Intervene {
             title,

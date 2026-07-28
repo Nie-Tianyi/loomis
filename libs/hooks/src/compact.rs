@@ -103,10 +103,10 @@ impl AgentHook for MicroCompactHook {
 /// drains old non-System messages (keeping the most recent `keep_last_n`),
 /// calls the compact model for a summary, and inserts it as a System message.
 ///
-/// The LLM call blocks the agent loop via
-/// [`tokio::runtime::Handle::block_on`].  This is safe because the agent loop
-/// runs in a dedicated tokio task, separate from the TUI main thread — blocking
-/// here does not affect the UI.
+/// The LLM call blocks the agent loop via [`engine::block_on`], which
+/// performs a legal `block_in_place` + `Handle::block_on` on the
+/// multi-threaded runtime.  The agent loop runs in a dedicated tokio task,
+/// separate from the TUI main thread — blocking here does not affect the UI.
 pub struct MacroCompactHook<C: LLMClient> {
     /// Model name for summarisation (cheap model).
     pub compact_model: String,
@@ -176,8 +176,10 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
         let request =
             CompletionRequest::new(&self.compact_model, vec![Message::new(Role::User, prompt)]);
 
-        // Block the agent loop (not the UI — different thread).
-        let result = tokio::runtime::Handle::current().block_on(self.client.generate(request));
+        // Block the agent loop (not the UI — different thread).  Uses
+        // `engine::block_on` — a bare `Handle::block_on` would panic here
+        // because hooks run on a runtime worker thread.
+        let result = engine::block_on(self.client.generate(request));
 
         let summary = match result {
             Ok(resp) => {

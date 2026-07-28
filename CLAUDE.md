@@ -36,7 +36,7 @@ Set `DEEPSEEK_API` in `.env` before running.
 
 - **`LLMClient`**: Abstraction over LLM providers. Native async fn, NOT `#[async_trait]`.
 - **`Tool`**: Sync and object-safe. `execute_stream()` returns `ProgressStream` — short tools emit `Progress::Done`, long-running tools emit `Progress::InProgress` updates. Use `tokio::sync::mpsc` from a spawned thread for async I/O.
-- **`AgentHook`**: 10 lifecycle callbacks (all default no-ops). `on_<event>` = observe; `before_<action>` = can block via `Err`; `after_<action>` = observe result. For async work in sync hooks, use `tokio::runtime::Handle::block_on`.
+- **`AgentHook`**: 10 lifecycle callbacks (all default no-ops). `on_<event>` = observe; `before_<action>` = can block via `Err`; `after_<action>` = observe result. For async work in sync hooks, use `engine::block_on` — a bare `Handle::block_on` panics on tokio worker threads.
 
 ### AgentEvent stream
 

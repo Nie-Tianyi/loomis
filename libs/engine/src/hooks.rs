@@ -9,9 +9,11 @@ use crate::agent::{AgentError, RunOutcome};
 /// the events you care about. All methods are synchronous.
 ///
 /// For async work (e.g. LLM summarisation / macro-compaction), use
-/// [`tokio::runtime::Handle::block_on`] inside a sync hook method.
-/// The agent loop runs in a dedicated tokio task separate from the
-/// TUI thread, so blocking here does not affect the UI.
+/// [`crate::block_on`] inside a sync hook method.  Do **not** call
+/// `Handle::block_on` directly — hooks run on a tokio worker thread,
+/// where a bare `block_on` panics with "Cannot block_on from within
+/// a runtime".  The agent loop runs in a dedicated tokio task separate
+/// from the TUI thread, so blocking here does not affect the UI.
 /// See [`MacroCompactHook`](hooks::MacroCompactHook) for an example.
 ///
 /// ## Naming convention

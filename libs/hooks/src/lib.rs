@@ -10,8 +10,8 @@
 //! | [`MacroCompactHook`] | Full LLM summarisation in `on_llm_start` (blocks agent loop) |
 //!
 //! Both hooks operate during `on_llm_start`.  `MacroCompactHook` uses
-//! [`tokio::runtime::Handle::block_on`] for the LLM call — this blocks
-//! the agent task but not the TUI, since they run on different threads.
+//! [`engine::block_on`] for the LLM call — this blocks the agent task
+//! but not the TUI, since they run on different threads.
 //!
 //! # Custom hooks
 //!

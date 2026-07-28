@@ -27,7 +27,7 @@
 //! recent user/assistant messages from conversation memory, sends them
 //! to the flash model with a structured prompt, and merges the parsed
 //! results into the profile.  The LLM call uses
-//! [`tokio::runtime::Handle::block_on`] — this blocks the agent loop
+//! [`engine::block_on`] — this blocks the agent loop
 //! (a dedicated tokio task) but not the TUI (the main thread).
 
 use std::path::PathBuf;
@@ -209,8 +209,9 @@ impl ProfileHook {
     ///
     /// Collects recent conversation context, sends a structured
     /// prompt to the flash model, and merges the returned signals
-    /// into the profile.  Uses [`tokio::runtime::Handle::block_on`]
-    /// — safe because the agent loop is a dedicated tokio task.
+    /// into the profile.  Uses [`engine::block_on`] — a bare
+    /// `Handle::block_on` would panic because the agent loop (and
+    /// therefore this hook) runs on a tokio worker thread.
     fn run_synthesis(&self, memory: &SharedMemory) {
         // ── Gather input under locks (released before the LLM call) ──
         let (profile_json, context_text) = {
@@ -243,7 +244,10 @@ impl ProfileHook {
             CompletionRequest::new(&self.flash_model, vec![Message::new(Role::User, prompt)]);
 
         // Block the agent loop, not the UI — same pattern as MacroCompactHook.
-        let result = tokio::runtime::Handle::current().block_on(self.client.generate(request));
+        // A bare `Handle::block_on` would panic here: hooks run on a tokio
+        // worker thread, and blocking a worker is only legal after
+        // `block_in_place` (handled inside `engine::block_on`).
+        let result = engine::block_on(self.client.generate(request));
 
         match result {
             Ok(resp) => {
