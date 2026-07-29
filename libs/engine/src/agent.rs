@@ -868,6 +868,7 @@ impl<C: LLMClient> Agent<C> {
             let msg = Message {
                 role: Role::Assistant,
                 content: content.clone(),
+                reasoning_content: reasoning.clone(),
                 tool_calls: tool_calls.clone(),
                 tool_call_id: None,
                 name: None,
@@ -1129,6 +1130,11 @@ impl StreamAccumulator {
         let msg = Message {
             role: Role::Assistant,
             content: self.content,
+            reasoning_content: if self.reasoning.is_empty() {
+                None
+            } else {
+                Some(self.reasoning)
+            },
             tool_calls,
             tool_call_id: None,
             name: None,

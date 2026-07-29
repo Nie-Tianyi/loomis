@@ -138,7 +138,13 @@ impl Memory {
 
 impl Memory {
     pub fn total_chars(&self) -> usize {
-        self.messages.iter().map(|m| m.content.len()).sum()
+        self.messages
+            .iter()
+            .map(|m| {
+                m.content.len()
+                    + m.reasoning_content.as_ref().map_or(0, |r| r.len())
+            })
+            .sum()
     }
 }
 

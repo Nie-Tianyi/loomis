@@ -7,6 +7,11 @@ pub struct Message {
     pub role: Role,
     /// The text content of the message.
     pub content: String,
+    /// Chain-of-thought / reasoning content (provider-specific).
+    /// Only meaningful for `Assistant` role messages from models that
+    /// support thinking/reasoning (e.g. DeepSeek R1, Claude Opus).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     /// Present when role is `Assistant` and the model wants to call tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -23,6 +28,7 @@ impl Message {
         Self {
             role,
             content: content.into(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -33,6 +39,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: content.into(),
+            reasoning_content: None,
             tool_calls: Some(tool_calls),
             tool_call_id: None,
             name: None,
@@ -43,6 +50,7 @@ impl Message {
         Self {
             role: Role::Tool,
             content: content.into(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             name: None,
