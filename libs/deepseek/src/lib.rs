@@ -12,7 +12,5 @@ mod stream;
 
 pub use client::DeepSeekClient;
 pub use error::DeepSeekError;
-pub use request::{
-    DeepSeekRequest, ReasoningEffort, ResponseFormat, ResponseFormatType, Thinking, ThinkingMode,
-};
+pub use request::{DeepSeekRequest, ResponseFormat, ResponseFormatType, Thinking, ThinkingMode};
 pub use stream::DeepSeekStream;

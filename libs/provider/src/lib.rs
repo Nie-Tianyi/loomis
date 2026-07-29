@@ -19,7 +19,7 @@ mod tool_def;
 pub use client::LLMClient;
 pub use error::ProviderError;
 pub use message::{Message, Role, ToolCall, ToolCallFunction, ToolCallKind};
-pub use request::CompletionRequest;
+pub use request::{CompletionRequest, ReasoningEffort};
 pub use response::{Choice, ChoiceMessage, CompletionResponse, FinishReason, Usage};
 pub use stream::{ChunkChoice, Delta, StreamChunk};
 pub use tool_def::{FunctionDef, ToolChoice, ToolChoiceFunction, ToolDef, ToolDefKind};

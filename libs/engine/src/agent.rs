@@ -12,8 +12,8 @@ use tokio::sync::mpsc;
 
 use memory::SharedMemory;
 use provider::{
-    CompletionRequest, CompletionResponse, FinishReason, LLMClient, Message, ProviderError, Role,
-    StreamChunk, ToolCall, ToolCallFunction, ToolCallKind, Usage,
+    CompletionRequest, CompletionResponse, FinishReason, LLMClient, Message, ProviderError,
+    ReasoningEffort, Role, StreamChunk, ToolCall, ToolCallFunction, ToolCallKind, Usage,
 };
 use tools::{Progress, ToolError, ToolRegistry};
 
@@ -704,7 +704,8 @@ impl<C: LLMClient> Agent<C> {
             let tools = self.ctx.tools.to_tool_defs();
             let request = CompletionRequest::new(&self.ctx.model, messages)
                 .with_stream(true)
-                .with_tools(tools);
+                .with_tools(tools)
+                .with_reasoning_effort(ReasoningEffort::Max);
 
             // ── Open SSE stream with retry + exponential backoff ──
             let mut stream = match stream_with_retry(
@@ -837,7 +838,8 @@ impl<C: LLMClient> Agent<C> {
             let tools = self.ctx.tools.to_tool_defs();
             let request = CompletionRequest::new(&self.ctx.model, messages)
                 .with_stream(false)
-                .with_tools(tools);
+                .with_tools(tools)
+                .with_reasoning_effort(ReasoningEffort::Max);
 
             let response = match generate_with_retry(
                 &self.ctx.llm,

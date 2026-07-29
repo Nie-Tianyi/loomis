@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use provider::{CompletionRequest, Message, ToolChoice, ToolDef};
+use provider::{CompletionRequest, Message, ReasoningEffort, ToolChoice, ToolDef};
 
 /// DeepSeek-specific completion request.
 ///
@@ -76,7 +76,7 @@ impl From<CompletionRequest> for DeepSeekRequest {
             tools: req.tools,
             tool_choice: req.tool_choice,
             thinking: None,
-            reasoning_effort: None,
+            reasoning_effort: req.reasoning_effort,
             response_format: None,
             stream_options: None,
             logprobs: false,
@@ -97,17 +97,6 @@ pub struct Thinking {
 pub enum ThinkingMode {
     Enabled,
     Disabled,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-#[non_exhaustive]
-pub enum ReasoningEffort {
-    Low,
-    Medium,
-    High,
-    ExtraHigh,
-    Max,
 }
 
 #[derive(Clone, Debug, Serialize)]

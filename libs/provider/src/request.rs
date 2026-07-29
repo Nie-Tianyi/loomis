@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::message::Message;
 use crate::tool_def::{ToolChoice, ToolDef};
 
@@ -16,6 +18,7 @@ pub struct CompletionRequest {
     pub stream: bool,
     pub tools: Option<Vec<ToolDef>>,
     pub tool_choice: Option<ToolChoice>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl CompletionRequest {
@@ -30,6 +33,7 @@ impl CompletionRequest {
             stream: false,
             tools: None,
             tool_choice: None,
+            reasoning_effort: None,
         }
     }
 
@@ -47,6 +51,23 @@ impl CompletionRequest {
         self.max_tokens = Some(max_tokens);
         self
     }
+
+    pub fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
+    }
+}
+
+/// Reasoning effort level for models that support it.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+    ExtraHigh,
+    Max,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
