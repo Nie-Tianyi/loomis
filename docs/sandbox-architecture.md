@@ -21,7 +21,7 @@
 
 ## 第一步：SandboxHook::before_tool_call()
 
-代码位置：[`bins/loomis/src/hooks/sandbox_hook.rs`](../bins/loomis/src/hooks/sandbox_hook.rs)
+代码位置：[`libs/sandbox/src/sandbox_hook.rs`](../libs/sandbox/src/sandbox_hook.rs)
 
 ![before_tool_call工具调用权限检查](./assets/pre-hook.png)
 

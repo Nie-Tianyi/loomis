@@ -1795,10 +1795,14 @@ dependencies = [
 name = "sandbox"
 version = "0.1.0"
 dependencies = [
+ "engine",
+ "memory",
+ "provider",
  "regex",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "toml",
  "tracing",
 ]
@@ -2383,7 +2387,6 @@ dependencies = [
  "glob",
  "provider",
  "regex",
- "sandbox",
  "schemars",
  "serde",
  "serde_json",

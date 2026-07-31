@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use tools::ToolRegistry;
 
 use sandbox::SandboxConfig;
+use tools::FilesystemConfig;
 
 use crate::hooks::{
     ObservabilityHook, PersistenceHook, PlanModeHook, PlanModeState, ProfileHook, SandboxHook,
@@ -148,19 +149,21 @@ pub fn build_coding_agent(
     model: &str,
     flash_model: &str,
     sandbox_config: &SandboxConfig,
+    filesystem_config: &FilesystemConfig,
 ) -> AgentKit {
     // ── Channels ──────────────────────────────────────────────
     let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
 
     // ── Workspace filesystem ─────────────────────────────────
-    let workspace = tools::WorkspaceFs::new(workspace_root, sandbox_config).unwrap_or_else(|e| {
-        tracing::error!(
-            path = %workspace_root.display(),
-            error = %e,
-            "Cannot create workspace",
-        );
-        std::process::exit(1);
-    });
+    let workspace =
+        tools::WorkspaceFs::new(workspace_root, filesystem_config).unwrap_or_else(|e| {
+            tracing::error!(
+                path = %workspace_root.display(),
+                error = %e,
+                "Cannot create workspace",
+            );
+            std::process::exit(1);
+        });
     let workspace = Arc::new(workspace);
 
     // ── Shared intervention response router ───────────────────

@@ -7,12 +7,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::error::FsError;
-use crate::SandboxConfig;
+use crate::config::FilesystemConfig;
 
 /// Sandboxed file-system handle. All operations are confined to `workspace_root`.
 ///
 /// Policy knobs (file-size caps, extension blocklist, hidden-file protection)
-/// come from [`SandboxConfig`] and are baked into the handle at construction.
+/// come from [`FilesystemConfig`] and are baked into the handle at construction.
 #[derive(Debug)]
 pub struct WorkspaceFs {
     workspace_root: PathBuf,
@@ -27,8 +27,8 @@ impl WorkspaceFs {
     /// Create a new workspace file-system handle.
     ///
     /// Validates that `root` exists and is a directory, then canonicalizes
-    /// it. Sandbox policies are taken from `config.filesystem`.
-    pub fn new(root: impl Into<PathBuf>, config: &SandboxConfig) -> Result<Self, FsError> {
+    /// it. Sandbox policies are taken from `config`.
+    pub fn new(root: impl Into<PathBuf>, config: &FilesystemConfig) -> Result<Self, FsError> {
         let root: PathBuf = root.into();
 
         if !root.try_exists().map_err(FsError::Io)? {
@@ -42,11 +42,11 @@ impl WorkspaceFs {
 
         Ok(Self {
             workspace_root,
-            max_read_bytes: config.filesystem.max_read_bytes,
-            max_write_bytes: config.filesystem.max_write_bytes,
-            forbid_binary_writes: config.filesystem.forbid_binary_writes,
-            forbid_hidden_file_writes: config.filesystem.forbid_hidden_file_writes,
-            blocked_write_extensions: config.filesystem.blocked_write_extensions.clone(),
+            max_read_bytes: config.max_read_bytes,
+            max_write_bytes: config.max_write_bytes,
+            forbid_binary_writes: config.forbid_binary_writes,
+            forbid_hidden_file_writes: config.forbid_hidden_file_writes,
+            blocked_write_extensions: config.blocked_write_extensions.clone(),
         })
     }
 
@@ -497,14 +497,14 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn test_config() -> SandboxConfig {
-        let mut cfg = SandboxConfig::default();
+    fn test_config() -> FilesystemConfig {
+        let mut cfg = FilesystemConfig::default();
         // Use generous limits for tests �?we're testing sandbox logic,
         // not the specific limit values.
-        cfg.filesystem.max_read_bytes = 10_000_000;
-        cfg.filesystem.max_write_bytes = 1_000_000;
-        cfg.filesystem.forbid_binary_writes = true;
-        cfg.filesystem.forbid_hidden_file_writes = false; // allow .files in tests
+        cfg.max_read_bytes = 10_000_000;
+        cfg.max_write_bytes = 1_000_000;
+        cfg.forbid_binary_writes = true;
+        cfg.forbid_hidden_file_writes = false; // allow .files in tests
         cfg
     }
 
@@ -614,7 +614,7 @@ mod tests {
     fn test_read_file_too_large() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = test_config();
-        cfg.filesystem.max_read_bytes = 10; // tiny limit
+        cfg.max_read_bytes = 10; // tiny limit
         let fs = WorkspaceFs::new(dir.path(), &cfg).unwrap();
         fs.write("big.txt", "this is more than ten bytes of content")
             .unwrap();
@@ -650,7 +650,7 @@ mod tests {
     fn test_write_hidden_file_blocked() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = test_config();
-        cfg.filesystem.forbid_hidden_file_writes = true;
+        cfg.forbid_hidden_file_writes = true;
         let fs = WorkspaceFs::new(dir.path(), &cfg).unwrap();
         let result = fs.write(".env", "SECRET=123");
         assert!(
@@ -663,7 +663,7 @@ mod tests {
     fn test_write_content_too_large() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = test_config();
-        cfg.filesystem.max_write_bytes = 5;
+        cfg.max_write_bytes = 5;
         let fs = WorkspaceFs::new(dir.path(), &cfg).unwrap();
         let result = fs.write("small.txt", "this is way too long");
         assert!(

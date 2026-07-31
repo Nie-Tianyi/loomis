@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use sandbox::SandboxConfig;
+use tools::FilesystemConfig;
 use tracing_appender::non_blocking::WorkerGuard;
 
 const DEFAULT_MODEL: &str = "deepseek-v4-pro";
@@ -58,7 +59,7 @@ async fn main() {
     let flash_model =
         std::env::var("FLASH_MODEL").unwrap_or_else(|_| DEFAULT_FLASH_MODEL.to_string());
 
-    // Load sandbox config (falls back to safe defaults).
+    // Load sandbox + filesystem config from the same TOML file.
     let config_path = cwd.join(".loomis").join("config.toml");
     let sandbox_config = match SandboxConfig::load(&config_path) {
         Ok(cfg) => cfg,
@@ -67,8 +68,16 @@ async fn main() {
             SandboxConfig::default()
         }
     };
+    let filesystem_config = FilesystemConfig::load(&config_path);
 
-    let kit = loomis::build_coding_agent(&api_key, &cwd, &model, &flash_model, &sandbox_config);
+    let kit = loomis::build_coding_agent(
+        &api_key,
+        &cwd,
+        &model,
+        &flash_model,
+        &sandbox_config,
+        &filesystem_config,
+    );
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),

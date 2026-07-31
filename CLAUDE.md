@@ -133,7 +133,7 @@ Key constants in `libs/hooks/src/compact.rs`: `DEFAULT_COMPACT_TOKEN_LIMIT`,
 | --- | --- | --- |
 | 1 | `WorkspaceFs` (tools) | Path sandbox — canonicalization, file-size caps, extension blocklist, hidden-file protection, binary detection, TOCTOU re-check |
 | 2 | `ShellFilter` (sandbox) | Command classification — auto-approve prefixes (`git`, `cargo`, …), deny patterns (`rm -rf /`, `sudo`), prompt for rest |
-| 3 | `SandboxHook` (loomis bin) | Orchestrator — quotas, user prompts via `InterventionRequired` + `ResponseRouter` rendezvous, audit log to `.loomis/audit.jsonl` |
+| 3 | `SandboxHook` (sandbox crate) | Orchestrator — quotas, user prompts via `InterventionRequired` + `ResponseRouter` rendezvous, audit log to `.loomis/audit.jsonl` |
 | 4 | `EnvSanitizer` (sandbox) | Clears dangerous env vars in child processes |
 | 5 | Watchdog (tools) | Kills process tree on timeout (`taskkill /F /T` on Windows) |
 

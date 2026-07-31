@@ -17,7 +17,7 @@ use tools::WorkspaceFs;
 use tools::{FsError, Progress, ProgressStream, ToolError, tool};
 
 #[cfg(test)]
-use tools::SandboxConfig;
+use tools::FilesystemConfig;
 
 /// Arguments for the edit tool.
 #[derive(JsonSchema, Deserialize)]
@@ -172,7 +172,7 @@ mod tests {
 
     fn setup() -> (tempfile::TempDir, EditTool) {
         let dir = tempfile::tempdir().unwrap();
-        let fs = WorkspaceFs::new(dir.path(), &SandboxConfig::default()).unwrap();
+        let fs = WorkspaceFs::new(dir.path(), &FilesystemConfig::default()).unwrap();
         let tool = EditTool::new(Arc::new(fs));
         (dir, tool)
     }

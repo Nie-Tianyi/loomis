@@ -20,16 +20,15 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use engine::{AgentError, AgentEvent, AgentHook, RunOutcome};
+use engine::intervention::{self, InterventionError};
+use engine::{AgentError, AgentEvent, AgentHook, ResponseRouter, RunOutcome};
 use memory::SharedMemory;
 use provider::ToolCall;
 use tokio::sync::mpsc;
 
-use engine::ResponseRouter;
-use engine::intervention::{self, InterventionError};
-use sandbox::audit_logger::{AuditEntry, AuditLogger};
-use sandbox::resource_tracker::ResourceTracker;
-use sandbox::shell_filter::{CommandVerdict, ShellFilter};
+use crate::audit_logger::{AuditEntry, AuditLogger};
+use crate::resource_tracker::ResourceTracker;
+use crate::shell_filter::{CommandVerdict, ShellFilter};
 
 pub struct SandboxHook {
     /// Sends agent events to the TUI (intervention requests, etc.).
@@ -124,7 +123,7 @@ impl SandboxHook {
     }
 
     /// Extract the command string from shell tool arguments.
-    pub(crate) fn parse_command(args: &str) -> String {
+    pub fn parse_command(args: &str) -> String {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
             v.get("command")
                 .and_then(|c| c.as_str())

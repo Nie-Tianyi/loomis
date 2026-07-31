@@ -27,7 +27,9 @@ use std::time::Duration;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use tools::{ProgressStream, SandboxConfig, ToolError, tool};
+use tools::{ProgressStream, ToolError, tool};
+
+use sandbox::SandboxConfig;
 
 use sandbox::encoding::{self, MAX_OUTPUT_BYTES};
 use sandbox::env_sanitizer;
