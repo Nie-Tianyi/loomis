@@ -1,23 +1,18 @@
 #![deny(unsafe_code)]
 //! # Tools — abstraction layer
 //!
-//! Defines the [`Tool`] trait, [`ToolRegistry`] container, [`WorkspaceFs`]
-//! sandbox, and JSON Schema generation helpers.
+//! Defines the [`Tool`] trait, [`ToolRegistry`] container, and JSON Schema
+//! generation helpers.
 //!
 //! Concrete tool implementations live in downstream crates (e.g. `loomis`).
 
-mod config;
 mod error;
-mod fs;
 mod progress;
 mod registry;
 mod schema;
 mod tool;
-pub mod watchdog;
 
-pub use config::FilesystemConfig;
-pub use error::{FsError, ToolError};
-pub use fs::{DirEntry, EntryType, GrepMatch, WorkspaceFs};
+pub use error::ToolError;
 pub use progress::{Progress, ProgressStream};
 pub use registry::{ToolRegistry, tool_to_def};
 pub use schema::generate_schema;

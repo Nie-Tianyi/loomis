@@ -7,9 +7,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 #[cfg(test)]
-use tools::FilesystemConfig;
-use tools::WorkspaceFs;
-use tools::{EntryType, FsError, ProgressStream, ToolError, tool};
+use sandbox::FilesystemConfig;
+use sandbox::WorkspaceFs;
+use sandbox::{EntryType, FsError};
+use tools::{ProgressStream, ToolError, tool};
 
 /// Arguments for the ls tool.
 #[derive(JsonSchema, Deserialize)]

@@ -6,7 +6,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::error::FsError;
 use crate::config::FilesystemConfig;
 
 /// Sandboxed file-system handle. All operations are confined to `workspace_root`.
@@ -487,6 +486,76 @@ fn normalize_partial(path: &Path) -> Result<PathBuf, FsError> {
         } else {
             return Ok(path.to_path_buf());
         }
+    }
+}
+
+// ── File-system error ──────────────────────────────────────────────────────────
+
+/// File-system operation error returned by [`WorkspaceFs`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum FsError {
+    WorkspaceEscape(String),
+    FileTooLarge { path: String, size: u64, max: u64 },
+    BinaryContentDetected(String),
+    HiddenFileBlocked(String),
+    ExtensionBlocked(String),
+    NotFound(String),
+    NotAFile(String),
+    NotADirectory(String),
+    Io(std::io::Error),
+    GlobPatternError(String),
+    RegexError(String),
+}
+
+impl std::fmt::Display for FsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WorkspaceEscape(path) => {
+                write!(f, "path escapes workspace: {path}")
+            }
+            Self::FileTooLarge { path, size, max } => {
+                write!(
+                    f,
+                    "file too large for operation: {path} ({size} bytes, max {max})"
+                )
+            }
+            Self::BinaryContentDetected(path) => {
+                write!(f, "binary content detected, write blocked: {path}")
+            }
+            Self::HiddenFileBlocked(path) => {
+                write!(f, "hidden file write blocked: {path}")
+            }
+            Self::ExtensionBlocked(path) => {
+                write!(f, "file extension blocked: {path}")
+            }
+            Self::NotFound(path) => write!(f, "not found: {path}"),
+            Self::NotAFile(path) => write!(f, "not a file: {path}"),
+            Self::NotADirectory(path) => write!(f, "not a directory: {path}"),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::GlobPatternError(msg) => write!(f, "glob error: {msg}"),
+            Self::RegexError(msg) => write!(f, "regex error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for FsError {}
+
+impl From<std::io::Error> for FsError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<glob::PatternError> for FsError {
+    fn from(e: glob::PatternError) -> Self {
+        Self::GlobPatternError(e.to_string())
+    }
+}
+
+impl From<regex::Error> for FsError {
+    fn from(e: regex::Error) -> Self {
+        Self::RegexError(e.to_string())
     }
 }
 

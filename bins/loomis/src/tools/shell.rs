@@ -34,7 +34,7 @@ use sandbox::SandboxConfig;
 use sandbox::encoding::{self, MAX_OUTPUT_BYTES};
 use sandbox::env_sanitizer;
 use sandbox::shell_filter::ShellFilter;
-use tools::watchdog::Watchdog;
+use sandbox::watchdog::Watchdog;
 
 /// Arguments for shell command execution.
 #[derive(JsonSchema, Deserialize)]

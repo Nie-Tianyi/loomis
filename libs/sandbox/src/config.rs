@@ -5,6 +5,45 @@
 
 use serde::{Deserialize, Serialize};
 
+// ── Filesystem ─────────────────────────────────────────────────────────────────
+
+/// Safety limits applied to file reads and writes by [`WorkspaceFs`].
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FilesystemConfig {
+    /// Maximum bytes that `read()` will return for a single file.
+    pub max_read_bytes: usize,
+    /// Maximum bytes that `write()` will accept in a single call.
+    pub max_write_bytes: usize,
+    /// Reject writes whose content contains a null byte (binary heuristic).
+    pub forbid_binary_writes: bool,
+    /// Reject writes to dot-files (e.g. `.env`, `.gitignore`).
+    pub forbid_hidden_file_writes: bool,
+    /// File extensions that cannot be created or modified.
+    pub blocked_write_extensions: Vec<String>,
+}
+
+impl Default for FilesystemConfig {
+    fn default() -> Self {
+        Self {
+            max_read_bytes: 1_048_576, // 1 MiB
+            max_write_bytes: 524_288,  // 512 KiB
+            forbid_binary_writes: true,
+            forbid_hidden_file_writes: true,
+            blocked_write_extensions: vec![
+                ".exe".into(),
+                ".dll".into(),
+                ".so".into(),
+                ".dylib".into(),
+                ".sys".into(),
+                ".bin".into(),
+            ],
+        }
+    }
+}
+
+// ── Sandbox ────────────────────────────────────────────────────────────────────
+
 /// Root configuration for the sandbox system.
 ///
 /// Loaded from `.loomis/config.toml`. If the file is missing, a fresh one
@@ -14,6 +53,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SandboxConfig {
+    pub filesystem: FilesystemConfig,
     pub shell: ShellConfig,
     pub quotas: QuotaConfig,
     pub audit: AuditConfig,

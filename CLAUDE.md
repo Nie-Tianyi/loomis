@@ -46,13 +46,15 @@ in dedicated components.
 provider          LLMClient trait, Message, Role, ToolCall, ToolDef,
                   CompletionRequest/Response, ProviderError, Usage (no internal deps)
 deepseek          DeepSeekClient — SSE-streaming LLMClient impl
-tools             Tool trait (sync, Send+Sync), ToolRegistry, WorkspaceFs,
-                  ProgressStream, watchdog (process-tree kill on timeout)
+tools             Tool trait (sync, Send+Sync), ToolRegistry, ProgressStream,
+                  ToolError, generate_schema
 tools-macros      #[tool] proc macro — generates Tool impl
 memory            Memory, SharedMemory, PendingHints, PersistenceConfig
 skills            SkillDef, SkillRegistry, ActiveSkills (no workspace deps)
-sandbox           SandboxConfig, ShellFilter, EnvSanitizer, AuditLogger,
-                  ResourceTracker
+sandbox           SandboxConfig, FilesystemConfig, WorkspaceFs (Layer 1),
+                  ShellFilter (Layer 2), SandboxHook (Layer 3),
+                  EnvSanitizer (Layer 4), Watchdog (Layer 5),
+                  AuditLogger, ResourceTracker
 engine            Agent (ReAct loop), AgentBuilder, EngineContext, AgentHook,
                   AgentEvent, ResponseRouter, block_on
 hooks             MicroCompactHook, MacroCompactHook<C>
@@ -61,7 +63,7 @@ subagent          SubagentTool<C>, SubagentConfig
 loomis (bin)      14 tools, 8 hooks, TUI, build_coding_agent()
 
 provider ← deepseek, tools, memory
-provider+tools+memory ← engine ← hooks, observability ← subagent
+provider+tools+memory ← engine ← sandbox, hooks, observability ← subagent
 everything ← loomis (bin)
 ```
 
@@ -131,11 +133,11 @@ Key constants in `libs/hooks/src/compact.rs`: `DEFAULT_COMPACT_TOKEN_LIMIT`,
 
 | Layer | Component (crate) | Role |
 | --- | --- | --- |
-| 1 | `WorkspaceFs` (tools) | Path sandbox — canonicalization, file-size caps, extension blocklist, hidden-file protection, binary detection, TOCTOU re-check |
+| 1 | `WorkspaceFs` (sandbox) | Path sandbox — canonicalization, file-size caps, extension blocklist, hidden-file protection, binary detection, TOCTOU re-check |
 | 2 | `ShellFilter` (sandbox) | Command classification — auto-approve prefixes (`git`, `cargo`, …), deny patterns (`rm -rf /`, `sudo`), prompt for rest |
-| 3 | `SandboxHook` (sandbox crate) | Orchestrator — quotas, user prompts via `InterventionRequired` + `ResponseRouter` rendezvous, audit log to `.loomis/audit.jsonl` |
+| 3 | `SandboxHook` (sandbox) | Orchestrator — quotas, user prompts via `InterventionRequired` + `ResponseRouter` rendezvous, audit log to `.loomis/audit.jsonl` |
 | 4 | `EnvSanitizer` (sandbox) | Clears dangerous env vars in child processes |
-| 5 | Watchdog (tools) | Kills process tree on timeout (`taskkill /F /T` on Windows) |
+| 5 | `Watchdog` (sandbox) | Kills process tree on timeout (`taskkill /F /T` on Windows) |
 
 Config: `<workspace>/.loomis/config.toml` → `SandboxConfig` (safe defaults if
 missing). Shell output is capped at 100 KB.

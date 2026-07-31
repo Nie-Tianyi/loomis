@@ -13,11 +13,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use tools::WorkspaceFs;
-use tools::{FsError, Progress, ProgressStream, ToolError, tool};
+use sandbox::FsError;
+use sandbox::WorkspaceFs;
+use tools::{Progress, ProgressStream, ToolError, tool};
 
 #[cfg(test)]
-use tools::FilesystemConfig;
+use sandbox::FilesystemConfig;
 
 /// Arguments for the edit tool.
 #[derive(JsonSchema, Deserialize)]

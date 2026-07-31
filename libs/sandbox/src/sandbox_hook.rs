@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Non-shell tools pass through without checks (their sandboxing is
-//! handled by `WorkspaceFs` in the tool implementation).
+//! handled by [`WorkspaceFs`]).
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;

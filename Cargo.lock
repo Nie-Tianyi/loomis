@@ -1796,6 +1796,7 @@ name = "sandbox"
 version = "0.1.0"
 dependencies = [
  "engine",
+ "glob",
  "memory",
  "provider",
  "regex",
@@ -2384,16 +2385,10 @@ dependencies = [
  "futures-core",
  "futures-executor",
  "futures-util",
- "glob",
  "provider",
- "regex",
  "schemars",
- "serde",
  "serde_json",
- "tempfile",
- "toml",
  "tools-macros",
- "tracing",
 ]
 
 [[package]]

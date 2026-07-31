@@ -48,7 +48,7 @@
 
 ![文件工具权限检查](./assets/toolcall.png)
 
-代码位置：[`libs/tools/src/fs.rs`](../libs/tools/src/fs.rs)
+代码位置：[`libs/sandbox/src/fs.rs`](../libs/sandbox/src/fs.rs)
 
 ### Shell 工具 (shell)
 

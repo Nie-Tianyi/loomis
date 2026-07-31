@@ -1,7 +1,7 @@
 //! Shell command execution for `!command` (user-initiated) invocations.
 //!
 //! Spawns a child process in the workspace root, captures stdout/stderr,
-//! enforces a 30-second timeout via [`Watchdog`](tools::watchdog::Watchdog),
+//! enforces a 30-second timeout via [`Watchdog`](sandbox::watchdog::Watchdog),
 //! and decodes output respecting the system ANSI code page on Windows via
 //! [`decode_stdout`](sandbox::encoding::decode_stdout).
 
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use sandbox::encoding::{self, MAX_OUTPUT_BYTES};
 use sandbox::env_sanitizer;
-use tools::watchdog::Watchdog;
+use sandbox::watchdog::Watchdog;
 
 /// Executes a shell command in the workspace root, capturing stdout and stderr.
 ///
