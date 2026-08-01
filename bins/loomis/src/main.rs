@@ -42,17 +42,20 @@ async fn main() {
     // Load environment
     dotenvy::dotenv().ok();
 
+    // Check the required API key before touching the filesystem (tracing
+    // would create `.loomis/logs`) — a missing `.env` must fail loudly
+    // without leaving any artifacts behind.
+    let api_key = std::env::var("DEEPSEEK_API").unwrap_or_else(|_| {
+        eprintln!("error: DEEPSEEK_API not set. Create a .env file with: DEEPSEEK_API=sk-...");
+        std::process::exit(1);
+    });
+
     // Determine workspace root early — needed for log directory path.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // Initialize structured logging before any business logic.
     // The guard must stay alive until process exit.
     let _guard = init_tracing(&cwd);
-
-    let api_key = std::env::var("DEEPSEEK_API").unwrap_or_else(|_| {
-        tracing::error!("DEEPSEEK_API not set. Create a .env file with: DEEPSEEK_API=sk-...");
-        std::process::exit(1);
-    });
 
     let model = std::env::var("DEFAULT_PRO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     let flash_model =
@@ -81,6 +84,9 @@ async fn main() {
     let model = kit.model.clone();
     match loomis::tui::run(kit, cwd, &model) {
         Ok(()) => {}
-        Err(e) => tracing::error!(error = %e, "TUI error"),
+        Err(e) => {
+            tracing::error!(error = %e, "TUI error");
+            eprintln!("error: TUI failed: {e}");
+        }
     }
 }
