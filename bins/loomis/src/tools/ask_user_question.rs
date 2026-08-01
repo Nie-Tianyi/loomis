@@ -124,6 +124,9 @@ impl AskUserQuestionTool {
 
     /// Core logic — blocks the agent task until the user responds.
     fn execute_stream(&self, args: AskUserQuestionArgs) -> Result<ProgressStream, ToolError> {
+        let question_preview: String = args.question.chars().take(300).collect();
+        tracing::debug!(question = %question_preview, "Asking user question");
+
         let agent_tx = self
             .agent_tx
             .get()
@@ -149,11 +152,19 @@ impl AskUserQuestionTool {
         let response = match response {
             Ok(resp) => resp,
             Err(InterventionError::Timeout) => {
+                tracing::error!(
+                    question = %question_preview,
+                    "Timed out waiting for user response"
+                );
                 return Err(ToolError::Execution(
                     "Timed out waiting for user response (5 minutes)".into(),
                 ));
             }
             Err(InterventionError::Disconnected) => {
+                tracing::error!(
+                    question = %question_preview,
+                    "Intervention channel disconnected (TUI may have exited)"
+                );
                 return Err(ToolError::Execution(
                     "Intervention channel disconnected (TUI may have exited)".into(),
                 ));
@@ -162,9 +173,18 @@ impl AskUserQuestionTool {
 
         // Build output from the user's response.
         match (response.chosen, response.custom_text) {
-            (None, _) => Err(ToolError::Execution("User cancelled the question".into())),
+            (None, _) => {
+                tracing::warn!(question = %question_preview, "User cancelled the question");
+                Err(ToolError::Execution("User cancelled the question".into()))
+            }
             (Some(_), Some(custom)) => {
                 // User selected "…" option and typed custom text.
+                let answer_preview: String = custom.chars().take(300).collect();
+                tracing::info!(
+                    question = %question_preview,
+                    answer = %answer_preview,
+                    "User answered question (custom text)"
+                );
                 Ok(ProgressStream::done(custom))
             }
             (Some(idx), None) => {
@@ -173,6 +193,12 @@ impl AskUserQuestionTool {
                     .get(idx)
                     .cloned()
                     .unwrap_or_else(|| format!("Option {idx}"));
+                tracing::info!(
+                    question = %question_preview,
+                    option = idx,
+                    answer = %label,
+                    "User answered question"
+                );
                 Ok(ProgressStream::done(label))
             }
         }

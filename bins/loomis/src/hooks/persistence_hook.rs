@@ -32,6 +32,22 @@ impl AgentHook for PersistenceHook {
     fn on_run_finish(&self, _session_id: &str, _outcome: &RunOutcome, memory: &SharedMemory) {
         let mem = memory.read().expect("memory lock poisoned");
         let name = memory::default_thread_name(&self.workspace_root, &self.config);
-        let _ = memory::save_conversation(&name, &self.workspace_root, &mem, &self.config);
+        let messages = mem.messages.len();
+        let path = self
+            .workspace_root
+            .join(&self.config.threads_dir)
+            .join(format!("{name}.json"));
+        match memory::save_conversation(&name, &self.workspace_root, &mem, &self.config) {
+            Ok(()) => tracing::info!(
+                path = %path.display(),
+                messages = messages,
+                "Conversation persisted after run",
+            ),
+            Err(e) => tracing::error!(
+                path = %path.display(),
+                error = %e,
+                "Failed to persist conversation after run",
+            ),
+        }
     }
 }

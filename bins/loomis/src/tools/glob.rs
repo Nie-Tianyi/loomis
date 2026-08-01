@@ -59,7 +59,12 @@ impl GlobTool {
     }
 
     fn execute_stream(&self, args: GlobArgs) -> Result<ProgressStream, ToolError> {
-        let files = self.fs.glob(&args.pattern).map_err(map_fs_err)?;
+        tracing::debug!(pattern = %args.pattern, "Globbing files");
+        let files = self.fs.glob(&args.pattern).map_err(|e| {
+            tracing::warn!(pattern = %args.pattern, error = %e, "Glob failed");
+            map_fs_err(e)
+        })?;
+        tracing::debug!(pattern = %args.pattern, files = files.len(), "Glob complete");
 
         let output = if files.is_empty() {
             "No files matched.".to_string()

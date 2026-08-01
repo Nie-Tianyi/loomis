@@ -142,6 +142,12 @@ impl AgentHook for SandboxHook {
             .resource_tracker
             .check(session_id, &tool_call.function.name)
         {
+            tracing::warn!(
+                session_id,
+                tool = %tool_call.function.name,
+                reason = %reason,
+                "Tool call rejected: resource quota exceeded"
+            );
             return Err(AgentError::ToolRejected {
                 name: tool_call.function.name.clone(),
                 reason,
@@ -158,6 +164,12 @@ impl AgentHook for SandboxHook {
         match self.shell_filter.classify(&command) {
             CommandVerdict::Blocked { reason } => {
                 // Log the block and reject immediately — no prompt.
+                tracing::warn!(
+                    session_id,
+                    command = %command,
+                    reason = %reason,
+                    "Shell command blocked by sandbox policy"
+                );
                 self.audit_logger.log(AuditEntry {
                     timestamp: memory::iso8601_now(),
                     session_id: session_id.to_string(),
@@ -177,6 +189,11 @@ impl AgentHook for SandboxHook {
 
             CommandVerdict::AutoApproved => {
                 // Log and allow — no prompt.
+                tracing::debug!(
+                    session_id,
+                    command = %command,
+                    "Shell command auto-approved"
+                );
                 self.audit_logger.log(AuditEntry {
                     timestamp: memory::iso8601_now(),
                     session_id: session_id.to_string(),
@@ -190,8 +207,18 @@ impl AgentHook for SandboxHook {
 
             CommandVerdict::RequiresApproval => {
                 // Prompt the user.
+                tracing::debug!(
+                    session_id,
+                    command = %command,
+                    "Shell command requires user approval — prompting"
+                );
                 match self.request_user_approval(tool_call, &command) {
                     Ok(()) => {
+                        tracing::info!(
+                            session_id,
+                            command = %command,
+                            "Shell command approved by user"
+                        );
                         self.audit_logger.log(AuditEntry {
                             timestamp: memory::iso8601_now(),
                             session_id: session_id.to_string(),
@@ -205,6 +232,12 @@ impl AgentHook for SandboxHook {
                     Err(e) => {
                         // Cancel the active_shells increment from check() —
                         // the tool was rejected by the user before execution.
+                        tracing::warn!(
+                            session_id,
+                            command = %command,
+                            error = %e,
+                            "Shell command rejected: user denied or approval timed out"
+                        );
                         self.resource_tracker.cancel(session_id, "shell");
                         self.audit_logger.log(AuditEntry {
                             timestamp: memory::iso8601_now(),

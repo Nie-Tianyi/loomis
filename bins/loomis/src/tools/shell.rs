@@ -22,7 +22,7 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -115,9 +115,16 @@ impl ShellTool {
             ));
         }
 
+        let command_preview: String = command.chars().take(300).collect();
+
         // ── Command validation ────────────────────────────────────────
         use sandbox::shell_filter::CommandVerdict;
         if let CommandVerdict::Blocked { reason } = self.filter.classify(&command) {
+            tracing::warn!(
+                command = %command_preview,
+                reason = %reason,
+                "Shell command blocked by sandbox policy"
+            );
             return Err(ToolError::Execution(format!(
                 "Command blocked by sandbox policy: {reason}"
             )));
@@ -161,9 +168,18 @@ impl ShellTool {
         // Apply environment sanitization
         env_sanitizer::sanitize(&mut cmd, &self.workspace_root, self.sanitize_env);
 
+        let start = Instant::now();
+
         let child = cmd
             .spawn()
-            .map_err(|e| ToolError::Execution(format!("Failed to spawn command: {e}")))?;
+            .map_err(|e| {
+                tracing::error!(
+                    command = %command_preview,
+                    error = %e,
+                    "Failed to spawn shell command"
+                );
+                ToolError::Execution(format!("Failed to spawn command: {e}"))
+            })?;
 
         let pid = child.id();
 
@@ -218,6 +234,42 @@ impl ShellTool {
         {
             // Append exit code info after output
             result.push_str(&format!("\n\n[exit code: {code}]"));
+        }
+
+        let elapsed_ms = start.elapsed().as_millis();
+        match exit_code {
+            Some(0) if stderr_clean.is_empty() => {
+                tracing::info!(
+                    command = %command_preview,
+                    exit_code = 0,
+                    elapsed_ms,
+                    "Shell command completed"
+                );
+            }
+            Some(0) => {
+                tracing::warn!(
+                    command = %command_preview,
+                    exit_code = 0,
+                    stderr_len = stderr_clean.len(),
+                    elapsed_ms,
+                    "Shell command completed with stderr output"
+                );
+            }
+            Some(code) => {
+                tracing::error!(
+                    command = %command_preview,
+                    exit_code = code,
+                    elapsed_ms,
+                    "Shell command failed"
+                );
+            }
+            None => {
+                tracing::error!(
+                    command = %command_preview,
+                    elapsed_ms,
+                    "Shell command terminated by signal (likely watchdog timeout)"
+                );
+            }
         }
 
         let output = result;

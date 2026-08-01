@@ -24,6 +24,20 @@ pub fn sanitize(cmd: &mut Command, workspace_root: &Path, enabled: bool) {
     // Save values before clearing.
     let preserved = collect_safe_vars();
 
+    // Record which variables get cleared — names only, never values
+    // (values may contain secrets such as API keys).
+    let cleared: Vec<String> = std::env::vars_os()
+        .map(|(k, _)| k.to_string_lossy().into_owned())
+        .filter(|k| !preserved.contains_key(k))
+        .collect();
+    if !cleared.is_empty() {
+        tracing::debug!(
+            count = cleared.len(),
+            names = ?cleared,
+            "Cleared environment variables for sandboxed child process"
+        );
+    }
+
     cmd.env_clear();
 
     // Restore safe variables

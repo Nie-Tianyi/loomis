@@ -12,3 +12,4 @@ futures-executor = { workspace = true }
 futures-util = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
+tracing = { workspace = true }

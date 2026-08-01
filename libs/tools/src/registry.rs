@@ -28,7 +28,9 @@ impl ToolRegistry {
     /// Register a tool, keyed by [`Tool::name()`].
     /// Replaces any existing tool with the same name.
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
-        self.tools.insert(tool.name().to_owned(), tool);
+        let name = tool.name().to_owned();
+        tracing::debug!(name = %name, "Tool registered");
+        self.tools.insert(name, tool);
     }
 
     /// Look up a tool by name.
@@ -71,7 +73,20 @@ impl ToolRegistry {
         name: &str,
         args: &str,
     ) -> Option<Result<crate::ProgressStream, ToolError>> {
-        self.tools.get(name).map(|tool| tool.execute_stream(args))
+        match self.tools.get(name) {
+            Some(tool) => {
+                tracing::debug!(name = %name, "Tool execution started");
+                let result = tool.execute_stream(args);
+                if let Err(e) = &result {
+                    tracing::warn!(name = %name, error = %e, "Tool failed to start");
+                }
+                Some(result)
+            }
+            None => {
+                tracing::warn!(name = %name, "Tool not found in registry");
+                None
+            }
+        }
     }
 }
 

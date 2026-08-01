@@ -229,6 +229,14 @@ impl<C: LLMClient> AgentBuilder<C> {
         }
 
         // Step 3: build tool registry
+        tracing::debug!(
+            model = %self.model,
+            tool_count = self.tools.len(),
+            max_steps = self.max_steps,
+            max_retries = self.max_retries,
+            streaming = self.streaming,
+            "agent built",
+        );
         let mut registry = ToolRegistry::new();
         for tool in self.tools {
             registry.register(tool);

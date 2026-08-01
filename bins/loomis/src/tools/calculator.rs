@@ -80,7 +80,15 @@ pub struct CalculatorTool;
 
 impl CalculatorTool {
     fn execute_stream(&self, args: CalculatorArgs) -> Result<ProgressStream, ToolError> {
+        let expr_preview: String = args.expression.chars().take(300).collect();
+        tracing::debug!(expression = %expr_preview, "Evaluating expression");
         let result = ExprEvaluator::evaluate(&args.expression).map_err(|e| {
+            tracing::warn!(
+                expression = %expr_preview,
+                position = e.position,
+                error = %e,
+                "Failed to evaluate expression"
+            );
             ToolError::Execution(format!("at position {}: {e}", e.position.unwrap_or(0)))
         })?;
 
@@ -90,6 +98,8 @@ impl CalculatorTool {
         } else {
             format!("{result}")
         };
+
+        tracing::debug!(expression = %expr_preview, result = %output, "Calculation result");
 
         Ok(ProgressStream::done(output))
     }

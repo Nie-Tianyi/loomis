@@ -21,6 +21,8 @@ pub struct AuditLogger {
     enabled: bool,
     file: Option<Mutex<File>>,
     ring: Mutex<VecDeque<AuditEntry>>,
+    /// Resolved audit file path (for error reporting).
+    path: std::path::PathBuf,
 }
 
 /// A single audit record.
@@ -36,17 +38,26 @@ pub struct AuditEntry {
 
 impl AuditLogger {
     pub fn new(config: &SandboxConfig, workspace_root: &Path) -> Self {
+        let log_path = workspace_root.join(&config.audit.log_file);
         let file = if config.audit.enabled {
-            let log_path = workspace_root.join(&config.audit.log_file);
             if let Some(parent) = log_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            OpenOptions::new()
+            match OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&log_path)
-                .ok()
-                .map(Mutex::new)
+            {
+                Ok(f) => Some(Mutex::new(f)),
+                Err(e) => {
+                    tracing::error!(
+                        path = %log_path.display(),
+                        error = %e,
+                        "Failed to open audit log file — audit entries will not be persisted"
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
@@ -55,6 +66,7 @@ impl AuditLogger {
             enabled: config.audit.enabled,
             file,
             ring: Mutex::new(VecDeque::with_capacity(RING_CAPACITY)),
+            path: log_path,
         }
     }
 
@@ -72,11 +84,23 @@ impl AuditLogger {
         }
 
         // Append to file
-        if let Some(ref file_mutex) = self.file
+        if let Some(file_mutex) = self.file.as_ref()
             && let Ok(mut file) = file_mutex.lock()
-            && let Ok(json) = serde_json::to_string(&entry)
         {
-            let _ = writeln!(file, "{json}");
+            match serde_json::to_string(&entry) {
+                Ok(json) => {
+                    if let Err(e) = writeln!(file, "{json}") {
+                        tracing::error!(
+                            path = %self.path.display(),
+                            error = %e,
+                            "Failed to write audit log entry"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to serialize audit log entry");
+                }
+            }
         }
     }
 

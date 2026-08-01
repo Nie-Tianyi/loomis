@@ -74,10 +74,17 @@ pub fn request_intervention(
     // Notify the TUI to render an interactive intervention prompt.
     let _ = agent_tx.send(AgentEvent::InterventionRequired(InterventionRequest {
         request_id: request_id.clone(),
-        title,
-        description,
+        title: title.clone(),
+        description: description.clone(),
         options,
     }));
+    tracing::debug!(
+        request_id = %request_id,
+        title = %title,
+        description_len = description.len(),
+        timeout_secs = timeout.as_secs(),
+        "intervention requested — awaiting user response",
+    );
 
     // Block until the user responds (with timeout to prevent deadlock).
     let result = rx.recv_timeout(timeout);
@@ -87,9 +94,16 @@ pub fn request_intervention(
     response_router.unregister(&request_id);
 
     match result {
-        Ok(resp) => Ok(resp),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(InterventionError::Timeout),
+        Ok(resp) => {
+            tracing::debug!(request_id = %request_id, "intervention response received");
+            Ok(resp)
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            tracing::warn!(request_id = %request_id, "intervention request timed out");
+            Err(InterventionError::Timeout)
+        }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            tracing::warn!(request_id = %request_id, "intervention channel disconnected");
             Err(InterventionError::Disconnected)
         }
     }

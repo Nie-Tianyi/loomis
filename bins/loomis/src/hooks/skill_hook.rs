@@ -65,12 +65,20 @@ impl AgentHook for SkillHook {
         mem.messages
             .retain(|m| !(m.role == Role::System && m.content.starts_with(SKILL_MARKER_PREFIX)));
 
+        let names: Vec<&String> = active.keys().collect();
+
         // Insert one System message per active skill at index 0.
         // Iterate in reverse so skills inserted first appear first in memory.
         for (name, content) in active.iter() {
             let msg = format!("{SKILL_MARKER_PREFIX} {name}]\n\n{content}");
             mem.messages.insert(0, Message::new(Role::System, msg));
         }
+
+        tracing::debug!(
+            skills = ?names,
+            count = names.len(),
+            "Synced [SKILL] system messages",
+        );
     }
 }
 

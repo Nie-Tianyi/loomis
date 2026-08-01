@@ -143,6 +143,7 @@ impl SkillRegistry {
         // Sort by name for deterministic ordering in the system prompt list.
         skills.sort_by(|a, b| a.name.cmp(&b.name));
 
+        tracing::info!(count = skills.len(), "Skill discovery complete");
         Self { skills }
     }
 

@@ -102,8 +102,16 @@ impl SandboxConfig {
     /// template.
     pub fn load(config_path: &std::path::Path) -> Result<Self, ConfigError> {
         match std::fs::read_to_string(config_path) {
-            Ok(contents) => toml::from_str(&contents).map_err(ConfigError::Parse),
+            Ok(contents) => {
+                let config = toml::from_str(&contents).map_err(ConfigError::Parse)?;
+                tracing::info!(path = %config_path.display(), "Loaded sandbox config");
+                Ok(config)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::info!(
+                    path = %config_path.display(),
+                    "Sandbox config not found — using safe defaults"
+                );
                 let default_config = Self::default();
                 Self::try_write_default(config_path, &default_config);
                 Ok(default_config)

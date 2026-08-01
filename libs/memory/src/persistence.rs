@@ -89,6 +89,12 @@ pub fn save_conversation(
     let md = format_conversation_md(&cf, config);
     fs::write(dir.join(format!("{name}.md")), &md)?;
 
+    tracing::debug!(
+        name = %name,
+        message_count = cf.messages.len(),
+        bytes = json.len() + md.len(),
+        "conversation saved",
+    );
     Ok(())
 }
 
@@ -105,6 +111,11 @@ pub fn load_conversation(
     let cf: ConversationFile =
         serde_json::from_str(&json).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
+    tracing::debug!(
+        name = %name,
+        message_count = cf.messages.len(),
+        "conversation loaded",
+    );
     Ok(Memory::from(cf.messages))
 }
 

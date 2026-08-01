@@ -85,11 +85,18 @@ impl MicroCompactHook {
 impl AgentHook for MicroCompactHook {
     fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
         let mut mem = memory.write().expect("memory lock poisoned");
-        compact_messages(
+        let compacted = compact_messages(
             &mut mem.messages,
             self.keep_recent,
             &self.compact_eligible_tools,
         );
+        if compacted > 0 {
+            tracing::debug!(
+                compacted_count = compacted,
+                keep_recent = self.keep_recent,
+                "micro-compaction cleared old tool outputs",
+            );
+        }
     }
 }
 
@@ -160,6 +167,12 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
             return;
         }
 
+        tracing::info!(
+            drained_count = old.len(),
+            keep_last_n = self.keep_last_n,
+            "macro-compaction triggered, summarising drained messages",
+        );
+
         // Build summarisation transcript
         let transcript: String = old
             .iter()
@@ -206,8 +219,15 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
         };
 
         if !summary.is_empty() {
+            tracing::info!(
+                summary_len = summary.len(),
+                model = %self.compact_model,
+                "macro-compaction summary inserted as System message",
+            );
             let mut mem = memory.write().expect("memory lock poisoned");
             mem.messages.insert(0, Message::new(Role::System, summary));
+        } else {
+            tracing::warn!("macro-compaction produced empty summary");
         }
     }
 }

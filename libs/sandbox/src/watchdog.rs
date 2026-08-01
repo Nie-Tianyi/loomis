@@ -54,27 +54,39 @@ impl Watchdog {
             let deadline = Instant::now() + timeout;
             while Instant::now() < deadline {
                 if done_signal.load(Ordering::Relaxed) {
+                    tracing::debug!(pid, "Process finished normally before watchdog timeout");
                     return; // process finished normally
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
             // Timeout reached — best-effort kill.
+            tracing::warn!(
+                pid,
+                timeout_secs = timeout.as_secs(),
+                "Watchdog timeout reached — killing process"
+            );
             #[cfg(target_os = "windows")]
             {
                 // /T = tree kill (child processes too)
-                let _ = Command::new("taskkill")
+                if let Err(e) = Command::new("taskkill")
                     .args(["/F", "/T", "/PID", &pid.to_string()])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                {
+                    tracing::error!(pid, error = %e, "Failed to spawn taskkill for watchdog kill");
+                }
             }
             #[cfg(not(target_os = "windows"))]
             {
-                let _ = Command::new("kill")
+                if let Err(e) = Command::new("kill")
                     .args(["-9", &pid.to_string()])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                {
+                    tracing::error!(pid, error = %e, "Failed to spawn kill for watchdog kill");
+                }
             }
         });
 

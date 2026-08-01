@@ -81,12 +81,20 @@ impl ShellFilter {
     /// Classify a command.  The checks are applied in priority order:
     /// deny → strict allowlist → auto-approve → fallthrough.
     pub fn classify(&self, command: &str) -> CommandVerdict {
+        if command.trim().is_empty() {
+            tracing::warn!("Empty shell command classified");
+        }
+
         let binary = Self::extract_binary(command);
 
         // 1. Strict allowlist mode
         if let Some(ref allowed) = self.allow_binaries
             && !allowed.iter().any(|a| a == binary)
         {
+            tracing::debug!(
+                binary = %binary,
+                "Classified shell command: blocked (not in allowed-commands list)"
+            );
             return CommandVerdict::Blocked {
                 reason: format!("'{binary}' is not in the allowed-commands list"),
             };
@@ -95,6 +103,11 @@ impl ShellFilter {
         // 2. Deny patterns (checked against the full command string)
         for re in &self.deny_patterns {
             if re.is_match(command) {
+                tracing::debug!(
+                    binary = %binary,
+                    pattern = %re.as_str(),
+                    "Classified shell command: blocked (deny pattern matched)"
+                );
                 return CommandVerdict::Blocked {
                     reason: format!("command matches deny-pattern '{}'", re.as_str()),
                 };
@@ -104,6 +117,10 @@ impl ShellFilter {
         // 3. Auto-approve prefixes
         for prefix in &self.auto_approve_prefixes {
             if binary == prefix.as_str() {
+                tracing::debug!(
+                    binary = %binary,
+                    "Classified shell command: auto-approved"
+                );
                 return CommandVerdict::AutoApproved;
             }
             // Also check "binary args..." against prefix (handles things
@@ -114,11 +131,20 @@ impl ShellFilter {
                     .get(prefix.len())
                     .is_none_or(|&b| b == b' ')
             {
+                tracing::debug!(
+                    binary = %binary,
+                    prefix = %prefix,
+                    "Classified shell command: auto-approved (prefix match)"
+                );
                 return CommandVerdict::AutoApproved;
             }
         }
 
         // 4. Fallthrough — requires user approval
+        tracing::debug!(
+            binary = %binary,
+            "Classified shell command: requires user approval"
+        );
         CommandVerdict::RequiresApproval
     }
 }

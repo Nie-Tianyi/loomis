@@ -56,6 +56,7 @@ impl AgentHook for SystemPromptHook {
     fn on_run_start(&self, _session_id: &str, _user_input: &str, memory: &SharedMemory) {
         // Seed only once. After /new, system messages survive the clear.
         if self.seeded.swap(true, Ordering::SeqCst) {
+            tracing::debug!("System prompts already seeded, skipping");
             return;
         }
 
@@ -77,6 +78,12 @@ impl AgentHook for SystemPromptHook {
         if let Some(rules) = try_load_project_rules(&self.workspace_root) {
             mem.push(Message::new(Role::System, rules));
         }
+
+        tracing::debug!(
+            chars = mem.messages.iter().map(|m| m.content.len()).sum::<usize>(),
+            tools = self.tool_names.len(),
+            "Seeded initial system messages",
+        );
     }
 }
 
@@ -236,6 +243,12 @@ fn try_load_project_rules(workspace_root: &Path) -> Option<String> {
         let path = workspace_root.join(filename);
         match std::fs::read_to_string(&path) {
             Ok(content) if !content.trim().is_empty() => {
+                tracing::debug!(
+                    file = %filename,
+                    path = %path.display(),
+                    bytes = content.len(),
+                    "Loaded project rules",
+                );
                 let truncated = if content.len() > PROJECT_RULES_MAX_BYTES {
                     let boundary = content
                         .char_indices()

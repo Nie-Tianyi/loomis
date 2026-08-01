@@ -71,9 +71,14 @@ impl AgentHook for TodoListHook {
         mem.messages
             .retain(|m| !(m.role == Role::System && m.content.starts_with(TODO_MARKER)));
 
+        let item_count = state.len();
         if let Some(c) = content {
             mem.messages.insert(0, Message::new(Role::System, c));
         }
+        tracing::debug!(
+            items = item_count,
+            "Synced [TODO] system message",
+        );
     }
 }
 

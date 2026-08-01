@@ -66,13 +66,18 @@ impl WriteTool {
     }
 
     fn execute_stream(&self, args: WriteArgs) -> Result<ProgressStream, ToolError> {
+        tracing::debug!(path = %args.file_path, bytes = args.content.len(), "Writing file");
         // Validate and write synchronously first (errors surface immediately).
         self.fs
             .write(&args.file_path, &args.content)
-            .map_err(map_fs_err)?;
+            .map_err(|e| {
+                tracing::error!(path = %args.file_path, error = %e, "Failed to write file");
+                map_fs_err(e)
+            })?;
 
         let file_path = args.file_path.clone();
         let content_len = args.content.len();
+        tracing::info!(path = %file_path, bytes = content_len, "File written");
         let preview = super::content_preview(&args.content, "Content");
 
         // Stream progress events with small delays so the TUI can render

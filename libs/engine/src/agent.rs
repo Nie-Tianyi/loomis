@@ -323,6 +323,11 @@ impl<C: LLMClient> Agent<C> {
             .write()
             .expect("memory lock poisoned")
             .push(Message::new(Role::User, user_input));
+        tracing::debug!(
+            model = %self.ctx.model,
+            input = %user_input.chars().take(200).collect::<String>(),
+            "agent run started",
+        );
     }
 
     /// Run step-level hooks (on_step_start + on_llm_start) and return the
@@ -347,6 +352,7 @@ impl<C: LLMClient> Agent<C> {
         err: AgentError,
         tx: &Option<mpsc::UnboundedSender<AgentEvent>>,
     ) -> Result<String, AgentError> {
+        tracing::error!(error = %err, "agent run failed");
         if let Some(tx) = tx {
             let _ = tx.send(AgentEvent::RunFailed {
                 error: err.to_string(),
@@ -447,6 +453,11 @@ impl<C: LLMClient> Agent<C> {
             for hook in &self.ctx.hooks {
                 if let Err(e) = hook.before_tool_call("default", tc) {
                     // Blocked — write rejection to memory + emit event immediately.
+                    tracing::warn!(
+                        tool = %tc.function.name,
+                        reason = %e,
+                        "tool call blocked by hook",
+                    );
                     let rejection_msg = format!("Tool rejected: {e}");
                     self.ctx
                         .memory
@@ -472,6 +483,7 @@ impl<C: LLMClient> Agent<C> {
         // ═══════════════════════════════════════════════════════════════
         // Phase 2 — Execute ready tools (inline for 1, parallel for N).
         // ═══════════════════════════════════════════════════════════════
+        tracing::debug!(tool_count = ready.len(), "executing tool calls");
         let outcomes: Vec<ToolOutcome> = if ready.len() == 1 {
             // Fast path: single tool — no spawn overhead.
             let (index, tc) = ready.into_iter().next().unwrap();
@@ -672,6 +684,7 @@ impl<C: LLMClient> Agent<C> {
         let mut steps = 0;
         loop {
             if steps >= self.ctx.max_steps {
+                tracing::error!(step = steps, max_steps = self.ctx.max_steps, "max steps reached");
                 return self.fail_run(AgentError::MaxStepsReached(self.ctx.max_steps), &tx);
             }
             steps += 1;
@@ -690,6 +703,7 @@ impl<C: LLMClient> Agent<C> {
                     .expect("pending hints lock poisoned");
                 if !pending.is_empty() {
                     let mut mem = self.ctx.memory.write().expect("memory lock poisoned");
+                    tracing::debug!(hint_count = pending.len(), "draining pending user hints");
                     for msg in pending.drain(..) {
                         mem.push(msg);
                     }
@@ -738,6 +752,10 @@ impl<C: LLMClient> Agent<C> {
                     Ok(Some(result)) => result,
                     Ok(None) => break, // stream exhausted normally
                     Err(_elapsed) => {
+                        tracing::error!(
+                            timeout_secs = STREAM_CHUNK_TIMEOUT_SECS,
+                            "SSE stream timed out — no chunk received from provider",
+                        );
                         return self.fail_run(AgentError::StreamTimeout, &tx);
                     }
                 };
@@ -815,6 +833,7 @@ impl<C: LLMClient> Agent<C> {
         let mut steps = 0;
         loop {
             if steps >= self.ctx.max_steps {
+                tracing::error!(step = steps, max_steps = self.ctx.max_steps, "max steps reached");
                 return self.fail_run(AgentError::MaxStepsReached(self.ctx.max_steps), &tx);
             }
             steps += 1;
@@ -828,6 +847,7 @@ impl<C: LLMClient> Agent<C> {
                     .expect("pending hints lock poisoned");
                 if !pending.is_empty() {
                     let mut mem = self.ctx.memory.write().expect("memory lock poisoned");
+                    tracing::debug!(hint_count = pending.len(), "draining pending user hints");
                     for msg in pending.drain(..) {
                         mem.push(msg);
                     }
@@ -1302,6 +1322,7 @@ async fn execute_parallel(
                 } else {
                     "Tool task was cancelled".into()
                 };
+                tracing::error!(error = %panic_msg, "tool task panicked during parallel execution");
                 // We lost the original index and tc — this is an edge case.
                 // Push a synthetic outcome with an impossible index so it
                 // appears at the end of the sorted list.
@@ -1346,6 +1367,12 @@ async fn generate_with_retry(
             let backoff = Duration::from_millis(
                 RETRY_BASE_MS * (RETRY_EXP_FACTOR as u64).pow(attempt as u32 - 1),
             );
+            tracing::debug!(
+                attempt = attempt,
+                max_retries = max_retries,
+                backoff_ms = backoff.as_millis() as u64,
+                "retrying LLM call after backoff",
+            );
             tokio::time::sleep(backoff).await;
         }
         match client.generate(request.clone()).await {
@@ -1356,12 +1383,18 @@ async fn generate_with_retry(
                     hook.on_llm_error("default", &e, attempt, will_retry);
                 }
                 if !is_retryable(&e) {
+                    tracing::error!(error = %e, "LLM call failed with non-retryable error");
                     return Err(AgentError::Provider(e));
                 }
                 last_err = Some(e);
             }
         }
     }
+    tracing::error!(
+        error = %last_err.as_ref().unwrap(),
+        max_retries = max_retries,
+        "LLM call failed after exhausting retries",
+    );
     Err(AgentError::Provider(last_err.unwrap()))
 }
 
@@ -1378,6 +1411,12 @@ async fn stream_with_retry(
             let backoff = Duration::from_millis(
                 RETRY_BASE_MS * (RETRY_EXP_FACTOR as u64).pow(attempt as u32 - 1),
             );
+            tracing::debug!(
+                attempt = attempt,
+                max_retries = max_retries,
+                backoff_ms = backoff.as_millis() as u64,
+                "retrying LLM stream after backoff",
+            );
             tokio::time::sleep(backoff).await;
         }
         match client.stream(request.clone()).await {
@@ -1388,12 +1427,18 @@ async fn stream_with_retry(
                     hook.on_llm_error("default", &e, attempt, will_retry);
                 }
                 if !is_retryable(&e) {
+                    tracing::error!(error = %e, "LLM stream failed with non-retryable error");
                     return Err(AgentError::Provider(e));
                 }
                 last_err = Some(e);
             }
         }
     }
+    tracing::error!(
+        error = %last_err.as_ref().unwrap(),
+        max_retries = max_retries,
+        "LLM stream failed after exhausting retries",
+    );
     Err(AgentError::Provider(last_err.unwrap()))
 }
 

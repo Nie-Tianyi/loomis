@@ -134,6 +134,11 @@ impl TodoTool {
         let mut in_progress_count = 0usize;
         for item in &args.todos {
             if !VALID_STATUSES.contains(&item.status.as_str()) {
+                tracing::warn!(
+                    status = %item.status,
+                    todo = %item.content.chars().take(100).collect::<String>(),
+                    "Invalid todo status rejected"
+                );
                 return Err(ToolError::InvalidArgs(format!(
                     "invalid status {:?} for todo {:?} — must be one of: {}",
                     item.status,
@@ -146,6 +151,10 @@ impl TodoTool {
             }
         }
         if in_progress_count > 1 {
+            tracing::warn!(
+                in_progress_count,
+                "Multiple in-progress todos rejected (at most one allowed)"
+            );
             return Err(ToolError::InvalidArgs(format!(
                 "at most one todo may be \"in_progress\" at a time, found {in_progress_count}"
             )));
@@ -163,6 +172,7 @@ impl TodoTool {
         // ── Build human-readable summary ────────────────────────────
         let total = args.todos.len();
         if total == 0 {
+            tracing::info!("Todo list cleared");
             return Ok(ProgressStream::done("Cleared todo list (no tasks)".into()));
         }
 
@@ -188,6 +198,14 @@ impl TodoTool {
         if pending > 0 {
             parts.push(format!("{pending} pending"));
         }
+
+        tracing::info!(
+            total,
+            pending,
+            in_progress,
+            completed,
+            "Todo list updated"
+        );
 
         Ok(ProgressStream::done(parts.join(", ")))
     }

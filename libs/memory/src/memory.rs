@@ -114,6 +114,12 @@ impl From<Vec<Message>> for Memory {
 
 impl Memory {
     pub fn push(&mut self, message: Message) {
+        tracing::trace!(
+            role = ?message.role,
+            content_len = message.content.len(),
+            message_count = self.messages.len() + 1,
+            "message pushed to memory",
+        );
         self.messages.push(message);
     }
 

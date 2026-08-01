@@ -55,6 +55,10 @@ impl DeepSeekStream {
                 Ok(Some(bytes)) => {
                     self.buffer.extend_from_slice(&bytes);
                     if self.buffer.len() > MAX_SSE_EVENT_SIZE {
+                        tracing::error!(
+                            max_bytes = MAX_SSE_EVENT_SIZE,
+                            "SSE stream buffer overflow",
+                        );
                         self.finished = true;
                         return Some(Err(DeepSeekError::Parse(format!(
                             "SSE buffer overflow: exceeded {} bytes",
@@ -71,7 +75,10 @@ impl DeepSeekStream {
                     let text = String::from_utf8_lossy(trimmed).into_owned();
                     return Some(Ok(text));
                 }
-                Err(e) => return Some(Err(DeepSeekError::Http(e))),
+                Err(e) => {
+                    tracing::warn!(error = %e, "error while reading SSE stream chunk");
+                    return Some(Err(DeepSeekError::Http(e)));
+                }
             }
         }
     }
@@ -104,6 +111,11 @@ impl DeepSeekStream {
             match serde_json::from_str::<StreamChunk>(&data) {
                 Ok(chunk) => return Some(Ok(chunk)),
                 Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        data = %data.chars().take(300).collect::<String>(),
+                        "failed to parse SSE stream chunk",
+                    );
                     self.finished = true;
                     return Some(Err(DeepSeekError::Parse(e.to_string())));
                 }

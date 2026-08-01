@@ -164,7 +164,9 @@ fn run_event_loop(
                                 return Ok(());
                             }
                             cmd => {
-                                let _ = cmd_tx.send(cmd);
+                                if cmd_tx.send(cmd).is_err() {
+                                    tracing::error!("Failed to send TuiCommand to agent handler");
+                                }
                             }
                         }
                     }
@@ -226,6 +228,11 @@ async fn agent_handler(
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
             TuiCommand::RunAgent(input) => {
+                tracing::debug!(
+                    input_len = input.chars().count(),
+                    "RunAgent command received; spawning agent task",
+                );
+
                 // If a previous run is still active, cancel it.
                 if let Some(h) = current_run.take() {
                     h.abort();
@@ -245,7 +252,9 @@ async fn agent_handler(
                         // Normal completion — PersistenceHook already saved the
                         // conversation in on_run_finish, and the agent loop
                         // already emitted RunCompleted/RunFailed + Done events.
-                        Ok(Ok(_)) => {}
+                        Ok(Ok(_)) => {
+                            tracing::debug!("Agent task finished normally");
+                        }
                         Ok(Err(e)) => {
                             tracing::error!(error = %e, "Agent run failed");
                         }
@@ -267,6 +276,7 @@ async fn agent_handler(
             }
 
             TuiCommand::CancelGeneration => {
+                tracing::debug!("CancelGeneration command received");
                 if let Some(h) = current_run.take() {
                     h.abort();
                     // The agent task is killed immediately — no hooks can run.
@@ -277,6 +287,7 @@ async fn agent_handler(
             }
 
             TuiCommand::ClearConversation => {
+                tracing::debug!("ClearConversation command received");
                 // Cancel any active generation.
                 if let Some(h) = current_run.take() {
                     h.abort();
@@ -289,6 +300,7 @@ async fn agent_handler(
                     .into_iter()
                     .filter(|m| m.role == Role::System)
                     .collect();
+                let preserved = system_msgs.len();
                 *mem = memory::Memory::new();
                 for msg in system_msgs {
                     mem.push(msg);
@@ -299,12 +311,22 @@ async fn agent_handler(
                 {
                     let mem = memory.read().expect("memory lock poisoned");
                     let name = memory::default_thread_name(&workspace_root, &persistence_config);
-                    let _ = memory::save_conversation(
+                    match memory::save_conversation(
                         &name,
                         &workspace_root,
                         &mem,
                         &persistence_config,
-                    );
+                    ) {
+                        Ok(()) => tracing::debug!(
+                            preserved = preserved,
+                            "Cleared conversation persisted",
+                        ),
+                        Err(e) => tracing::error!(
+                            name = %name,
+                            error = %e,
+                            "Failed to persist cleared conversation",
+                        ),
+                    }
                 }
             }
 
@@ -312,6 +334,10 @@ async fn agent_handler(
                 request_id,
                 response,
             } => {
+                tracing::debug!(
+                    request_id = %request_id.chars().take(12).collect::<String>(),
+                    "InterventionResponse command received",
+                );
                 // Route the response to the correct requester
                 // (SandboxHook, AskUserQuestionTool, …) via the
                 // shared router.  The router removes the sender
@@ -320,6 +346,10 @@ async fn agent_handler(
             }
 
             TuiCommand::RunShell(command) => {
+                tracing::debug!(
+                    cmd = %command.chars().take(200).collect::<String>(),
+                    "RunShell command received",
+                );
                 // Execute the shell command asynchronously — do NOT block
                 // the agent handler or the TUI thread. The command runs
                 // in a blocking thread; when it completes, output is
@@ -378,16 +408,23 @@ async fn agent_handler(
             }
 
             TuiCommand::Exit => {
+                tracing::debug!("Exit command received; saving conversation");
                 // Save conversation before exiting.
                 {
                     let mem = memory.read().expect("memory lock poisoned");
                     let name = memory::default_thread_name(&workspace_root, &persistence_config);
-                    let _ = memory::save_conversation(
+                    if let Err(e) = memory::save_conversation(
                         &name,
                         &workspace_root,
                         &mem,
                         &persistence_config,
-                    );
+                    ) {
+                        tracing::error!(
+                            name = %name,
+                            error = %e,
+                            "Failed to save conversation on exit",
+                        );
+                    }
                 }
 
                 if let Some(h) = current_run.take() {

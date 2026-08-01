@@ -67,10 +67,19 @@ impl GrepTool {
     }
 
     fn execute_stream(&self, args: GrepArgs) -> Result<ProgressStream, ToolError> {
+        tracing::debug!(
+            pattern = %args.pattern,
+            path_glob = args.path_glob.as_deref(),
+            "Grepping files"
+        );
         let matches = self
             .fs
             .grep(&args.pattern, args.path_glob.as_deref())
-            .map_err(map_fs_err)?;
+            .map_err(|e| {
+                tracing::warn!(pattern = %args.pattern, error = %e, "Grep failed");
+                map_fs_err(e)
+            })?;
+        tracing::debug!(pattern = %args.pattern, matches = matches.len(), "Grep complete");
 
         let output = if matches.is_empty() {
             "No matches found.".to_string()

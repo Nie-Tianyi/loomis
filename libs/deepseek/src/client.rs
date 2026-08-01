@@ -42,7 +42,14 @@ impl DeepSeekClient {
     ) -> Result<reqwest::Response, DeepSeekError> {
         let status = response.status();
         if !status.is_success() {
+            let url = response.url().to_string();
             let body = response.text().await.unwrap_or_default();
+            tracing::warn!(
+                status = status.as_u16(),
+                url = %url,
+                body = %body.chars().take(500).collect::<String>(),
+                "DeepSeek API returned error status",
+            );
             return Err(DeepSeekError::Api {
                 status: status.as_u16(),
                 body,
@@ -61,6 +68,13 @@ impl DeepSeekClient {
         }
 
         let url = format!("{}/v1/chat/completions", self.base_url);
+        tracing::debug!(
+            model = %request.model,
+            message_count = request.messages.len(),
+            tool_count = request.tools.as_ref().map_or(0, Vec::len),
+            "sending non-streaming completion request",
+        );
+        let start = std::time::Instant::now();
         let response = self
             .http
             .post(&url)
@@ -72,10 +86,16 @@ impl DeepSeekClient {
 
         let response = Self::check_response_status(response).await?;
 
-        response
+        let ds_resp = response
             .json::<DeepSeekResponse>()
             .await
-            .map_err(|e| DeepSeekError::Parse(e.to_string()))
+            .map_err(|e| DeepSeekError::Parse(e.to_string()))?;
+        tracing::debug!(
+            latency_ms = start.elapsed().as_millis() as u64,
+            total_tokens = ds_resp.usage.as_ref().map_or(0, |u| u.total_tokens),
+            "completion request finished",
+        );
+        Ok(ds_resp)
     }
 
     /// Start a streaming completion request.
@@ -86,6 +106,12 @@ impl DeepSeekClient {
         request.stream = true;
 
         let url = format!("{}/v1/chat/completions", self.base_url);
+        tracing::debug!(
+            model = %request.model,
+            message_count = request.messages.len(),
+            tool_count = request.tools.as_ref().map_or(0, Vec::len),
+            "opening streaming completion request",
+        );
         let response = self
             .http
             .post(&url)

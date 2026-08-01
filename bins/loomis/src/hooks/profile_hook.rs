@@ -213,6 +213,12 @@ impl ProfileHook {
     /// `Handle::block_on` would panic because the agent loop (and
     /// therefore this hook) runs on a tokio worker thread.
     fn run_synthesis(&self, memory: &SharedMemory) {
+        tracing::info!(
+            model = %self.flash_model,
+            "Profile synthesis started",
+        );
+        let synthesis_started = std::time::Instant::now();
+
         // ── Gather input under locks (released before the LLM call) ──
         let (profile_json, context_text) = {
             let mem = memory.read().expect("memory lock poisoned");
@@ -259,6 +265,15 @@ impl ProfileHook {
                     .unwrap_or_default();
 
                 if let Some(update) = parse_synthesis_response(&text) {
+                    // Snapshot the extracted entry counts before the merge
+                    // consumes the update struct.
+                    let (preferences, avoidances, expertise, conventions) = (
+                        update.preferences.len(),
+                        update.avoidances.len(),
+                        update.expertise_signals.len(),
+                        update.coding_conventions.len(),
+                    );
+
                     let mut store = self.store.write().expect("profile store lock poisoned");
 
                     // Merge only non-empty fields — empty arrays mean
@@ -287,6 +302,15 @@ impl ProfileHook {
                     store.profile.last_synthesis_session = store.profile.total_sessions;
                     store.profile.updated_at = memory::iso8601_now();
                     store.save();
+
+                    tracing::info!(
+                        duration_ms = synthesis_started.elapsed().as_millis() as u64,
+                        preferences = preferences,
+                        avoidances = avoidances,
+                        expertise = expertise,
+                        conventions = conventions,
+                        "Profile synthesis completed and merged",
+                    );
                 }
             }
             Err(e) => {

@@ -36,7 +36,16 @@ impl ResourceTracker {
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         let stats = sessions.entry(session_id.to_string()).or_default();
 
-        if stats.total_operations.load(Ordering::Relaxed) >= self.max_total_operations {
+        let current_total = stats.total_operations.load(Ordering::Relaxed);
+        if current_total >= self.max_total_operations {
+            tracing::warn!(
+                session_id,
+                tool = tool_name,
+                metric = "total_operations",
+                limit = self.max_total_operations,
+                current = current_total,
+                "Resource quota exceeded: total operations"
+            );
             return Err(format!(
                 "session quota exceeded: {} total operations",
                 self.max_total_operations
@@ -46,6 +55,14 @@ impl ResourceTracker {
         if tool_name == "shell" {
             let current = stats.active_shells.load(Ordering::Relaxed);
             if current >= self.max_concurrent_shells {
+                tracing::warn!(
+                    session_id,
+                    tool = tool_name,
+                    metric = "concurrent_shells",
+                    limit = self.max_concurrent_shells,
+                    current,
+                    "Resource quota exceeded: concurrent shells"
+                );
                 return Err(format!(
                     "too many concurrent shells (max {})",
                     self.max_concurrent_shells
@@ -54,6 +71,7 @@ impl ResourceTracker {
             stats.active_shells.fetch_add(1, Ordering::Relaxed);
         }
 
+        tracing::debug!(session_id, tool = tool_name, "Resource quota check passed");
         Ok(())
     }
 

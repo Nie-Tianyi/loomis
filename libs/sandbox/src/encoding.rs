@@ -53,6 +53,10 @@ pub fn decode_stdout(bytes: &[u8]) -> String {
             0,
         );
         if wide_len <= 0 {
+            tracing::warn!(
+                byte_len = bytes.len(),
+                "Failed to determine UTF-16 buffer size for ANSI code page decode; falling back to lossy UTF-8"
+            );
             return String::from_utf8_lossy(bytes).into_owned();
         }
         let mut wide: Vec<u16> = vec![0; wide_len as usize];
@@ -65,6 +69,10 @@ pub fn decode_stdout(bytes: &[u8]) -> String {
             wide_len,
         );
         if written <= 0 {
+            tracing::warn!(
+                byte_len = bytes.len(),
+                "ANSI code page conversion failed; falling back to lossy UTF-8"
+            );
             return String::from_utf8_lossy(bytes).into_owned();
         }
         wide.truncate(written as usize);

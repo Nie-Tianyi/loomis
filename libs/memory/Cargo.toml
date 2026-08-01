@@ -8,6 +8,7 @@ description = "Conversation memory management — in-memory buffer + persistence
 provider = { path = "../provider" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

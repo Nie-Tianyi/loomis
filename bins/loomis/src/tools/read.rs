@@ -71,6 +71,12 @@ impl ReadTool {
     }
 
     fn execute_stream(&self, args: ReadArgs) -> Result<ProgressStream, ToolError> {
+        tracing::debug!(
+            path = %args.file_path,
+            offset = args.offset,
+            limit = args.limit,
+            "Reading file"
+        );
         let output = self
             .fs
             .read(
@@ -78,7 +84,11 @@ impl ReadTool {
                 args.offset.map(|n| n as usize),
                 args.limit.map(|n| n as usize),
             )
-            .map_err(map_fs_err)?;
+            .map_err(|e| {
+                tracing::warn!(path = %args.file_path, error = %e, "Failed to read file");
+                map_fs_err(e)
+            })?;
+        tracing::debug!(path = %args.file_path, bytes = output.len(), "File read complete");
         Ok(ProgressStream::done(output))
     }
 }

@@ -64,8 +64,14 @@ impl LsTool {
 
     fn execute_stream(&self, args: LsArgs) -> Result<ProgressStream, ToolError> {
         let path = args.path.as_deref().filter(|s| !s.is_empty());
+        let path_label = path.unwrap_or(".");
 
-        let entries = self.fs.ls(path).map_err(map_fs_err)?;
+        tracing::debug!(path = %path_label, "Listing directory");
+        let entries = self.fs.ls(path).map_err(|e| {
+            tracing::warn!(path = %path_label, error = %e, "Failed to list directory");
+            map_fs_err(e)
+        })?;
+        tracing::debug!(path = %path_label, entries = entries.len(), "Directory listed");
 
         let output = if entries.is_empty() {
             "(empty directory)".to_string()

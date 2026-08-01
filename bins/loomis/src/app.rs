@@ -367,6 +367,14 @@ pub fn build_coding_agent(
         Box::new(approval_hook),      // 9. Security sandbox
     ];
 
+    tracing::info!(
+        %model,
+        tools = tool_names.len(),
+        hooks = hooks.len(),
+        skills = skill_registry.list().len(),
+        "Coding agent assembled",
+    );
+
     // ── Engine context (via builder) ─────────────────────────
     let ctx = EngineContext::builder(client, memory.clone(), registry, model.to_string())
         .hooks(hooks)

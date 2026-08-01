@@ -72,6 +72,10 @@ impl EnterPlanModeTool {
 
     fn execute_stream(&self, _args: EnterPlanModeArgs) -> Result<ProgressStream, ToolError> {
         if self.plan_mode.active.load(Ordering::SeqCst) {
+            tracing::info!(
+                plan_file = %self.plan_file_path.display(),
+                "Already in plan mode — enter_plan_mode is a no-op"
+            );
             return Ok(ProgressStream::done(format!(
                 "Already in plan mode. Plan file: {}",
                 self.plan_file_path.display()
@@ -81,11 +85,20 @@ impl EnterPlanModeTool {
         // Ensure the .loomis/ directory exists.
         if let Some(parent) = self.plan_file_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
+                tracing::error!(
+                    path = %parent.display(),
+                    error = %e,
+                    "Failed to create plan file directory"
+                );
                 ToolError::Execution(format!("Failed to create plan file directory: {e}"))
             })?;
         }
 
         self.plan_mode.active.store(true, Ordering::SeqCst);
+        tracing::info!(
+            plan_file = %self.plan_file_path.display(),
+            "Plan mode activated"
+        );
 
         Ok(ProgressStream::done(format!(
             "Plan mode activated. You are now in read-only research and planning mode.\n\

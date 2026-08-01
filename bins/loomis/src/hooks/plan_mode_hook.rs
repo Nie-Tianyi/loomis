@@ -163,6 +163,11 @@ impl AgentHook for PlanModeHook {
                 if self.is_plan_file(tool_call) {
                     Ok(())
                 } else {
+                    tracing::warn!(
+                        tool = %name,
+                        path = %self.plan_file_path.display(),
+                        "Blocked write to non-plan file while in plan mode",
+                    );
                     Err(engine::AgentError::ToolRejected {
                         name: name.into(),
                         reason: format!(
@@ -174,23 +179,32 @@ impl AgentHook for PlanModeHook {
             }
 
             // Edit — blocked entirely. The LLM should use `write` to the plan file instead.
-            "edit" => Err(engine::AgentError::ToolRejected {
-                name: name.into(),
-                reason: "Edit is blocked in plan mode. Use write to update the plan file instead."
-                    .into(),
-            }),
+            "edit" => {
+                tracing::warn!(tool = %name, "Blocked edit tool while in plan mode");
+                Err(engine::AgentError::ToolRejected {
+                    name: name.into(),
+                    reason: "Edit is blocked in plan mode. Use write to update the plan file instead."
+                        .into(),
+                })
+            }
 
             // Shell — blocked entirely. No shell commands in plan mode.
-            "shell" => Err(engine::AgentError::ToolRejected {
-                name: name.into(),
-                reason: "Shell is blocked in plan mode (read-only).".into(),
-            }),
+            "shell" => {
+                tracing::warn!(tool = %name, "Blocked shell tool while in plan mode");
+                Err(engine::AgentError::ToolRejected {
+                    name: name.into(),
+                    reason: "Shell is blocked in plan mode (read-only).".into(),
+                })
+            }
 
             // Unknown / unexpected tools — conservative: block.
-            _ => Err(engine::AgentError::ToolRejected {
-                name: name.into(),
-                reason: format!("Tool '{name}' is not allowed in plan mode."),
-            }),
+            _ => {
+                tracing::warn!(tool = %name, "Blocked unknown tool while in plan mode");
+                Err(engine::AgentError::ToolRejected {
+                    name: name.into(),
+                    reason: format!("Tool '{name}' is not allowed in plan mode."),
+                })
+            }
         }
     }
 
@@ -209,6 +223,13 @@ impl AgentHook for PlanModeHook {
             Err(_) => return,
         };
 
+        // Detect whether a [PLAN_MODE] message is present *before* removal,
+        // so we only log a transition when the state actually changes.
+        let had_plan_msg = mem
+            .messages
+            .iter()
+            .any(|m| m.role == Role::System && m.content.starts_with(PLAN_MODE_MARKER));
+
         // Remove any existing [PLAN_MODE] System message(s).
         mem.messages
             .retain(|m| !(m.role == Role::System && m.content.starts_with(PLAN_MODE_MARKER)));
@@ -222,6 +243,12 @@ impl AgentHook for PlanModeHook {
                     .replace("{plan_file_path}", &plan_file_str)
             );
             mem.messages.insert(0, Message::new(Role::System, content));
+            tracing::info!(
+                path = %self.plan_file_path.display(),
+                "Plan mode active: [PLAN_MODE] system message injected",
+            );
+        } else if had_plan_msg {
+            tracing::info!("Plan mode exited: [PLAN_MODE] system message removed");
         }
     }
 }

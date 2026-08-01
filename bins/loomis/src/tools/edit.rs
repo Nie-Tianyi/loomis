@@ -89,6 +89,12 @@ impl EditTool {
     }
 
     fn execute_stream(&self, args: EditArgs) -> Result<ProgressStream, ToolError> {
+        tracing::debug!(
+            path = %args.file_path,
+            start_line = args.start_line,
+            end_line = args.end_line,
+            "Editing file"
+        );
         // Validate and edit synchronously first (errors surface immediately).
         let output = self
             .fs
@@ -98,7 +104,23 @@ impl EditTool {
                 args.end_line as usize,
                 &args.new_content,
             )
-            .map_err(map_fs_err)?;
+            .map_err(|e| {
+                tracing::error!(
+                    path = %args.file_path,
+                    start_line = args.start_line,
+                    end_line = args.end_line,
+                    error = %e,
+                    "Failed to edit file"
+                );
+                map_fs_err(e)
+            })?;
+        tracing::info!(
+            path = %args.file_path,
+            start_line = args.start_line,
+            end_line = args.end_line,
+            new_bytes = args.new_content.len(),
+            "File edited"
+        );
 
         let file_path = args.file_path.clone();
         let start = args.start_line;

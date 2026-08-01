@@ -197,6 +197,7 @@ impl ExitPlanModeTool {
     fn execute_stream(&self, _args: ExitPlanModeArgs) -> Result<ProgressStream, ToolError> {
         // Guard: must be in plan mode.
         if !self.plan_mode.active.load(Ordering::SeqCst) {
+            tracing::warn!("exit_plan_mode called while not in plan mode");
             return Err(ToolError::Execution(
                 "Not in plan mode. Use enter_plan_mode or /plan first to enter plan mode.".into(),
             ));
@@ -240,11 +241,18 @@ impl ExitPlanModeTool {
         let response = match response {
             Ok(resp) => resp,
             Err(InterventionError::Timeout) => {
+                tracing::error!(
+                    path = %self.plan_file_path.display(),
+                    "Timed out waiting for plan approval"
+                );
                 return Err(ToolError::Execution(
                     "Timed out waiting for plan approval (5 minutes). Staying in plan mode.".into(),
                 ));
             }
             Err(InterventionError::Disconnected) => {
+                tracing::error!(
+                    "Intervention channel disconnected (TUI may have exited) during plan approval"
+                );
                 return Err(ToolError::Execution(
                     "Intervention channel disconnected (TUI may have exited). Staying in plan mode."
                         .into(),
@@ -254,12 +262,15 @@ impl ExitPlanModeTool {
 
         match response.chosen {
             // User pressed Esc / cancelled.
-            None => Err(ToolError::Execution(
-                "Plan review was cancelled. Staying in plan mode. You can revise \
-                 the plan and call exit_plan_mode again, or the user can use \
-                 /approve to exit plan mode manually."
-                    .into(),
-            )),
+            None => {
+                tracing::warn!("Plan review cancelled by user, staying in plan mode");
+                Err(ToolError::Execution(
+                    "Plan review was cancelled. Staying in plan mode. You can revise \
+                     the plan and call exit_plan_mode again, or the user can use \
+                     /approve to exit plan mode manually."
+                        .into(),
+                ))
+            }
             // "Approve" (index 0) — archive the plan, then deactivate plan mode.
             Some(0) => {
                 // Archive the plan before deactivating.
@@ -271,6 +282,10 @@ impl ExitPlanModeTool {
                         Err(e) => {
                             // If archiving fails, still deactivate — don't
                             // trap the user in plan mode over a disk error.
+                            tracing::error!(
+                                error = %e,
+                                "Failed to archive plan; plan mode deactivated anyway"
+                            );
                             self.plan_mode.active.store(false, Ordering::SeqCst);
                             return Err(ToolError::Execution(format!(
                                 "Plan approved, but failed to archive the plan: {e}. \
@@ -281,6 +296,10 @@ impl ExitPlanModeTool {
                 };
 
                 self.plan_mode.active.store(false, Ordering::SeqCst);
+                tracing::info!(
+                    archived = archive_result.as_ref().map(|p| p.display().to_string()),
+                    "Plan approved, plan mode deactivated"
+                );
                 let msg = if let Some(ref archived_path) = archive_result {
                     format!(
                         "Plan approved! Plan mode deactivated. Full access restored. \
@@ -298,6 +317,7 @@ impl ExitPlanModeTool {
             // "Suggest changes…" (index 1) — stay in plan mode, pass
             // feedback back to the LLM so it can revise the plan.
             Some(1) => {
+                tracing::info!("Plan review returned suggestions, staying in plan mode");
                 let feedback = response
                     .custom_text
                     .unwrap_or_else(|| "(No specific feedback provided.)".into());
@@ -315,16 +335,22 @@ impl ExitPlanModeTool {
                 )))
             }
             // "Cancel" (index 2) — stay in plan mode.
-            Some(2) => Err(ToolError::Execution(
-                "Plan was not approved. Staying in plan mode. You can revise \
-                 the plan and call exit_plan_mode again, or the user can use \
-                 /approve to exit plan mode manually."
-                    .into(),
-            )),
+            Some(2) => {
+                tracing::warn!("Plan not approved, staying in plan mode");
+                Err(ToolError::Execution(
+                    "Plan was not approved. Staying in plan mode. You can revise \
+                     the plan and call exit_plan_mode again, or the user can use \
+                     /approve to exit plan mode manually."
+                        .into(),
+                ))
+            }
             // Unknown option — shouldn't happen, but be defensive.
-            Some(idx) => Err(ToolError::Execution(format!(
-                "Unexpected response option {idx}. Staying in plan mode."
-            ))),
+            Some(idx) => {
+                tracing::warn!(idx, "Unexpected plan approval response option");
+                Err(ToolError::Execution(format!(
+                    "Unexpected response option {idx}. Staying in plan mode."
+                )))
+            }
         }
     }
 }

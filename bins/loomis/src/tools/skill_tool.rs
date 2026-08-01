@@ -69,6 +69,7 @@ impl SkillTool {
     fn execute_stream(&self, args: SkillArgs) -> Result<ProgressStream, ToolError> {
         let skill = self.registry.by_name(&args.name).ok_or_else(|| {
             let available = self.registry.names().join(", ");
+            tracing::warn!(name = %args.name, "Unknown skill requested");
             ToolError::InvalidArgs(format!(
                 "Unknown skill '{}'. Available: [{}]",
                 args.name, available
@@ -84,6 +85,7 @@ impl SkillTool {
             active.insert(skill.name.clone(), skill.content.clone());
         }
 
+        tracing::info!(name = %skill.name, "Skill activated");
         Ok(ProgressStream::done(skill.content.clone()))
     }
 }

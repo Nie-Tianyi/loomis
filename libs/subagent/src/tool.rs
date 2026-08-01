@@ -115,6 +115,16 @@ impl<C: LLMClient + Clone + 'static> SubagentTool<C> {
         // Spawn the sub-agent on the current tokio runtime.
         // `execute_stream` is called from within the async agent loop,
         // so `tokio::spawn` always has an active runtime context.
+        tracing::info!(
+            model = %self.config.model,
+            max_steps = self.config.max_steps,
+            timeout_secs = self
+                .config
+                .timeout_secs
+                .unwrap_or(DEFAULT_SUBAGENT_TIMEOUT_SECS),
+            description = %run.description.chars().take(100).collect::<String>(),
+            "sub-agent spawned",
+        );
         tokio::spawn(async move {
             run_subagent(llm, config, subagent_tools, parent_memory, trace_store, run).await;
         });
@@ -213,6 +223,11 @@ async fn run_subagent<C: LLMClient + 'static>(
                 }
             }
             _ = tokio::time::sleep_until(deadline) => {
+                tracing::warn!(
+                    timeout_secs = timeout.as_secs(),
+                    tool_calls = tool_call_count,
+                    "sub-agent timed out, aborting",
+                );
                 agent_handle.abort();
                 let _ = progress_tx.send(Progress::Done(format!(
                     "Sub-agent timed out after {:.0}s",
@@ -236,11 +251,19 @@ async fn run_subagent<C: LLMClient + 'static>(
     );
 
     // 8. Agent finished (or panicked).  Emit final result.
+    let duration_ms = start.elapsed().as_millis() as u64;
     match result {
         Ok(Ok(answer)) => {
+            tracing::info!(
+                duration_ms = duration_ms,
+                answer_len = answer.len(),
+                tool_calls = tool_call_count,
+                "sub-agent finished successfully",
+            );
             let _ = progress_tx.send(Progress::Done(answer));
         }
         Ok(Err(e)) => {
+            tracing::error!(error = %e, duration_ms = duration_ms, "sub-agent run failed");
             let _ = progress_tx.send(Progress::Done(format!("Sub-agent error: {e}")));
         }
         Err(join_err) => {
@@ -255,6 +278,7 @@ async fn run_subagent<C: LLMClient + 'static>(
             } else {
                 "Sub-agent task was cancelled".into()
             };
+            tracing::error!(error = %msg, "sub-agent task panicked");
             let _ = progress_tx.send(Progress::Done(msg));
         }
     }

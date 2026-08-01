@@ -155,6 +155,7 @@ impl WorkspaceFs {
         };
 
         if !roots.iter().any(|root| normalized.starts_with(root)) {
+            tracing::warn!(path = %path, "Path resolves outside sandbox roots — blocked");
             return Err(FsError::WorkspaceEscape(format!(
                 "'{}' resolves outside the sandbox (workspace or read-only roots)",
                 path
@@ -171,6 +172,7 @@ impl WorkspaceFs {
         if let Ok(meta) = normalized.metadata() {
             let re_canon = normalized.canonicalize().map_err(FsError::Io)?;
             if !roots.iter().any(|root| re_canon.starts_with(root)) {
+                tracing::error!(path = %path, "TOCTOU re-check failed: path escapes sandbox roots");
                 return Err(FsError::WorkspaceEscape(format!(
                     "'{}' escapes workspace (TOCTOU re-check)",
                     path
@@ -182,6 +184,10 @@ impl WorkspaceFs {
             if let Ok(re_meta) = re_canon.metadata()
                 && (meta.len() != re_meta.len() || meta.modified().ok() != re_meta.modified().ok())
             {
+                tracing::error!(
+                    path = %path,
+                    "TOCTOU re-check failed: file identity changed between checks — possible symlink swap"
+                );
                 return Err(FsError::WorkspaceEscape(format!(
                     "'{}' file identity changed between checks — possible symlink swap",
                     path
@@ -215,6 +221,12 @@ impl WorkspaceFs {
         let metadata = resolved.metadata().map_err(FsError::Io)?;
         let file_size = metadata.len();
         if file_size > self.max_read_bytes as u64 {
+            tracing::warn!(
+                path = %path,
+                size = file_size,
+                max = self.max_read_bytes as u64,
+                "Read blocked: file exceeds max_read_bytes"
+            );
             return Err(FsError::FileTooLarge {
                 path: path.to_string(),
                 size: file_size,
@@ -242,6 +254,7 @@ impl WorkspaceFs {
             .collect::<Vec<_>>()
             .join("\n");
 
+        tracing::debug!(path = %path, size = file_size, "Read file");
         Ok(numbered)
     }
 
@@ -258,6 +271,12 @@ impl WorkspaceFs {
 
         // ── Content size limit ──────────────────────────────────────────
         if content.len() > self.max_write_bytes {
+            tracing::warn!(
+                path = %path,
+                size = content.len(),
+                max = self.max_write_bytes,
+                "Write blocked: content exceeds max_write_bytes"
+            );
             return Err(FsError::FileTooLarge {
                 path: path.to_string(),
                 size: content.len() as u64,
@@ -273,12 +292,18 @@ impl WorkspaceFs {
                 .iter()
                 .any(|blocked| blocked.eq_ignore_ascii_case(&dot_ext))
             {
+                tracing::warn!(
+                    path = %path,
+                    extension = %dot_ext,
+                    "Write blocked: extension on blocklist"
+                );
                 return Err(FsError::ExtensionBlocked(path.to_string()));
             }
         }
 
         // ── Binary content detection ────────────────────────────────────
         if self.forbid_binary_writes && content.contains('\0') {
+            tracing::warn!(path = %path, "Write blocked: binary content detected");
             return Err(FsError::BinaryContentDetected(path.to_string()));
         }
 
@@ -287,6 +312,7 @@ impl WorkspaceFs {
             && let Some(name) = resolved.file_name().and_then(|n| n.to_str())
             && name.starts_with('.')
         {
+            tracing::warn!(path = %path, "Write blocked: hidden file");
             return Err(FsError::HiddenFileBlocked(path.to_string()));
         }
 
@@ -299,6 +325,7 @@ impl WorkspaceFs {
         }
 
         fs::write(&resolved, content).map_err(FsError::Io)?;
+        tracing::debug!(path = %path, size = content.len(), "Wrote file");
         Ok(())
     }
 
