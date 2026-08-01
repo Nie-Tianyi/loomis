@@ -170,16 +170,14 @@ impl ShellTool {
 
         let start = Instant::now();
 
-        let child = cmd
-            .spawn()
-            .map_err(|e| {
-                tracing::error!(
-                    command = %command_preview,
-                    error = %e,
-                    "Failed to spawn shell command"
-                );
-                ToolError::Execution(format!("Failed to spawn command: {e}"))
-            })?;
+        let child = cmd.spawn().map_err(|e| {
+            tracing::error!(
+                command = %command_preview,
+                error = %e,
+                "Failed to spawn shell command"
+            );
+            ToolError::Execution(format!("Failed to spawn command: {e}"))
+        })?;
 
         let pid = child.id();
 

@@ -75,10 +75,7 @@ impl AgentHook for TodoListHook {
         if let Some(c) = content {
             mem.messages.insert(0, Message::new(Role::System, c));
         }
-        tracing::debug!(
-            items = item_count,
-            "Synced [TODO] system message",
-        );
+        tracing::debug!(items = item_count, "Synced [TODO] system message",);
     }
 }
 

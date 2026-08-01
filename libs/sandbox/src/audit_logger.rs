@@ -43,11 +43,7 @@ impl AuditLogger {
             if let Some(parent) = log_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            match OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-            {
+            match OpenOptions::new().create(true).append(true).open(&log_path) {
                 Ok(f) => Some(Mutex::new(f)),
                 Err(e) => {
                     tracing::error!(

@@ -183,8 +183,9 @@ impl AgentHook for PlanModeHook {
                 tracing::warn!(tool = %name, "Blocked edit tool while in plan mode");
                 Err(engine::AgentError::ToolRejected {
                     name: name.into(),
-                    reason: "Edit is blocked in plan mode. Use write to update the plan file instead."
-                        .into(),
+                    reason:
+                        "Edit is blocked in plan mode. Use write to update the plan file instead."
+                            .into(),
                 })
             }
 

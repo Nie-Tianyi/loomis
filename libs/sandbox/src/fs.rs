@@ -952,7 +952,10 @@ mod tests {
         let (_dir, outside, fs) = setup_fs_with_read_root();
         std::fs::create_dir_all(outside.path().join("src")).unwrap();
         std::fs::write(outside.path().join("src/lib.rs"), "fn hello() {}\n").unwrap();
-        let pat = format!("{}/src/*.rs", outside.path().to_string_lossy().replace('\\', "/"));
+        let pat = format!(
+            "{}/src/*.rs",
+            outside.path().to_string_lossy().replace('\\', "/")
+        );
 
         // Glob returns absolute paths for read-only-root files.
         let files = fs.glob(&pat).unwrap();

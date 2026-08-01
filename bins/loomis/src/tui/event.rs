@@ -245,9 +245,10 @@ async fn agent_handler(
                 let agent = Arc::clone(&agent);
 
                 let handle = tokio::spawn(async move {
-                    let result = std::panic::AssertUnwindSafe(agent.run_with_events(&input, tx.clone()))
-                        .catch_unwind()
-                        .await;
+                    let result =
+                        std::panic::AssertUnwindSafe(agent.run_with_events(&input, tx.clone()))
+                            .catch_unwind()
+                            .await;
                     match result {
                         // Normal completion — PersistenceHook already saved the
                         // conversation in on_run_finish, and the agent loop
@@ -317,10 +318,9 @@ async fn agent_handler(
                         &mem,
                         &persistence_config,
                     ) {
-                        Ok(()) => tracing::debug!(
-                            preserved = preserved,
-                            "Cleared conversation persisted",
-                        ),
+                        Ok(()) => {
+                            tracing::debug!(preserved = preserved, "Cleared conversation persisted",)
+                        }
                         Err(e) => tracing::error!(
                             name = %name,
                             error = %e,
@@ -413,12 +413,9 @@ async fn agent_handler(
                 {
                     let mem = memory.read().expect("memory lock poisoned");
                     let name = memory::default_thread_name(&workspace_root, &persistence_config);
-                    if let Err(e) = memory::save_conversation(
-                        &name,
-                        &workspace_root,
-                        &mem,
-                        &persistence_config,
-                    ) {
+                    if let Err(e) =
+                        memory::save_conversation(&name, &workspace_root, &mem, &persistence_config)
+                    {
                         tracing::error!(
                             name = %name,
                             error = %e,

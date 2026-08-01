@@ -199,13 +199,7 @@ impl TodoTool {
             parts.push(format!("{pending} pending"));
         }
 
-        tracing::info!(
-            total,
-            pending,
-            in_progress,
-            completed,
-            "Todo list updated"
-        );
+        tracing::info!(total, pending, in_progress, completed, "Todo list updated");
 
         Ok(ProgressStream::done(parts.join(", ")))
     }

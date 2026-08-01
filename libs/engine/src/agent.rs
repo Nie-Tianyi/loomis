@@ -684,7 +684,11 @@ impl<C: LLMClient> Agent<C> {
         let mut steps = 0;
         loop {
             if steps >= self.ctx.max_steps {
-                tracing::error!(step = steps, max_steps = self.ctx.max_steps, "max steps reached");
+                tracing::error!(
+                    step = steps,
+                    max_steps = self.ctx.max_steps,
+                    "max steps reached"
+                );
                 return self.fail_run(AgentError::MaxStepsReached(self.ctx.max_steps), &tx);
             }
             steps += 1;
@@ -833,7 +837,11 @@ impl<C: LLMClient> Agent<C> {
         let mut steps = 0;
         loop {
             if steps >= self.ctx.max_steps {
-                tracing::error!(step = steps, max_steps = self.ctx.max_steps, "max steps reached");
+                tracing::error!(
+                    step = steps,
+                    max_steps = self.ctx.max_steps,
+                    "max steps reached"
+                );
                 return self.fail_run(AgentError::MaxStepsReached(self.ctx.max_steps), &tx);
             }
             steps += 1;
