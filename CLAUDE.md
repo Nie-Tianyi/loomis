@@ -116,9 +116,11 @@ Key `AgentEvent` variants: `RunStarted`, `Token`/`ReasoningToken`,
 
 Both run in `on_llm_start()`:
 
-1. **MicroCompact** — clears old tool outputs in-place (placeholder
-   `[Old tool result content cleared]`) for `read`, `shell`, `grep`, `glob`,
-   `edit`, `write`, `ls`, keeping the most recent 10 per tool.
+1. **MicroCompact** — clears old tool outputs in-place for `read`, `shell`,
+   `grep`, `glob`, `edit`, `write`, `ls`, keeping the most recent 10 per
+   tool. Cleared outputs are replaced by a contextual placeholder
+   (`[Cleared: read src/fs.rs:10-59]`) parsed from the tool-call arguments,
+   falling back to `[Old tool result content cleared]` when unparseable.
 2. **MacroCompact** — checks `prompt_tokens` from the previous response
    (`Memory::last_usage`) against a **token** threshold (default 1,000,000).
    When over: drains old non-System messages (keeping last 10), summarises

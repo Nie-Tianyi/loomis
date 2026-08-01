@@ -976,10 +976,12 @@ can produce large outputs.  Over many steps, the conversation context grows
 rapidly, exhausting the LLM's context window.
 
 **Solution:** `MicroCompactHook` in `on_llm_start()` scans all messages.
-For high-volume tool results (identified by `message.name`), it replaces the
-content in-place with `[Old tool result content cleared]` — the messages remain
-in the conversation (tool call ID pairing is preserved), but the content is
-pruned.
+For high-volume tool results (identified via `tool_call_id` → tool-name
+mapping), it replaces the content in-place with a contextual placeholder
+(e.g. `[Cleared: read src/fs.rs:10-59]`, parsed from the tool-call
+arguments; falls back to `[Old tool result content cleared]` when
+unparseable) — the messages remain in the conversation (tool call ID
+pairing is preserved), but the content is pruned.
 
 ```rust
 // libs/hooks/src/compact.rs

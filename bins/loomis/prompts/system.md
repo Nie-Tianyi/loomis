@@ -98,10 +98,17 @@ and `.md` after each agent turn. `/save <name>` saves with a custom name.
 
 **Compaction.** When the conversation grows large, two mechanisms keep it
 manageable: (1) Micro-compaction clears content from old tool outputs
-(read, shell, grep, glob, edit, write, ls) keeping only the most recent 5
+(read, shell, grep, glob, edit, write, ls) keeping only the most recent 10
 intact; (2) Macro-compaction summarises the middle of the conversation via
 LLM when total characters exceed ~2 million, keeping the most recent 10
 messages intact. Both run transparently — you don't need to manage this.
+
+**When tool outputs are cleared**, the placeholder text tells you which
+file and line range was read (e.g. `[Cleared: read src/fs.rs:10-59]`). Use
+the `read` tool with `offset` and `limit` to re-fetch that region cheaply
+(a narrow window costs only a few hundred tokens). Never guess line
+numbers from cleared outputs — always re-read the target region before
+editing.
 
 **/new** clears the conversation but preserves all System messages (these
 instructions, environment context, and project rules), so your core

@@ -20,8 +20,17 @@ use provider::{CompletionRequest, LLMClient, Message, Role};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Placeholder text that replaces compacted tool output content.
+/// Fallback placeholder used when a compacted tool output's arguments
+/// cannot be parsed into a contextual description.
 pub const COMPACTED_TOOL_OUTPUT_PLACEHOLDER: &str = "[Old tool result content cleared]";
+
+/// Prefix shared by all contextual compaction placeholders — also used to
+/// detect already-compacted tool outputs (see [`format_compact_placeholder`]).
+pub const COMPACTED_TOOL_OUTPUT_PREFIX: &str = "[Cleared: ";
+
+/// Maximum characters kept from a tool-call argument (command / pattern)
+/// when embedded in a contextual placeholder.
+const PLACEHOLDER_ARG_TRUNCATE: usize = 60;
 
 /// Default number of recent tool outputs to preserve during compaction.
 pub const DEFAULT_KEEP_RECENT_TOOL_OUTPUTS: usize = 10;
@@ -64,8 +73,10 @@ impl std::error::Error for CompactError {}
 /// Lightweight tool-output compaction hook.
 ///
 /// Implements [`AgentHook`] — in `on_llm_start`, clears old tool-result
-/// content in-place, replacing it with `[Old tool result content cleared]`.
-/// The most recent `keep_recent` outputs per compactable tool are preserved.
+/// content in-place, replacing it with a contextual placeholder describing
+/// what was cleared (tool, file path, line range — see
+/// [`format_compact_placeholder`]).  The most recent `keep_recent` outputs
+/// per compactable tool are preserved.
 pub struct MicroCompactHook {
     /// How many of the most recent tool outputs to preserve.
     pub keep_recent: usize,
@@ -181,9 +192,14 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
             .join("\n\n");
 
         let prompt = format!(
-            "Summarise the following conversation history concisely. \
-             Preserve key facts, decisions, and context. \
-             Output only the summary, no preamble:\n\n{transcript}"
+            "Summarise the following conversation history concisely into a single paragraph. \
+             You MUST preserve:\n\
+             - Every file path the agent read or modified, with line ranges when known\n\
+             - Every shell command the agent ran and its outcome (success/failure)\n\
+             - All unfinished tasks and pending user requests\n\
+             - All decisions the agent made and the reasoning behind them\n\
+             - User preferences, constraints, and feedback\n\
+             Output only the summary, no preamble or meta-commentary:\n\n{transcript}"
         );
 
         let request =
@@ -239,18 +255,23 @@ fn compact_messages(
     keep_recent: usize,
     compactable: &HashSet<String>,
 ) -> usize {
-    let mut id_to_name: HashMap<String, String> = HashMap::new();
+    // Pass 1: map each tool-call id to its (tool name, raw arguments JSON).
+    // The arguments let the placeholder tell the agent *what* was cleared.
+    let mut id_to_call: HashMap<String, (String, String)> = HashMap::new();
     for msg in messages.iter() {
         if msg.role == Role::Assistant
             && let Some(ref tool_calls) = msg.tool_calls
         {
             for tc in tool_calls {
-                id_to_name.insert(tc.id.clone(), tc.function.name.clone());
+                id_to_call.insert(
+                    tc.id.clone(),
+                    (tc.function.name.clone(), tc.function.arguments.clone()),
+                );
             }
         }
     }
 
-    if id_to_name.is_empty() {
+    if id_to_call.is_empty() {
         return 0;
     }
 
@@ -261,11 +282,11 @@ fn compact_messages(
         if msg.role != Role::Tool {
             continue;
         }
-        if msg.content == COMPACTED_TOOL_OUTPUT_PLACEHOLDER {
+        if is_compacted(msg) {
             continue;
         }
         if let Some(ref tool_call_id) = msg.tool_call_id
-            && let Some(tool_name) = id_to_name.get(tool_call_id)
+            && let Some((tool_name, _)) = id_to_call.get(tool_call_id)
             && compactable.contains(tool_name)
             && compactable_count_from_end < keep_recent
         {
@@ -279,19 +300,123 @@ fn compact_messages(
         if msg.role != Role::Tool || should_keep[i] {
             continue;
         }
-        if msg.content == COMPACTED_TOOL_OUTPUT_PLACEHOLDER {
+        if is_compacted(msg) {
             continue;
         }
         if let Some(ref tool_call_id) = msg.tool_call_id
-            && let Some(tool_name) = id_to_name.get(tool_call_id)
+            && let Some((tool_name, arguments)) = id_to_call.get(tool_call_id)
             && compactable.contains(tool_name)
         {
-            msg.content = COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string();
+            msg.content = format_compact_placeholder(tool_name, arguments);
             compacted += 1;
         }
     }
 
     compacted
+}
+
+/// Whether a Tool message has already been compacted (either by a
+/// contextual placeholder or the legacy fallback).
+fn is_compacted(msg: &Message) -> bool {
+    msg.content == COMPACTED_TOOL_OUTPUT_PLACEHOLDER
+        || msg.content.starts_with(COMPACTED_TOOL_OUTPUT_PREFIX)
+}
+
+/// Build a contextual placeholder for a compacted tool output.
+///
+/// Extracts the file path / command / pattern from the tool-call arguments
+/// (a JSON string) so the agent still knows *what* was cleared and can
+/// re-fetch it cheaply (e.g. a targeted `read` with `offset`/`limit`).
+/// Falls back to [`COMPACTED_TOOL_OUTPUT_PLACEHOLDER`] when the arguments
+/// cannot be parsed or lack the expected fields.
+fn format_compact_placeholder(tool_name: &str, arguments_json: &str) -> String {
+    let Ok(args) = serde_json::from_str::<serde_json::Value>(arguments_json) else {
+        return COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string();
+    };
+
+    let get = |key: &str| args.get(key).and_then(|v| v.as_str()).map(str::to_string);
+
+    let path = match tool_name {
+        "read" | "edit" | "write" => get("file_path"),
+        "ls" => get("path"),
+        _ => None,
+    };
+
+    let description = match tool_name {
+        "read" => match (path, line_range(&args)) {
+            (Some(p), Some(r)) => format!("read {p}{r}"),
+            (Some(p), None) => format!("read {p}"),
+            _ => return COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string(),
+        },
+        "shell" => match get("command") {
+            Some(cmd) => format!("shell \"{}\"", truncate(&cmd)),
+            None => return COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string(),
+        },
+        "grep" => match get("pattern") {
+            Some(pattern) => match get("path_glob") {
+                Some(p) => format!("grep \"{}\" in {p}", truncate(&pattern)),
+                None => format!("grep \"{}\"", truncate(&pattern)),
+            },
+            None => return COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string(),
+        },
+        "glob" => match get("pattern") {
+            Some(pattern) => format!("glob \"{}\"", truncate(&pattern)),
+            None => return COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string(),
+        },
+        "edit" => match path {
+            Some(p) => match line_range(&args) {
+                Some(r) => format!("edit {p}{r}"),
+                None => format!("edit {p}"),
+            },
+            None => return COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string(),
+        },
+        // `write` content is deliberately omitted — it can be as large as
+        // the output itself and adds no navigation value.
+        "write" => match path {
+            Some(p) => format!("write {p}"),
+            None => return COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string(),
+        },
+        "ls" => match path {
+            Some(p) => format!("ls {p}"),
+            // `ls` with no path lists the workspace root — still useful.
+            None => "ls (workspace root)".to_string(),
+        },
+        _ => return COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string(),
+    };
+
+    format!("{COMPACTED_TOOL_OUTPUT_PREFIX}{description} — re-fetch with the tool if needed]")
+}
+
+/// Render a line range from `read`/`edit` arguments (`offset`/`limit` or
+/// `start_line`/`end_line`).  Returns `None` when no range info is present.
+fn line_range(args: &serde_json::Value) -> Option<String> {
+    if let (Some(start), Some(end)) = (args.get("start_line"), args.get("end_line")) {
+        let (Some(start), Some(end)) = (start.as_u64(), end.as_u64()) else {
+            return None;
+        };
+        return Some(format!(":{start}-{end}"));
+    }
+    match (args.get("offset"), args.get("limit")) {
+        // `offset` is 1-indexed, `limit` is a count — render as inclusive.
+        (Some(offset), Some(limit)) => {
+            let (Some(offset), Some(limit)) = (offset.as_u64(), limit.as_u64()) else {
+                return None;
+            };
+            Some(format!(":{}-{}", offset, offset.saturating_add(limit).saturating_sub(1)))
+        }
+        (Some(offset), None) => Some(format!(":{}", offset.as_u64()?)),
+        _ => None,
+    }
+}
+
+/// Truncate a string to [`PLACEHOLDER_ARG_TRUNCATE`] chars, appending an
+/// ellipsis when cut.  Preserves char boundaries.
+fn truncate(s: &str) -> String {
+    if s.chars().count() <= PLACEHOLDER_ARG_TRUNCATE {
+        return s.to_string();
+    }
+    let cut = s.floor_char_boundary(PLACEHOLDER_ARG_TRUNCATE);
+    format!("{}…", &s[..cut])
 }
 
 // ── Private helpers (also used by tests) ──────────────────────────────────────
@@ -338,6 +463,10 @@ mod tests {
     }
 
     fn assistant_with_tool_call(id: &str, tool_name: &str) -> Message {
+        assistant_with_tool_call_args(id, tool_name, "{}")
+    }
+
+    fn assistant_with_tool_call_args(id: &str, tool_name: &str, arguments: &str) -> Message {
         Message::assistant_with_tools(
             "",
             vec![ToolCall {
@@ -346,7 +475,7 @@ mod tests {
                 kind: ToolCallKind::Function,
                 function: ToolCallFunction {
                     name: tool_name.to_string(),
-                    arguments: "{}".to_string(),
+                    arguments: arguments.to_string(),
                 },
             }],
         )
@@ -449,6 +578,150 @@ mod tests {
     #[test]
     fn test_placeholder_is_non_empty() {
         assert!(!COMPACTED_TOOL_OUTPUT_PLACEHOLDER.is_empty());
+    }
+
+    // ── format_compact_placeholder tests ────────────────────────────────────
+
+    #[test]
+    fn test_placeholder_read_includes_path_and_range() {
+        let p = format_compact_placeholder(
+            "read",
+            r#"{"file_path": "src/main.rs", "offset": 10, "limit": 50}"#,
+        );
+        assert_eq!(
+            p,
+            "[Cleared: read src/main.rs:10-59 — re-fetch with the tool if needed]"
+        );
+    }
+
+    #[test]
+    fn test_placeholder_read_without_range() {
+        let p = format_compact_placeholder("read", r#"{"file_path": "src/main.rs"}"#);
+        assert_eq!(
+            p,
+            "[Cleared: read src/main.rs — re-fetch with the tool if needed]"
+        );
+    }
+
+    #[test]
+    fn test_placeholder_read_offset_only() {
+        let p = format_compact_placeholder("read", r#"{"file_path": "f.rs", "offset": 42}"#);
+        assert!(p.contains("read f.rs:42"), "got: {p}");
+    }
+
+    #[test]
+    fn test_placeholder_shell_includes_truncated_command() {
+        let long_cmd = "cargo ".repeat(20); // 120 chars — over the 60-char cap
+        let p = format_compact_placeholder(
+            "shell",
+            &format!(r#"{{"command": "{long_cmd}"}}"#),
+        );
+        assert!(p.starts_with("[Cleared: shell \""), "got: {p}");
+        assert!(p.ends_with("…\" — re-fetch with the tool if needed]"), "got: {p}");
+        assert!(p.len() < 120, "placeholder not truncated: {p}");
+    }
+
+    #[test]
+    fn test_placeholder_grep_glob_edit_ls() {
+        let grep = format_compact_placeholder(
+            "grep",
+            r#"{"pattern": "fn\\s+main", "path_glob": "src/**/*.rs"}"#,
+        );
+        assert_eq!(
+            grep,
+            "[Cleared: grep \"fn\\s+main\" in src/**/*.rs — re-fetch with the tool if needed]"
+        );
+
+        let glob = format_compact_placeholder("glob", r#"{"pattern": "**/*.rs"}"#);
+        assert_eq!(
+            glob,
+            "[Cleared: glob \"**/*.rs\" — re-fetch with the tool if needed]"
+        );
+
+        let edit = format_compact_placeholder(
+            "edit",
+            r#"{"file_path": "src/fs.rs", "start_line": 5, "end_line": 7}"#,
+        );
+        assert_eq!(
+            edit,
+            "[Cleared: edit src/fs.rs:5-7 — re-fetch with the tool if needed]"
+        );
+
+        let ls = format_compact_placeholder("ls", r#"{"path": "src/"}"#);
+        assert_eq!(ls, "[Cleared: ls src/ — re-fetch with the tool if needed]");
+    }
+
+    #[test]
+    fn test_placeholder_ls_without_path() {
+        let p = format_compact_placeholder("ls", "{}");
+        assert_eq!(p, "[Cleared: ls (workspace root) — re-fetch with the tool if needed]");
+    }
+
+    #[test]
+    fn test_placeholder_write_omits_content() {
+        let p = format_compact_placeholder(
+            "write",
+            r#"{"file_path": "output/result.md", "content": "HUGE_CONTENT_SHOULD_NOT_APPEAR"}"#,
+        );
+        assert_eq!(
+            p,
+            "[Cleared: write output/result.md — re-fetch with the tool if needed]"
+        );
+        assert!(!p.contains("HUGE_CONTENT_SHOULD_NOT_APPEAR"));
+    }
+
+    #[test]
+    fn test_placeholder_fallback_on_invalid_json() {
+        assert_eq!(
+            format_compact_placeholder("read", "not json at all"),
+            COMPACTED_TOOL_OUTPUT_PLACEHOLDER
+        );
+    }
+
+    #[test]
+    fn test_placeholder_fallback_on_missing_fields() {
+        // Args parse but lack file_path — not enough to be useful.
+        assert_eq!(
+            format_compact_placeholder("read", "{}"),
+            COMPACTED_TOOL_OUTPUT_PLACEHOLDER
+        );
+        // Unknown tool names are not summarised.
+        assert_eq!(
+            format_compact_placeholder("calculator", r#"{"expr": "1+1"}"#),
+            COMPACTED_TOOL_OUTPUT_PLACEHOLDER
+        );
+    }
+
+    // ── compact_messages integration with contextual placeholders ─────────
+
+    #[test]
+    fn test_compact_uses_contextual_placeholder() {
+        let mut messages = vec![
+            assistant_with_tool_call_args(
+                "call_1",
+                "read",
+                r#"{"file_path": "src/fs.rs", "offset": 1, "limit": 320}"#,
+            ),
+            tool_msg("call_1", "full file contents..."),
+            assistant_msg("processed"),
+        ];
+        let compacted = compact_messages(&mut messages, 0, &compactable_set(&["read"]));
+        assert_eq!(compacted, 1);
+        assert!(messages[1].content.starts_with("[Cleared: read src/fs.rs:1-320"));
+    }
+
+    #[test]
+    fn test_compact_skips_contextual_placeholders() {
+        let mut messages = vec![
+            assistant_with_tool_call_args("call_1", "read", r#"{"file_path": "src/fs.rs"}"#),
+            tool_msg("call_1", "file contents"),
+        ];
+        let c1 = compact_messages(&mut messages, 0, &compactable_set(&["read"]));
+        assert_eq!(c1, 1);
+        // Second pass must recognise the contextual placeholder and skip it.
+        let c2 = compact_messages(&mut messages, 0, &compactable_set(&["read"]));
+        assert_eq!(c2, 0);
+        assert!(messages[1].content.starts_with("[Cleared: read src/fs.rs"));
     }
 
     // ── drain_for_compact tests ────────────────────────────────────────────
