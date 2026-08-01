@@ -1,7 +1,11 @@
-//! [`EditTool`] — Line-level file editing (replace or delete lines).
+//! [`EditTool`] — Content-based file editing (replace, delete, insert).
 //!
-//! Replaces a specific range of lines in a file by line number.
-//! Pass an empty string as `new_content` to delete the range.
+//! Replaces the unique occurrence of `old_content` with `new_content`.
+//! Pass an empty string as `new_content` to delete the matched fragment.
+//!
+//! Matching is literal and must be **unique** — a stale `old_content`
+//! (from memory or a prior read) fails loudly with 0-or-multiple matches
+//! instead of corrupting the file.
 //!
 //! Streams the replacement content to the TUI via
 //! [`Progress::InProgress`] events so the user sees what's being
@@ -13,8 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use sandbox::FsError;
-use sandbox::WorkspaceFs;
+use sandbox::{FsError, WorkspaceFs};
 use tools::{Progress, ProgressStream, ToolError, tool};
 
 #[cfg(test)]
@@ -30,53 +33,49 @@ pub(crate) struct EditArgs {
     )]
     pub file_path: String,
 
-    /// First line to replace (1-indexed, inclusive).
+    /// Exact fragment of the file's current content to replace.
     #[schemars(
-        description = "First line to replace (1-indexed, inclusive). MUST match the file's current state — always read the file first to get accurate line numbers."
+        description = "The exact text to match in the file's CURRENT content. Must appear exactly once. Literal match — no regex. Line-ending differences are ignored. If the match fails (zero or multiple matches), the file changed or your content is stale: re-read the file and retry with fresh content. Include neighboring lines when the fragment is not unique."
     )]
-    pub start_line: u64,
+    pub old_content: String,
 
-    /// Last line to replace (1-indexed, inclusive).
+    /// Replacement text to insert in place of the matched fragment.
     #[schemars(
-        description = "Last line to replace (1-indexed, inclusive). Must be >= start_line. Same line number as start_line to replace a single line."
-    )]
-    pub end_line: u64,
-
-    /// Replacement text to insert in place of the selected lines.
-    #[schemars(
-        description = "Replacement text to insert in place of the selected lines. Pass empty string to delete the line range. Use \\n for multiple lines."
+        description = "Replacement text to insert in place of the matched fragment. Pass empty string to delete the matched fragment. Use \\n for multiple lines."
     )]
     pub new_content: String,
 }
 
-/// Tool for replacing file content by line number.
+/// Tool for replacing file content by exact fragment match.
 ///
 /// # Arguments
 ///
 /// ```json
 /// {
 ///     "file_path": "src/main.rs",
-///     "start_line": 5,
-///     "end_line": 7,
+///     "old_content": "    let x = 41;",
 ///     "new_content": "    let x = 42;\n    println!(\"{x}\");"
 /// }
 /// ```
-///
-/// Line numbers are 1-indexed; `start_line` and `end_line` are both inclusive.
 #[tool(
     name = "edit",
-    description = "Replace a specific range of lines in a file by line number. \
-         start_line and end_line are 1-indexed and inclusive (e.g. start=3, end=5 \
-         replaces lines 3, 4, and 5). Pass empty new_content to delete the range.\n\n\
-         IMPORTANT: Always read the file first to get accurate line numbers. The \
-         line numbers you provide MUST match the file's current state — stale line \
-         numbers from memory or a prior read will corrupt the file.\n\n\
-         When to use: modifying a few lines of an existing file, deleting lines, \
-         inserting lines at a specific position.\n\n\
-         When NOT to use: creating a new file (use write), replacing the entire file \
-         (use write — simpler and less error-prone).\n\n\
-         Return format: 'Edited {file_path}: replaced lines {start}-{end} with {N} \
-         new lines'.",
+    description = "Replace an exact text fragment in a file. old_content is matched against the \
+         file's CURRENT content and must appear EXACTLY ONCE. The match is literal (no regex, no \
+         globs); line-ending differences (\\r\\n vs \\n) are ignored.\n\n\
+         IMPORTANT — READ FIRST: Read the file before editing. old_content must come from that \
+         read, not from memory or an earlier version of the file. If the edit fails (zero \
+         matches, or multiple matches), the file changed or your content is stale: re-read the \
+         file and retry with fresh content. The tool NEVER edits on a failed match — no \
+         corruption, only a retry.\n\n\
+         AMBIGUOUS MATCHES: if old_content appears more than once, extend it with neighboring \
+         lines to make the match unique.\n\n\
+         Deletion: pass empty new_content to delete the matched fragment.\n\
+         Insertion: match a small anchor fragment and include the new lines in new_content.\n\n\
+         When to use: modifying part of an existing file, deleting a fragment, inserting lines.\n\n\
+         When NOT to use: creating a new file or rewriting it wholesale (use write — simpler and \
+         less error-prone), bulk mechanical renames (use write of the whole file).\n\n\
+         Return format: 'Edited {file_path}: replaced match at lines {start}-{end} ({old} → {new} \
+         lines)'.",
     args = EditArgs
 )]
 pub struct EditTool {
@@ -91,24 +90,17 @@ impl EditTool {
     fn execute_stream(&self, args: EditArgs) -> Result<ProgressStream, ToolError> {
         tracing::debug!(
             path = %args.file_path,
-            start_line = args.start_line,
-            end_line = args.end_line,
+            old_len = args.old_content.len(),
+            new_len = args.new_content.len(),
             "Editing file"
         );
         // Validate and edit synchronously first (errors surface immediately).
-        let output = self
+        let span = self
             .fs
-            .edit_lines(
-                &args.file_path,
-                args.start_line as usize,
-                args.end_line as usize,
-                &args.new_content,
-            )
+            .edit_content(&args.file_path, &args.old_content, &args.new_content)
             .map_err(|e| {
                 tracing::error!(
                     path = %args.file_path,
-                    start_line = args.start_line,
-                    end_line = args.end_line,
                     error = %e,
                     "Failed to edit file"
                 );
@@ -116,20 +108,23 @@ impl EditTool {
             })?;
         tracing::info!(
             path = %args.file_path,
-            start_line = args.start_line,
-            end_line = args.end_line,
-            new_bytes = args.new_content.len(),
+            old_len = args.old_content.len(),
+            new_len = args.new_content.len(),
+            span = ?span,
             "File edited"
         );
 
         let file_path = args.file_path.clone();
-        let start = args.start_line;
-        let end = args.end_line;
-        let range_label = if start == end {
-            format!("line {}", start)
+        let span_label = if span.start_line == span.end_line {
+            format!("line {}", span.start_line)
         } else {
-            format!("lines {}-{}", start, end)
+            format!("lines {}-{}", span.start_line, span.end_line)
         };
+        let old_lines = args.old_content.lines().count();
+        let new_lines = args.new_content.lines().count();
+        let output = format!(
+            "Edited {file_path}: replaced match at {span_label} ({old_lines} → {new_lines} lines)"
+        );
         let preview = super::content_preview(&args.new_content, "Replace with");
 
         // Stream progress events with small delays so the TUI can render
@@ -139,7 +134,7 @@ impl EditTool {
         tokio::spawn(async move {
             tx.send(Progress::InProgress(format!(
                 "Editing {}: {}...",
-                file_path, range_label
+                file_path, span_label
             )))
             .ok();
             tokio::time::sleep(Duration::from_millis(80)).await;
@@ -161,7 +156,10 @@ impl EditTool {
 
 fn map_fs_err(e: FsError) -> ToolError {
     match e {
-        FsError::NotAFile(_) | FsError::WorkspaceEscape(_) => ToolError::InvalidArgs(e.to_string()),
+        FsError::NotAFile(_)
+        | FsError::WorkspaceEscape(_)
+        | FsError::NoMatch { .. }
+        | FsError::AmbiguousMatch { .. } => ToolError::InvalidArgs(e.to_string()),
         _ => ToolError::Execution(e.to_string()),
     }
 }
@@ -227,29 +225,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_single_line() {
+    async fn test_replace_single_fragment() {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "line1\nline2\nline3\n");
 
         let stream = Tool::execute_stream(
             &tool,
-            r#"{"file_path": "f.txt", "start_line": 2, "end_line": 2, "new_content": "REPLACED"}"#,
+            r#"{"file_path": "f.txt", "old_content": "line2", "new_content": "REPLACED"}"#,
         )
         .unwrap();
         let output = stream_done(stream).await;
-        assert!(output.contains("Replaced"));
+        assert!(output.contains("Edited f.txt"));
+        assert!(output.contains("line 2"), "got: {output}");
         assert_eq!(read_file(&dir, "f.txt"), "line1\nREPLACED\nline3\n");
     }
 
     #[tokio::test]
-    async fn test_replace_range() {
+    async fn test_replace_multi_line_fragment() {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "a\nb\nc\nd\ne\n");
 
         stream_done(
             Tool::execute_stream(
                 &tool,
-                r#"{"file_path": "f.txt", "start_line": 2, "end_line": 4, "new_content": "X\nY"}"#,
+                r#"{"file_path": "f.txt", "old_content": "b\nc\nd", "new_content": "X\nY"}"#,
             )
             .unwrap(),
         )
@@ -258,14 +257,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_lines() {
+    async fn test_delete_fragment() {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "a\nb\nc\n");
 
         stream_done(
             Tool::execute_stream(
                 &tool,
-                r#"{"file_path": "f.txt", "start_line": 2, "end_line": 2, "new_content": ""}"#,
+                r#"{"file_path": "f.txt", "old_content": "b\n", "new_content": ""}"#,
             )
             .unwrap(),
         )
@@ -274,15 +273,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_at_end() {
+    async fn test_insert_via_anchor() {
         let (dir, tool) = setup();
         write_file(&dir, "f.txt", "a\nb\n");
 
-        // "append" behavior when replacing beyond file range (replacing non-existent lines appends)
+        // Insert after line 2 by matching the anchor and appending.
         stream_done(
             Tool::execute_stream(
                 &tool,
-                r#"{"file_path": "f.txt", "start_line": 3, "end_line": 3, "new_content": "c"}"#,
+                r#"{"file_path": "f.txt", "old_content": "b", "new_content": "b\nc"}"#,
             )
             .unwrap(),
         )
@@ -291,11 +290,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_missing_start_line() {
+    async fn test_no_match_reports_helpful_error() {
+        let (dir, tool) = setup();
+        write_file(&dir, "f.txt", "line1\nline2\nline3\n");
+
+        let err = Tool::execute_stream(
+            &tool,
+            r#"{"file_path": "f.txt", "old_content": "STALE_CONTENT", "new_content": "x"}"#,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ToolError::InvalidArgs(_)),
+            "got: {err:?}"
+        );
+        // File untouched — the failure is loud, not corrupting.
+        assert_eq!(read_file(&dir, "f.txt"), "line1\nline2\nline3\n");
+    }
+
+    #[tokio::test]
+    async fn test_ambiguous_match_reports_helpful_error() {
+        let (dir, tool) = setup();
+        write_file(&dir, "f.txt", "x = 1;\ny = 2;\nx = 1;\n");
+
+        let err = Tool::execute_stream(
+            &tool,
+            r#"{"file_path": "f.txt", "old_content": "x = 1;", "new_content": "x = 0;"}"#,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ToolError::InvalidArgs(_)),
+            "got: {err:?}"
+        );
+        assert_eq!(read_file(&dir, "f.txt"), "x = 1;\ny = 2;\nx = 1;\n");
+    }
+
+    #[tokio::test]
+    async fn test_missing_old_content() {
         let (_dir, tool) = setup();
         let err = Tool::execute_stream(
             &tool,
-            r#"{"file_path": "f.txt", "end_line": 1, "new_content": "x"}"#,
+            r#"{"file_path": "f.txt", "new_content": "x"}"#,
         )
         .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
@@ -306,7 +340,7 @@ mod tests {
         let (_dir, tool) = setup();
         let err = Tool::execute_stream(
             &tool,
-            r#"{"file_path": "nope.txt", "start_line": 1, "end_line": 1, "new_content": "x"}"#,
+            r#"{"file_path": "nope.txt", "old_content": "x", "new_content": "y"}"#,
         )
         .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));

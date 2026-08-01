@@ -364,8 +364,10 @@ fn format_compact_placeholder(tool_name: &str, arguments_json: &str) -> String {
             None => return COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string(),
         },
         "edit" => match path {
-            Some(p) => match line_range(&args) {
-                Some(r) => format!("edit {p}{r}"),
+            Some(p) => match get("old_content") {
+                // The matched fragment is what was changed — a truncated
+                // snippet helps the agent remember which part of the file.
+                Some(old) => format!("edit {p}: \"{}\"", truncate(&old)),
                 None => format!("edit {p}"),
             },
             None => return COMPACTED_TOOL_OUTPUT_PLACEHOLDER.to_string(),
@@ -387,15 +389,10 @@ fn format_compact_placeholder(tool_name: &str, arguments_json: &str) -> String {
     format!("{COMPACTED_TOOL_OUTPUT_PREFIX}{description} — re-fetch with the tool if needed]")
 }
 
-/// Render a line range from `read`/`edit` arguments (`offset`/`limit` or
-/// `start_line`/`end_line`).  Returns `None` when no range info is present.
+/// Render a line range from `read` arguments (`offset`/`limit`).  Returns
+/// `None` when no range info is present. (`edit` is content-based and has
+/// no line-range arguments.)
 fn line_range(args: &serde_json::Value) -> Option<String> {
-    if let (Some(start), Some(end)) = (args.get("start_line"), args.get("end_line")) {
-        let (Some(start), Some(end)) = (start.as_u64(), end.as_u64()) else {
-            return None;
-        };
-        return Some(format!(":{start}-{end}"));
-    }
     match (args.get("offset"), args.get("limit")) {
         // `offset` is 1-indexed, `limit` is a count — render as inclusive.
         (Some(offset), Some(limit)) => {
@@ -640,11 +637,11 @@ mod tests {
 
         let edit = format_compact_placeholder(
             "edit",
-            r#"{"file_path": "src/fs.rs", "start_line": 5, "end_line": 7}"#,
+            r#"{"file_path": "src/fs.rs", "old_content": "fn foo() {\n    let x = 1;\n}"}"#,
         );
         assert_eq!(
             edit,
-            "[Cleared: edit src/fs.rs:5-7 — re-fetch with the tool if needed]"
+            "[Cleared: edit src/fs.rs: \"fn foo() {\n    let x = 1;\n}\" — re-fetch with the tool if needed]"
         );
 
         let ls = format_compact_placeholder("ls", r#"{"path": "src/"}"#);

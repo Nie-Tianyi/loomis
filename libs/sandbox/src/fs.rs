@@ -440,6 +440,83 @@ impl WorkspaceFs {
         ))
     }
 
+    /// Replace the unique occurrence of `old` with `new` in the file at
+    /// `path`.
+    ///
+    /// `old` must appear in the file's CURRENT content exactly once:
+    /// - zero matches → [`FsError::NoMatch`] — the file changed since the
+    ///   caller's last read, or the needle is stale
+    /// - multiple matches → [`FsError::AmbiguousMatch`] — the caller must
+    ///   include more surrounding context to disambiguate
+    ///
+    /// This is the content-based counterpart of
+    /// [`edit_lines`](Self::edit_lines). Matching against the file's
+    /// *current* state turns stale reads into loud errors instead of silent
+    /// corruption: the needle itself is the freshness check. Matching is
+    /// CRLF-tolerant (`\r` ignored on both sides) because the `read` tool
+    /// normalizes output to `\n`; a caller echoing read output back must
+    /// not fail on Windows line endings. The file's own line endings are
+    /// preserved, and `new`'s `\n` is converted to them.
+    ///
+    /// Returns the 1-indexed inclusive line range the replacement occupies
+    /// in the NEW file.
+    pub fn edit_content(&self, path: &str, old: &str, new: &str) -> Result<EditSpan, FsError> {
+        let resolved = self.resolve(path)?;
+        if !resolved.is_file() {
+            return Err(FsError::NotAFile(path.to_string()));
+        }
+        if old.is_empty() {
+            return Err(FsError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "old_content must not be empty",
+            )));
+        }
+
+        // ── Serialize concurrent edits to the same file ────────────────
+        // Same rationale as `edit_lines`: parallel `edit`/`write` calls on
+        // the same file must apply in a clean order. Content matching also
+        // means a stale second edit (whose needle was consumed by the
+        // first) fails loudly instead of applying at wrong coordinates.
+        let lock = self.file_lock(&resolved);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+
+        let content = fs::read_to_string(&resolved).map_err(FsError::Io)?;
+        let matches = find_crlf_tolerant(&content, old);
+        match matches.as_slice() {
+            [] => {
+                let needle = old.chars().take(80).collect::<String>();
+                return Err(FsError::NoMatch {
+                    path: path.to_string(),
+                    needle,
+                });
+            }
+            [(_start, _end)] => {}
+            _ => {
+                return Err(FsError::AmbiguousMatch {
+                    path: path.to_string(),
+                    count: matches.len(),
+                });
+            }
+        }
+
+        let (start, end) = matches[0];
+        let line_end = detect_line_end(&content);
+        let new_content = if line_end == "\n" {
+            new.to_string()
+        } else {
+            new.replace('\n', &line_end)
+        };
+        let edited = format!("{}{}{}", &content[..start], new_content, &content[end..]);
+        fs::write(&resolved, &edited).map_err(FsError::Io)?;
+
+        // Newline counts work for fragments that start or end mid-line,
+        // which `lines().count()` misreports (a trailing partial line
+        // counts as one).
+        let start_line = content[..start].matches('\n').count() + 1;
+        let end_line = start_line + new_content.matches('\n').count();
+        Ok(EditSpan { start_line, end_line })
+    }
+
     /// Glob files matching a pattern. Relative patterns are matched against
     /// the workspace root; absolute patterns may target read-only roots.
     ///
@@ -638,6 +715,56 @@ fn glob_base_prefix(pattern: &str) -> String {
     parts.join("/")
 }
 
+/// 1-indexed inclusive line range of a replacement in the file's NEW state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditSpan {
+    /// First line of the replacement (1-indexed).
+    pub start_line: usize,
+    /// Last line of the replacement (1-indexed; equals `start_line` when
+    /// the replacement is empty or a single line).
+    pub end_line: usize,
+}
+
+/// Byte ranges of every CRLF-tolerant occurrence of `needle` in `content`,
+/// as `(start, end)` offsets into the ORIGINAL content.
+///
+/// `\r` is ignored on both sides — the `read` tool normalizes file content
+/// to `\n`, so a caller echoing read output back must not fail on Windows
+/// line endings. `\r` is never semantically significant in edited text.
+fn find_crlf_tolerant(content: &str, needle: &str) -> Vec<(usize, usize)> {
+    let (norm, map) = normalize_cr(content);
+    let (needle_norm, _) = normalize_cr(needle);
+    if needle_norm.is_empty() {
+        return Vec::new();
+    }
+    norm.windows(needle_norm.len())
+        .enumerate()
+        .filter(|(_, win)| *win == needle_norm)
+        // End is one past the LAST matched byte, not `map[idx + len]`:
+        // a `\r` skipped between the needle's last byte and the next
+        // byte belongs to the file's line ending and must survive the
+        // replacement.
+        .map(|(idx, _)| (map[idx], map[idx + needle_norm.len() - 1] + 1))
+        .collect()
+}
+
+/// Copy `text` without `\r` as raw bytes, recording each kept byte's
+/// original offset. `map[i]` is the original offset of normalized byte `i`;
+/// `map[norm.len()]` is `text.len()` (sentinel for end-of-string).
+fn normalize_cr(text: &str) -> (Vec<u8>, Vec<usize>) {
+    let bytes = text.as_bytes();
+    let mut norm = Vec::with_capacity(bytes.len());
+    let mut map = Vec::with_capacity(bytes.len());
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'\r' {
+            map.push(i);
+            norm.push(b);
+        }
+    }
+    map.push(bytes.len());
+    (norm, map)
+}
+
 fn detect_line_end(text: &str) -> String {
     if text.contains("\r\n") {
         "\r\n".to_string()
@@ -688,6 +815,11 @@ pub enum FsError {
     NotFound(String),
     NotAFile(String),
     NotADirectory(String),
+    /// `edit_content` found zero matches for `old_content` (file changed
+    /// since the caller's last read, or the needle is stale).
+    NoMatch { path: String, needle: String },
+    /// `edit_content` found multiple matches for `old_content`.
+    AmbiguousMatch { path: String, count: usize },
     Io(std::io::Error),
     GlobPatternError(String),
     RegexError(String),
@@ -717,6 +849,16 @@ impl std::fmt::Display for FsError {
             Self::NotFound(path) => write!(f, "not found: {path}"),
             Self::NotAFile(path) => write!(f, "not a file: {path}"),
             Self::NotADirectory(path) => write!(f, "not a directory: {path}"),
+            Self::NoMatch { path, needle } => write!(
+                f,
+                "no match for old_content \"{needle}\" in {path} — the file may have \
+                 changed since it was read; re-read the file and retry with fresh content"
+            ),
+            Self::AmbiguousMatch { path, count } => write!(
+                f,
+                "old_content matches {count} locations in {path} — include more \
+                 surrounding context to make the match unique"
+            ),
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::GlobPatternError(msg) => write!(f, "glob error: {msg}"),
             Self::RegexError(msg) => write!(f, "regex error: {msg}"),
@@ -842,6 +984,93 @@ mod tests {
         fs.edit_lines("f.txt", 2, 2, "replaced").unwrap();
         let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "line1\nreplaced\nline3\n");
+    }
+
+    #[test]
+    fn test_edit_content_replaces_unique_fragment() {
+        let (_dir, fs) = setup_fs();
+        fs.write("f.txt", "a\nb\nc\n").unwrap();
+        let span = fs.edit_content("f.txt", "b", "X\nY").unwrap();
+        assert_eq!(span, EditSpan { start_line: 2, end_line: 3 });
+        let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
+        assert_eq!(content, "a\nX\nY\nc\n");
+    }
+
+    #[test]
+    fn test_edit_content_deletes_fragment() {
+        let (_dir, fs) = setup_fs();
+        fs.write("f.txt", "a\nb\nc\n").unwrap();
+        let span = fs.edit_content("f.txt", "b\n", "").unwrap();
+        assert_eq!(span, EditSpan { start_line: 2, end_line: 2 });
+        let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
+        assert_eq!(content, "a\nc\n");
+    }
+
+    #[test]
+    fn test_edit_content_mid_line_span() {
+        // Partial-line match: span covers the line the fragment lives on.
+        let (_dir, fs) = setup_fs();
+        fs.write("f.txt", "fn foo() {\n    let x = 1;\n}\n").unwrap();
+        let span = fs.edit_content("f.txt", "let x = 1;", "let x = 2;").unwrap();
+        assert_eq!(span, EditSpan { start_line: 2, end_line: 2 });
+        let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
+        assert_eq!(content, "fn foo() {\n    let x = 2;\n}\n");
+    }
+
+    #[test]
+    fn test_edit_content_no_match() {
+        let (_dir, fs) = setup_fs();
+        fs.write("f.txt", "a\nb\nc\n").unwrap();
+        let err = fs.edit_content("f.txt", "zzz", "x").unwrap_err();
+        match err {
+            FsError::NoMatch { path, needle } => {
+                assert_eq!(path, "f.txt");
+                assert_eq!(needle, "zzz");
+            }
+            other => panic!("expected NoMatch, got {other}"),
+        }
+        // File untouched on failure.
+        let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
+        assert_eq!(content, "a\nb\nc\n");
+    }
+
+    #[test]
+    fn test_edit_content_ambiguous_match() {
+        let (_dir, fs) = setup_fs();
+        fs.write("f.txt", "a\nb\na\n").unwrap();
+        let err = fs.edit_content("f.txt", "a", "x").unwrap_err();
+        match err {
+            FsError::AmbiguousMatch { path, count } => {
+                assert_eq!(path, "f.txt");
+                assert_eq!(count, 2);
+            }
+            other => panic!("expected AmbiguousMatch, got {other}"),
+        }
+        let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
+        assert_eq!(content, "a\nb\na\n");
+    }
+
+    #[test]
+    fn test_edit_content_empty_old_rejected() {
+        let (_dir, fs) = setup_fs();
+        fs.write("f.txt", "a\n").unwrap();
+        assert!(fs.edit_content("f.txt", "", "x").is_err());
+    }
+
+    #[test]
+    fn test_edit_content_crlf_tolerant() {
+        // read() normalizes \r\n to \n; echoing that back must still match.
+        let (_dir, fs) = setup_fs();
+        fs.write("f.txt", "line1\r\nline2\r\nline3\r\n").unwrap();
+        let span = fs.edit_content("f.txt", "line2", "EDITED").unwrap();
+        assert_eq!(span, EditSpan { start_line: 2, end_line: 2 });
+        let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
+        assert_eq!(content, "line1\r\nEDITED\r\nline3\r\n");
+        // Multi-line needle echoing normalized read output (LF) matches CRLF file.
+        let span = fs.edit_content("f.txt", "line1\nEDITED", "A\nB").unwrap();
+        assert_eq!(span, EditSpan { start_line: 1, end_line: 2 });
+        let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
+        assert_eq!(content, "A\r\nB\r\nline3\r\n");
     }
 
     // ── Concurrency: parallel edits/writes must not silently lose updates ──

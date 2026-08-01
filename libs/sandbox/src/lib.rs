@@ -25,6 +25,6 @@ pub mod shell_filter;
 pub mod watchdog;
 
 pub use config::{ConfigError, FilesystemConfig, SandboxConfig};
-pub use fs::{DirEntry, EntryType, FsError, GrepMatch, WorkspaceFs};
+pub use fs::{DirEntry, EditSpan, EntryType, FsError, GrepMatch, WorkspaceFs};
 pub use sandbox_hook::SandboxHook;
 pub use watchdog::Watchdog;
