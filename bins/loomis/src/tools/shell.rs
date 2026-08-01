@@ -411,7 +411,9 @@ mod tests {
         let cmd = r#"{"command": "echo boom >&2; exit 3"}"#;
 
         let result = Tool::execute_stream(&tool, cmd).unwrap().poll_done();
-        let marker = result.find("[FAILED — exit code: 3]").expect("FAILED marker");
+        let marker = result
+            .find("[FAILED — exit code: 3]")
+            .expect("FAILED marker");
         let stderr_pos = result.find("boom").expect("stderr content");
         assert!(
             marker < stderr_pos,

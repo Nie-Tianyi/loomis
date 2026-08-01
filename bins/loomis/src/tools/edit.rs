@@ -299,10 +299,7 @@ mod tests {
             r#"{"file_path": "f.txt", "old_content": "STALE_CONTENT", "new_content": "x"}"#,
         )
         .unwrap_err();
-        assert!(
-            matches!(err, ToolError::InvalidArgs(_)),
-            "got: {err:?}"
-        );
+        assert!(matches!(err, ToolError::InvalidArgs(_)), "got: {err:?}");
         // File untouched — the failure is loud, not corrupting.
         assert_eq!(read_file(&dir, "f.txt"), "line1\nline2\nline3\n");
     }
@@ -317,21 +314,15 @@ mod tests {
             r#"{"file_path": "f.txt", "old_content": "x = 1;", "new_content": "x = 0;"}"#,
         )
         .unwrap_err();
-        assert!(
-            matches!(err, ToolError::InvalidArgs(_)),
-            "got: {err:?}"
-        );
+        assert!(matches!(err, ToolError::InvalidArgs(_)), "got: {err:?}");
         assert_eq!(read_file(&dir, "f.txt"), "x = 1;\ny = 2;\nx = 1;\n");
     }
 
     #[tokio::test]
     async fn test_missing_old_content() {
         let (_dir, tool) = setup();
-        let err = Tool::execute_stream(
-            &tool,
-            r#"{"file_path": "f.txt", "new_content": "x"}"#,
-        )
-        .unwrap_err();
+        let err = Tool::execute_stream(&tool, r#"{"file_path": "f.txt", "new_content": "x"}"#)
+            .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 

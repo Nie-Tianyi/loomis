@@ -399,7 +399,11 @@ fn line_range(args: &serde_json::Value) -> Option<String> {
             let (Some(offset), Some(limit)) = (offset.as_u64(), limit.as_u64()) else {
                 return None;
             };
-            Some(format!(":{}-{}", offset, offset.saturating_add(limit).saturating_sub(1)))
+            Some(format!(
+                ":{}-{}",
+                offset,
+                offset.saturating_add(limit).saturating_sub(1)
+            ))
         }
         (Some(offset), None) => Some(format!(":{}", offset.as_u64()?)),
         _ => None,
@@ -609,12 +613,12 @@ mod tests {
     #[test]
     fn test_placeholder_shell_includes_truncated_command() {
         let long_cmd = "cargo ".repeat(20); // 120 chars — over the 60-char cap
-        let p = format_compact_placeholder(
-            "shell",
-            &format!(r#"{{"command": "{long_cmd}"}}"#),
-        );
+        let p = format_compact_placeholder("shell", &format!(r#"{{"command": "{long_cmd}"}}"#));
         assert!(p.starts_with("[Cleared: shell \""), "got: {p}");
-        assert!(p.ends_with("…\" — re-fetch with the tool if needed]"), "got: {p}");
+        assert!(
+            p.ends_with("…\" — re-fetch with the tool if needed]"),
+            "got: {p}"
+        );
         assert!(p.len() < 120, "placeholder not truncated: {p}");
     }
 
@@ -651,7 +655,10 @@ mod tests {
     #[test]
     fn test_placeholder_ls_without_path() {
         let p = format_compact_placeholder("ls", "{}");
-        assert_eq!(p, "[Cleared: ls (workspace root) — re-fetch with the tool if needed]");
+        assert_eq!(
+            p,
+            "[Cleared: ls (workspace root) — re-fetch with the tool if needed]"
+        );
     }
 
     #[test]
@@ -704,7 +711,11 @@ mod tests {
         ];
         let compacted = compact_messages(&mut messages, 0, &compactable_set(&["read"]));
         assert_eq!(compacted, 1);
-        assert!(messages[1].content.starts_with("[Cleared: read src/fs.rs:1-320"));
+        assert!(
+            messages[1]
+                .content
+                .starts_with("[Cleared: read src/fs.rs:1-320")
+        );
     }
 
     #[test]

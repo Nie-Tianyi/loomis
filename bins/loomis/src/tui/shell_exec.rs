@@ -191,7 +191,9 @@ mod tests {
         let cmd = "echo boom >&2; exit 3";
 
         let output = execute_shell_command(cmd, &workspace_root());
-        let marker = output.find("[FAILED — exit code: 3]").expect("FAILED marker");
+        let marker = output
+            .find("[FAILED — exit code: 3]")
+            .expect("FAILED marker");
         let stderr_pos = output.find("boom").expect("stderr content");
         assert!(
             marker < stderr_pos,

@@ -514,7 +514,10 @@ impl WorkspaceFs {
         // counts as one).
         let start_line = content[..start].matches('\n').count() + 1;
         let end_line = start_line + new_content.matches('\n').count();
-        Ok(EditSpan { start_line, end_line })
+        Ok(EditSpan {
+            start_line,
+            end_line,
+        })
     }
 
     /// Glob files matching a pattern. Relative patterns are matched against
@@ -808,7 +811,11 @@ fn normalize_partial(path: &Path) -> Result<PathBuf, FsError> {
 #[non_exhaustive]
 pub enum FsError {
     WorkspaceEscape(String),
-    FileTooLarge { path: String, size: u64, max: u64 },
+    FileTooLarge {
+        path: String,
+        size: u64,
+        max: u64,
+    },
     BinaryContentDetected(String),
     HiddenFileBlocked(String),
     ExtensionBlocked(String),
@@ -817,9 +824,15 @@ pub enum FsError {
     NotADirectory(String),
     /// `edit_content` found zero matches for `old_content` (file changed
     /// since the caller's last read, or the needle is stale).
-    NoMatch { path: String, needle: String },
+    NoMatch {
+        path: String,
+        needle: String,
+    },
     /// `edit_content` found multiple matches for `old_content`.
-    AmbiguousMatch { path: String, count: usize },
+    AmbiguousMatch {
+        path: String,
+        count: usize,
+    },
     Io(std::io::Error),
     GlobPatternError(String),
     RegexError(String),
@@ -991,7 +1004,13 @@ mod tests {
         let (_dir, fs) = setup_fs();
         fs.write("f.txt", "a\nb\nc\n").unwrap();
         let span = fs.edit_content("f.txt", "b", "X\nY").unwrap();
-        assert_eq!(span, EditSpan { start_line: 2, end_line: 3 });
+        assert_eq!(
+            span,
+            EditSpan {
+                start_line: 2,
+                end_line: 3
+            }
+        );
         let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "a\nX\nY\nc\n");
     }
@@ -1001,7 +1020,13 @@ mod tests {
         let (_dir, fs) = setup_fs();
         fs.write("f.txt", "a\nb\nc\n").unwrap();
         let span = fs.edit_content("f.txt", "b\n", "").unwrap();
-        assert_eq!(span, EditSpan { start_line: 2, end_line: 2 });
+        assert_eq!(
+            span,
+            EditSpan {
+                start_line: 2,
+                end_line: 2
+            }
+        );
         let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "a\nc\n");
     }
@@ -1010,9 +1035,18 @@ mod tests {
     fn test_edit_content_mid_line_span() {
         // Partial-line match: span covers the line the fragment lives on.
         let (_dir, fs) = setup_fs();
-        fs.write("f.txt", "fn foo() {\n    let x = 1;\n}\n").unwrap();
-        let span = fs.edit_content("f.txt", "let x = 1;", "let x = 2;").unwrap();
-        assert_eq!(span, EditSpan { start_line: 2, end_line: 2 });
+        fs.write("f.txt", "fn foo() {\n    let x = 1;\n}\n")
+            .unwrap();
+        let span = fs
+            .edit_content("f.txt", "let x = 1;", "let x = 2;")
+            .unwrap();
+        assert_eq!(
+            span,
+            EditSpan {
+                start_line: 2,
+                end_line: 2
+            }
+        );
         let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "fn foo() {\n    let x = 2;\n}\n");
     }
@@ -1063,12 +1097,24 @@ mod tests {
         let (_dir, fs) = setup_fs();
         fs.write("f.txt", "line1\r\nline2\r\nline3\r\n").unwrap();
         let span = fs.edit_content("f.txt", "line2", "EDITED").unwrap();
-        assert_eq!(span, EditSpan { start_line: 2, end_line: 2 });
+        assert_eq!(
+            span,
+            EditSpan {
+                start_line: 2,
+                end_line: 2
+            }
+        );
         let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "line1\r\nEDITED\r\nline3\r\n");
         // Multi-line needle echoing normalized read output (LF) matches CRLF file.
         let span = fs.edit_content("f.txt", "line1\nEDITED", "A\nB").unwrap();
-        assert_eq!(span, EditSpan { start_line: 1, end_line: 2 });
+        assert_eq!(
+            span,
+            EditSpan {
+                start_line: 1,
+                end_line: 2
+            }
+        );
         let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "A\r\nB\r\nline3\r\n");
     }
