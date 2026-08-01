@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossterm::event::{Event, KeyEventKind};
+use futures_util::FutureExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
@@ -87,13 +88,8 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
 
-    // Install panic hook to restore terminal on crash
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen);
-        prev_hook(info);
-    }));
+    // NOTE: the process-wide panic hook (installed in main.rs) restores the
+    // terminal and writes the panic to the log — no TUI-specific hook here.
 
     // ── App state ────────────────────────────────────────────────────
     let mut app = App::new(
@@ -124,9 +120,6 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         crossterm::terminal::LeaveAlternateScreen,
         crossterm::event::DisableMouseCapture,
     )?;
-
-    // Restore previous panic hook
-    let _ = std::panic::take_hook();
 
     result
 }
@@ -245,9 +238,29 @@ async fn agent_handler(
                 let agent = Arc::clone(&agent);
 
                 let handle = tokio::spawn(async move {
-                    let _result = agent.run_with_events(&input, tx.clone()).await;
-                    // PersistenceHook already saved the conversation in on_run_finish.
-                    // Agent loop already emitted RunCompleted/RunFailed + Done events.
+                    let result = std::panic::AssertUnwindSafe(agent.run_with_events(&input, tx.clone()))
+                        .catch_unwind()
+                        .await;
+                    match result {
+                        // Normal completion — PersistenceHook already saved the
+                        // conversation in on_run_finish, and the agent loop
+                        // already emitted RunCompleted/RunFailed + Done events.
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => {
+                            tracing::error!(error = %e, "Agent run failed");
+                        }
+                        // Panic inside the agent loop: tokio would otherwise
+                        // swallow it silently. Log it and tell the TUI so the
+                        // user isn't left in a stuck "streaming" state.
+                        Err(payload) => {
+                            let msg = engine::panic_message(payload.as_ref());
+                            tracing::error!(panic = %msg, "Agent task panicked");
+                            let _ = tx.send(AgentEvent::RunFailed {
+                                error: format!("Agent task panicked: {msg}"),
+                            });
+                            let _ = tx.send(AgentEvent::Done);
+                        }
+                    }
                 });
 
                 current_run = Some(handle);

@@ -10,6 +10,39 @@ use tracing_appender::non_blocking::WorkerGuard;
 const DEFAULT_MODEL: &str = "deepseek-v4-pro";
 const DEFAULT_FLASH_MODEL: &str = "deepseek-v4-flash";
 
+/// Install a process-wide panic hook that writes the panic to the tracing
+/// log **and** restores the terminal before the default hook prints it.
+///
+/// Must be called after `init_tracing` so the subscriber (and its
+/// `WorkerGuard`) is live. A single hook covers the whole process — raw-mode
+/// restoration is a no-op when the terminal is not in raw mode, so there is
+/// no need for a separate TUI-specific hook.
+fn install_panic_hook() {
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // 1. Write to the log first — the tracing worker is still alive here.
+        let location = info.location().map(|l| format!("{l}")).unwrap_or_default();
+        let msg = engine::panic_message(info.payload());
+        tracing::error!(
+            panic.location = %location,
+            panic.message = %msg,
+            "FATAL: process panicked",
+        );
+
+        // 2. Restore the terminal if it was in raw/alternate-screen mode.
+        //    No-ops outside the TUI.
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture,
+        );
+
+        // 3. Let the default hook print the panic to stderr.
+        prev_hook(info);
+    }));
+}
+
 /// Initialize the tracing subscriber for file-based logging.
 ///
 /// Logs go to `.loomis/logs/loomis.log` (rolling daily).
@@ -56,6 +89,10 @@ async fn main() {
     // Initialize structured logging before any business logic.
     // The guard must stay alive until process exit.
     let _guard = init_tracing(&cwd);
+
+    // Install the process-wide panic hook: panic messages are written to the
+    // log file and the terminal is restored before the default hook prints.
+    install_panic_hook();
 
     let model = std::env::var("DEFAULT_PRO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     let flash_model =

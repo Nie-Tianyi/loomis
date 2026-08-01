@@ -33,6 +33,7 @@ mod builder;
 mod context;
 mod hooks;
 pub mod intervention;
+mod panic;
 mod response_router;
 mod rt;
 
@@ -43,5 +44,6 @@ pub use agent::{
 pub use builder::AgentBuilder;
 pub use context::{EngineContext, EngineContextBuilder};
 pub use hooks::AgentHook;
+pub use panic::panic_message;
 pub use response_router::{ResponseRouter, next_request_id};
 pub use rt::block_on;
