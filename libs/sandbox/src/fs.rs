@@ -4,8 +4,10 @@
 //! paths cannot escape the `workspace_root` (and, for read-only operations,
 //! the optional [`FilesystemConfig::read_only_paths`] roots).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use crate::config::FilesystemConfig;
 
@@ -29,6 +31,10 @@ pub struct WorkspaceFs {
     forbid_binary_writes: bool,
     forbid_hidden_file_writes: bool,
     blocked_write_extensions: Vec<String>,
+    /// Per-file write locks — serialize read-modify-write operations
+    /// (`edit_lines`, `write`) targeting the same file so concurrent
+    /// tool calls cannot silently overwrite each other's changes.
+    write_locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
 }
 
 impl WorkspaceFs {
@@ -79,6 +85,7 @@ impl WorkspaceFs {
             forbid_binary_writes: config.forbid_binary_writes,
             forbid_hidden_file_writes: config.forbid_hidden_file_writes,
             blocked_write_extensions: config.blocked_write_extensions.clone(),
+            write_locks: Mutex::new(HashMap::new()),
         })
     }
 
@@ -106,6 +113,25 @@ impl WorkspaceFs {
     fn is_likely_binary(bytes: &[u8]) -> bool {
         let check_len = bytes.len().min(8192);
         bytes[..check_len].contains(&0)
+    }
+
+    /// Acquire the per-file write lock for `resolved`.
+    ///
+    /// Returns an `Arc` clone of the file's mutex; the caller locks it while
+    /// performing the read → modify → write sequence, so two concurrent
+    /// operations on the same file serialize while different files proceed
+    /// in parallel. The map lock is held only briefly to look up/create the
+    /// per-file mutex, never while waiting on it — no nested locking, no
+    /// deadlock.
+    ///
+    /// Recovers from a poisoned lock (a previous holder panicked) rather than
+    /// propagating the panic, so one broken operation cannot permanently
+    /// disable writes to that file.
+    fn file_lock(&self, resolved: &Path) -> Arc<Mutex<()>> {
+        let mut map = self.write_locks.lock().unwrap_or_else(|e| e.into_inner());
+        map.entry(resolved.to_path_buf())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     /// Resolve a path (write-mode): must stay within the workspace.
@@ -316,6 +342,14 @@ impl WorkspaceFs {
             return Err(FsError::HiddenFileBlocked(path.to_string()));
         }
 
+        // ── Serialize concurrent writes to the same file ───────────────
+        // Without this, a parallel `edit` on the same file could read the
+        // pre-write state and write back stale content, silently wiping
+        // this write (or vice versa). The lock makes overlapping
+        // operations apply in a clean order.
+        let lock = self.file_lock(&resolved);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+
         if resolved.exists() && resolved.is_dir() {
             return Err(FsError::NotAFile(path.to_string()));
         }
@@ -358,6 +392,15 @@ impl WorkspaceFs {
         if !resolved.is_file() {
             return Err(FsError::NotAFile(path.to_string()));
         }
+
+        // ── Serialize concurrent edits to the same file ────────────────
+        // Two parallel `edit`/`write` tool calls on the same file would
+        // each read-modify-write independently, and the later write would
+        // silently clobber the earlier one while both report success.
+        // Hold the per-file lock across the whole read → modify → write.
+        // (`lock` must outlive `_guard`, hence the separate binding.)
+        let lock = self.file_lock(&resolved);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
 
         let content = fs::read_to_string(&resolved).map_err(FsError::Io)?;
         let line_end = detect_line_end(&content);
@@ -799,6 +842,109 @@ mod tests {
         fs.edit_lines("f.txt", 2, 2, "replaced").unwrap();
         let content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "line1\nreplaced\nline3\n");
+    }
+
+    // ── Concurrency: parallel edits/writes must not silently lose updates ──
+
+    #[test]
+    fn test_concurrent_edits_all_survive() {
+        let (_dir, fs) = setup_fs();
+        let fs = Arc::new(fs);
+        let mut content = String::new();
+        for i in 1..=100 {
+            content.push_str(&format!("line {i}\n"));
+        }
+        fs.write("f.txt", &content).unwrap();
+
+        // 4 threads × 5 single-line edits (1→1 replacements keep line
+        // numbers stable) at distinct lines 10..29. Without the per-file
+        // lock, the read-modify-write races lose some edits silently while
+        // both calls report success.
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let mut handles = Vec::new();
+        for t in 0..4usize {
+            let fs = Arc::clone(&fs);
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                for i in 0..5usize {
+                    let line = 10 + t * 5 + i;
+                    fs.edit_lines("f.txt", line, line, &format!("EDITED-{t}-{i}"))
+                        .unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let final_content = fs::read_to_string(_dir.path().join("f.txt")).unwrap();
+        for t in 0..4usize {
+            for i in 0..5usize {
+                assert!(
+                    final_content.contains(&format!("EDITED-{t}-{i}")),
+                    "edit {t}-{i} lost to a concurrent edit"
+                );
+            }
+        }
+        // Unedited lines survive too.
+        assert!(final_content.contains("line 1"));
+        assert!(final_content.contains("line 100"));
+    }
+
+    #[test]
+    fn test_concurrent_write_and_edit_consistent() {
+        let (_dir, fs) = setup_fs();
+        let fs = Arc::new(fs);
+
+        // A parallel `write` (all 'b') and `edit` (line 50 → "CCCC") on the
+        // same file must never yield the stale-edit result (all 'a' with
+        // line 50 "CCCC") — that means the edit read pre-write state and
+        // silently clobbered the write. Looped to make the no-lock race
+        // likely. Both contents are 100 lines, so line 50 stays valid
+        // whichever operation lands first.
+        for round in 0..20 {
+            let original = (0..100).map(|_| "a").collect::<Vec<_>>().join("\n") + "\n";
+            fs.write("f.txt", &original).unwrap();
+            let new_content = (0..100).map(|_| "b").collect::<Vec<_>>().join("\n") + "\n";
+
+            let fs1 = Arc::clone(&fs);
+            let fs2 = Arc::clone(&fs);
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let write_handle = {
+                let b = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    b.wait();
+                    fs1.write("f.txt", &new_content).unwrap();
+                })
+            };
+            let edit_handle = {
+                let b = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    b.wait();
+                    fs2.edit_lines("f.txt", 50, 50, "CCCC").unwrap();
+                })
+            };
+            write_handle.join().unwrap();
+            edit_handle.join().unwrap();
+
+            let final_content = std::fs::read_to_string(_dir.path().join("f.txt")).unwrap();
+            let lines: Vec<&str> = final_content.lines().collect();
+            assert_eq!(
+                lines.len(),
+                100,
+                "round {round}: file corrupted: {final_content}"
+            );
+            for (i, line) in lines.iter().enumerate() {
+                let is_b = *line == "b";
+                let is_marker = i == 49 && *line == "CCCC";
+                assert!(
+                    is_b || is_marker,
+                    "round {round}: unexpected line {}: {line:?} — write lost to stale edit",
+                    i + 1,
+                );
+            }
+        }
     }
 
     #[test]
