@@ -83,30 +83,40 @@ pub fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
     if !stdout_clean.is_empty() {
         result.push_str(&encoding::truncate_output(stdout_clean, MAX_OUTPUT_BYTES));
     }
-    if !stderr_clean.is_empty() {
+
+    // Reserve ~20% of budget for stderr (or at least 10KB).
+    let stderr_max = (MAX_OUTPUT_BYTES / 5).max(10_240);
+
+    // Failed commands get a prominent error block: exit code first, then
+    // stderr — same format as ShellTool, so agent and `!command` output match.
+    if let Some(code) = exit_code.filter(|&c| c != 0) {
+        if !result.is_empty() {
+            result.push_str("\n\n");
+        }
+        result.push_str(&format!("[FAILED — exit code: {code}]"));
+        if !stderr_clean.is_empty() {
+            let remaining = MAX_OUTPUT_BYTES.saturating_sub(result.len());
+            let stderr_limit = stderr_max.min(remaining);
+            result.push('\n');
+            result.push_str(&encoding::truncate_output(stderr_clean, stderr_limit));
+        }
+    } else if !stderr_clean.is_empty() {
         if !result.is_empty() {
             result.push('\n');
         }
-        // Reserve ~20% of budget for stderr (or at least 10KB).
-        let stderr_max = (MAX_OUTPUT_BYTES / 5).max(10_240);
         let remaining = MAX_OUTPUT_BYTES.saturating_sub(result.len());
         let stderr_limit = stderr_max.min(remaining);
         result.push_str(&encoding::truncate_output(stderr_clean, stderr_limit));
     }
 
-    // If nothing was produced, indicate the command ran
+    // If nothing was produced, indicate the command ran.
+    // (A non-zero exit code always produces the [FAILED — …] block above.)
     if result.is_empty() {
         match exit_code {
             Some(0) => result.push_str("(command completed with no output)"),
-            Some(code) => {
-                result.push_str(&format!("(exit code: {code}, no output)"));
-            }
             None => result.push_str("(process terminated by signal, no output)"),
+            Some(_) => {}
         }
-    } else if let Some(code) = exit_code
-        && code != 0
-    {
-        result.push_str(&format!("\n\n[exit code: {code}]"));
     }
 
     result
@@ -170,6 +180,22 @@ mod tests {
         assert!(
             output.contains("exit code") || output.contains("42"),
             "got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_failed_command_shows_exit_code_then_stderr() {
+        #[cfg(target_os = "windows")]
+        let cmd = "cmd /C echo boom >&2 & exit /b 3";
+        #[cfg(not(target_os = "windows"))]
+        let cmd = "echo boom >&2; exit 3";
+
+        let output = execute_shell_command(cmd, &workspace_root());
+        let marker = output.find("[FAILED — exit code: 3]").expect("FAILED marker");
+        let stderr_pos = output.find("boom").expect("stderr content");
+        assert!(
+            marker < stderr_pos,
+            "exit code marker must precede stderr: {output}"
         );
     }
 

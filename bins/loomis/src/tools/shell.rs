@@ -66,8 +66,9 @@ pub(crate) struct ShellArgs {
     description = "Execute a shell command in the workspace directory. The command runs inside \
          the workspace root as the working directory.\n\n\
          Output is capped at 100 KB to avoid flooding context. If the command \
-         exceeds the timeout it is killed and partial output is returned. Exit code \
-         is appended to the output when non-zero.\n\n\
+         exceeds the timeout it is killed and partial output is returned. Failed \
+         commands (non-zero exit code) return an error block starting with \
+         `[FAILED — exit code: N]`, followed by any stderr output.\n\n\
          When to use: running build commands (`cargo build`, `npm install`, `make`), \
          running tests (`cargo test`, `pytest`), version control (`git status`, \
          `git diff`, `git log`), any CLI tool without a dedicated equivalent.\n\n\
@@ -206,32 +207,41 @@ impl ShellTool {
             result.push_str(&encoding::truncate_output(stdout_clean, MAX_OUTPUT_BYTES));
         }
 
-        if !stderr_clean.is_empty() {
+        // Reserve ~20% of budget for stderr (or at least 10KB)
+        let stderr_max = (MAX_OUTPUT_BYTES / 5).max(10_240);
+
+        // Failed commands get a prominent error block: exit code first, then
+        // stderr — so the failure reason is scannable at a glance, even when
+        // the error went to stdout or nowhere at all.
+        if let Some(code) = exit_code.filter(|&c| c != 0) {
+            if !result.is_empty() {
+                result.push_str("\n\n");
+            }
+            result.push_str(&format!("[FAILED — exit code: {code}]"));
+            if !stderr_clean.is_empty() {
+                // But don't exceed remaining budget
+                let remaining = MAX_OUTPUT_BYTES.saturating_sub(result.len());
+                let stderr_limit = stderr_max.min(remaining);
+                result.push('\n');
+                result.push_str(&encoding::truncate_output(stderr_clean, stderr_limit));
+            }
+        } else if !stderr_clean.is_empty() {
             if !result.is_empty() {
                 result.push_str("\n\n[stderr]\n");
             }
-            // Reserve ~20% of budget for stderr (or at least 10KB)
-            let stderr_max = (MAX_OUTPUT_BYTES / 5).max(10_240);
-            // But don't exceed remaining budget
             let remaining = MAX_OUTPUT_BYTES.saturating_sub(result.len());
             let stderr_limit = stderr_max.min(remaining);
             result.push_str(&encoding::truncate_output(stderr_clean, stderr_limit));
         }
 
-        // If nothing was produced, still indicate the command ran
+        // If nothing was produced, still indicate the command ran.
+        // (A non-zero exit code always produces the [FAILED — …] block above.)
         if result.is_empty() {
             match exit_code {
                 Some(0) => result.push_str("(command completed with no output)"),
-                Some(code) => {
-                    result.push_str(&format!("(exit code: {code}, no output)"));
-                }
                 None => result.push_str("(process terminated by signal, no output)"),
+                Some(_) => {}
             }
-        } else if let Some(code) = exit_code
-            && code != 0
-        {
-            // Append exit code info after output
-            result.push_str(&format!("\n\n[exit code: {code}]"));
         }
 
         let elapsed_ms = start.elapsed().as_millis();
@@ -386,6 +396,26 @@ mod tests {
         assert!(
             result.contains("exit code") || result.contains("42"),
             "got: {result}"
+        );
+    }
+
+    /// Failed commands must lead with the [FAILED — exit code: N] marker and
+    /// include stderr right after it, so the failure reason is scannable.
+    #[test]
+    fn test_failed_command_shows_exit_code_then_stderr() {
+        let tool = make_tool();
+        // Write to stderr, then fail
+        #[cfg(target_os = "windows")]
+        let cmd = r#"{"command": "cmd /C echo boom >&2 & exit /b 3"}"#;
+        #[cfg(not(target_os = "windows"))]
+        let cmd = r#"{"command": "echo boom >&2; exit 3"}"#;
+
+        let result = Tool::execute_stream(&tool, cmd).unwrap().poll_done();
+        let marker = result.find("[FAILED — exit code: 3]").expect("FAILED marker");
+        let stderr_pos = result.find("boom").expect("stderr content");
+        assert!(
+            marker < stderr_pos,
+            "exit code marker must precede stderr: {result}"
         );
     }
 
