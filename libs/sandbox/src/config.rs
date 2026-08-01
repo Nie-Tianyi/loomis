@@ -21,6 +21,13 @@ pub struct FilesystemConfig {
     pub forbid_hidden_file_writes: bool,
     /// File extensions that cannot be created or modified.
     pub blocked_write_extensions: Vec<String>,
+    /// Additional **absolute** directories (outside the workspace) that
+    /// read-only operations (`read`, `ls`, `glob`, `grep`) may access.
+    /// Writes are always confined to the workspace — these roots are
+    /// readable, never writable. Defaults to the cargo registry cache
+    /// (from `CARGO_HOME` or `~/.cargo/registry`), commonly needed when
+    /// searching dependency sources. Override with an explicit list.
+    pub read_only_paths: Vec<String>,
 }
 
 impl Default for FilesystemConfig {
@@ -38,8 +45,33 @@ impl Default for FilesystemConfig {
                 ".sys".into(),
                 ".bin".into(),
             ],
+            read_only_paths: default_cargo_registry().into_iter().collect(),
         }
     }
+}
+
+/// Auto-detect the cargo registry cache directory if it exists on disk.
+///
+/// Resolution order: `CARGO_HOME` → `~/.cargo` (via `HOME`/`USERPROFILE`).
+/// Returns `None` when cargo's home cannot be located or has no
+/// `registry/` subdirectory yet.
+fn default_cargo_registry() -> Option<String> {
+    let home = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join(".cargo"))
+        })
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join(".cargo"))
+        });
+    let registry = home.map(|h| h.join("registry"));
+    registry
+        .filter(|p| p.is_dir())
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 // ── Sandbox ────────────────────────────────────────────────────────────────────
@@ -287,3 +319,34 @@ impl std::fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_only_paths_round_trip() {
+        let mut cfg = FilesystemConfig::default();
+        cfg.read_only_paths = vec!["C:/some/read/root".into()];
+        let s = toml::to_string(&cfg).unwrap();
+        assert!(s.contains("read_only_paths"), "got: {s}");
+        let back: FilesystemConfig = toml::from_str(&s).unwrap();
+        assert_eq!(back.read_only_paths, cfg.read_only_paths);
+    }
+
+    #[test]
+    fn test_read_only_paths_defaults_from_env() {
+        // The default must never be empty-strings or non-absolute entries;
+        // whatever cargo home resolves to, entries are real paths.
+        let cfg = FilesystemConfig::default();
+        assert!(
+            cfg.read_only_paths
+                .iter()
+                .all(|p| !p.trim().is_empty() && std::path::Path::new(p).is_absolute()),
+            "got: {:?}",
+            cfg.read_only_paths
+        );
+    }
+}

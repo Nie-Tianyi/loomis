@@ -161,7 +161,7 @@ user `!command` invocations.
 
 | Layer | Component | Role |
 | --- | --- | --- |
-| 1 | `WorkspaceFs` | Path sandbox — canonicalization, file-size caps, extension blocklist, hidden-file protection, binary detection, TOCTOU re-check |
+| 1 | `WorkspaceFs` | Path sandbox — canonicalization, file-size caps, extension blocklist, hidden-file protection, binary detection, TOCTOU re-check; read-only roots (`filesystem.read_only_paths`, defaults to the cargo registry cache) are readable via `read`/`ls`/`glob`/`grep` but never writable |
 | 2 | `ShellFilter` | Command classification — auto-approve (prefixes: `git`, `cargo`, `npm`, `node`, `python`, etc.), deny (patterns: `rm -rf /`, `sudo`), prompt user for rest |
 | 3 | `SandboxHook` | Orchestrator — checks quotas, classifies commands, prompts user via `InterventionRequired`, logs to `AuditLogger`. Uses `ResponseRouter` + rendezvous channel for blocking approval |
 | 4 | `EnvSanitizer` | Clears dangerous env vars before spawning child processes |

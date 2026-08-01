@@ -1,20 +1,29 @@
-//! [`WorkspaceFs`] �?sandboxed file-system operations.
+//! [`WorkspaceFs`] — sandboxed file-system operations.
 //!
 //! All path operations go through [`WorkspaceFs::resolve`], which ensures
-//! paths cannot escape the `workspace_root`.
+//! paths cannot escape the `workspace_root` (and, for read-only operations,
+//! the optional [`FilesystemConfig::read_only_paths`] roots).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::FilesystemConfig;
 
-/// Sandboxed file-system handle. All operations are confined to `workspace_root`.
+/// Sandboxed file-system handle.
+///
+/// Writes are confined to `workspace_root`. Reads (`read`, `ls`, `glob`,
+/// `grep`) may additionally access `read_only_roots` — absolute directories
+/// outside the workspace (e.g. the cargo registry cache) that are readable
+/// but never writable.
 ///
 /// Policy knobs (file-size caps, extension blocklist, hidden-file protection)
 /// come from [`FilesystemConfig`] and are baked into the handle at construction.
 #[derive(Debug)]
 pub struct WorkspaceFs {
     workspace_root: PathBuf,
+    /// Read-only directories outside the workspace (canonicalized where
+    /// possible). Read operations may resolve into these; writes never can.
+    read_only_roots: Vec<PathBuf>,
     max_read_bytes: usize,
     max_write_bytes: usize,
     forbid_binary_writes: bool,
@@ -39,8 +48,32 @@ impl WorkspaceFs {
 
         let workspace_root = root.canonicalize().map_err(FsError::Io)?;
 
+        // Resolve read-only roots: absolute entries as-is, relative entries
+        // against the workspace root. Canonicalize where possible (the path
+        // may not exist yet). Empty entries are ignored — an empty root
+        // would be a prefix of every path and silently allow all reads.
+        let read_only_roots: Vec<PathBuf> = config
+            .read_only_paths
+            .iter()
+            .filter(|p| !p.trim().is_empty())
+            .map(|p| {
+                let pb = PathBuf::from(p);
+                let base = if pb.is_absolute() {
+                    pb
+                } else {
+                    workspace_root.join(pb)
+                };
+                base.canonicalize().unwrap_or(base)
+            })
+            .collect();
+
+        if !read_only_roots.is_empty() {
+            tracing::debug!(roots = ?read_only_roots, "Read-only roots configured");
+        }
+
         Ok(Self {
             workspace_root,
+            read_only_roots,
             max_read_bytes: config.max_read_bytes,
             max_write_bytes: config.max_write_bytes,
             forbid_binary_writes: config.forbid_binary_writes,
@@ -75,24 +108,40 @@ impl WorkspaceFs {
         bytes[..check_len].contains(&0)
     }
 
-    /// Resolve a relative path to an absolute path within the workspace.
+    /// Resolve a path (write-mode): must stay within the workspace.
+    fn resolve(&self, path: &str) -> Result<PathBuf, FsError> {
+        self.resolve_within(path, &[&self.workspace_root])
+    }
+
+    /// Resolve a path (read-mode): may be within the workspace **or** any
+    /// configured read-only root (absolute paths outside the sandbox, e.g.
+    /// the cargo registry cache).
+    fn resolve_read(&self, path: &str) -> Result<PathBuf, FsError> {
+        let mut roots: Vec<&Path> = Vec::with_capacity(1 + self.read_only_roots.len());
+        roots.push(&self.workspace_root);
+        roots.extend(self.read_only_roots.iter().map(|p| p.as_path()));
+        self.resolve_within(path, &roots)
+    }
+
+    /// Resolve a relative path to an absolute path within one of `roots`.
     ///
-    /// On success the returned path is guaranteed to start with
-    /// `workspace_root`.  When the resolved path already exists on disk
+    /// On success the returned path is guaranteed to start with one of the
+    /// allowed roots.  When the resolved path already exists on disk
     /// we also perform a **TOCTOU re-check** (see below).
     ///
     /// ## Known limitations
     ///
-    /// 1. **Non-existing paths** bypass the TOCTOU re-check entirely �?    ///    if a file is created by an attacker between resolution and
+    /// 1. **Non-existing paths** bypass the TOCTOU re-check entirely —
+    ///    if a file is created by an attacker between resolution and
     ///    the subsequent I/O operation, it will not be detected.
     /// 2. **File identity** is verified via `(len, modified)` heuristic
     ///    rather than platform-specific inode/file-index APIs. This is
-    ///    not cryptographically strong �?a determined attacker with
+    ///    not cryptographically strong — a determined attacker with
     ///    write access can craft a file with matching size and mtime.
     ///
     /// A truly race-free design would require handle-based I/O (open
     /// file, then `fstat` the handle).
-    fn resolve(&self, path: &str) -> Result<PathBuf, FsError> {
+    fn resolve_within(&self, path: &str, roots: &[&Path]) -> Result<PathBuf, FsError> {
         let joined = if path.is_empty() {
             self.workspace_root.clone()
         } else {
@@ -105,9 +154,9 @@ impl WorkspaceFs {
             Err(e) => return Err(FsError::Io(e)),
         };
 
-        if !normalized.starts_with(&self.workspace_root) {
+        if !roots.iter().any(|root| normalized.starts_with(root)) {
             return Err(FsError::WorkspaceEscape(format!(
-                "'{}' resolves outside workspace",
+                "'{}' resolves outside the sandbox (workspace or read-only roots)",
                 path
             )));
         }
@@ -115,13 +164,13 @@ impl WorkspaceFs {
         // ── TOCTOU re-check for existing paths ──────────────────────────
         // Re-canonicalize and verify the file identity hasn't changed.
         // We compare file length + modification time as a heuristic for
-        // "same file" �?this is NOT an inode/file-index comparison, and
+        // "same file" — this is NOT an inode/file-index comparison, and
         // can be defeated by a determined attacker with write access.
         // If the path didn't exist at the first canonicalize (normalize_partial
-        // path), this re-check is skipped �?new files are not covered.
+        // path), this re-check is skipped — new files are not covered.
         if let Ok(meta) = normalized.metadata() {
             let re_canon = normalized.canonicalize().map_err(FsError::Io)?;
-            if !re_canon.starts_with(&self.workspace_root) {
+            if !roots.iter().any(|root| re_canon.starts_with(root)) {
                 return Err(FsError::WorkspaceEscape(format!(
                     "'{}' escapes workspace (TOCTOU re-check)",
                     path
@@ -134,7 +183,7 @@ impl WorkspaceFs {
                 && (meta.len() != re_meta.len() || meta.modified().ok() != re_meta.modified().ok())
             {
                 return Err(FsError::WorkspaceEscape(format!(
-                    "'{}' file identity changed between checks �?possible symlink swap",
+                    "'{}' file identity changed between checks — possible symlink swap",
                     path
                 )));
             }
@@ -153,7 +202,7 @@ impl WorkspaceFs {
         offset: Option<usize>,
         limit: Option<usize>,
     ) -> Result<String, FsError> {
-        let resolved = self.resolve(path)?;
+        let resolved = self.resolve_read(path)?;
 
         if !resolved.exists() {
             return Err(FsError::NotFound(path.to_string()));
@@ -321,23 +370,70 @@ impl WorkspaceFs {
         ))
     }
 
-    /// Glob files matching a pattern relative to workspace root.
+    /// Glob files matching a pattern. Relative patterns are matched against
+    /// the workspace root; absolute patterns may target read-only roots.
+    ///
+    /// Workspace files are returned as workspace-relative paths (the
+    /// contract other tools rely on); read-only-root files are returned as
+    /// absolute paths (they cannot be expressed relative to the workspace).
     pub fn glob(&self, pattern: &str) -> Result<Vec<String>, FsError> {
-        let full_pattern = self.workspace_root.join(pattern);
+        // Reject bases that escape the workspace ∪ read-only roots before
+        // any filesystem traversal: `..` traversal, absolute paths outside
+        // the roots, etc. This turns a misleading "no matches" (results
+        // outside the sandbox used to be silently dropped by strip_prefix
+        // below) into a clear error.
+        let base = glob_base_prefix(pattern);
+        if !base.is_empty() {
+            self.resolve_read(&base)?;
+        }
+
+        // Absolute patterns target read-only roots directly; relative
+        // patterns are joined onto the workspace root.
+        let full_pattern = if Path::new(pattern).is_absolute() {
+            PathBuf::from(pattern)
+        } else {
+            self.workspace_root.join(pattern)
+        };
         let pattern_str = full_pattern.to_string_lossy();
 
-        let entries = glob::glob(&pattern_str)
+        // Backstop: if the glob matched only files outside every allowed
+        // root (odd cases the prefix check above misses, e.g. symlinked
+        // bases), report an error instead of a misleading empty list.
+        let mut dropped_outside = 0usize;
+        let mut entries = glob::glob(&pattern_str)
             .map_err(FsError::from)?
             .filter_map(|entry| entry.ok())
             .filter(|p| p.is_file())
             .filter_map(|p| {
-                p.strip_prefix(&self.workspace_root)
-                    .ok()
-                    .map(|rel| rel.to_string_lossy().to_string())
+                // Canonicalize so path form (long/short names, `..`) cannot
+                // defeat the root prefix checks.
+                let canon = match p.canonicalize() {
+                    Ok(c) => c,
+                    Err(_) => return None, // vanished between glob and check
+                };
+                // Workspace files → workspace-relative paths.
+                if let Ok(rel) = canon.strip_prefix(&self.workspace_root) {
+                    return Some(rel.to_string_lossy().to_string());
+                }
+                // Read-only-root files → absolute paths.
+                if self
+                    .read_only_roots
+                    .iter()
+                    .any(|root| canon.strip_prefix(root).is_ok())
+                {
+                    return Some(canon.to_string_lossy().to_string());
+                }
+                dropped_outside += 1;
+                None
             })
             .collect::<Vec<String>>();
 
-        let mut entries = entries;
+        if entries.is_empty() && dropped_outside > 0 {
+            return Err(FsError::WorkspaceEscape(format!(
+                "'{pattern}' matched only files outside the workspace and read-only roots"
+            )));
+        }
+
         entries.sort();
         Ok(entries)
     }
@@ -350,7 +446,9 @@ impl WorkspaceFs {
 
         let mut matches = Vec::new();
         for file_path in &files {
-            let resolved = self.resolve(file_path)?;
+            // Absolute paths from read-only-root globs resolve through
+            // read-mode (workspace ∪ read-only roots).
+            let resolved = self.resolve_read(file_path)?;
 
             // Skip files with blocked extensions (binary formats like .exe, .dll, .bin).
             if self.is_extension_blocked(&resolved) {
@@ -387,7 +485,7 @@ impl WorkspaceFs {
 
     /// List directory contents. `None` or `""` = root.
     pub fn ls(&self, path: Option<&str>) -> Result<Vec<DirEntry>, FsError> {
-        let resolved = self.resolve(path.unwrap_or(""))?;
+        let resolved = self.resolve_read(path.unwrap_or(""))?;
         if !resolved.is_dir() {
             return Err(FsError::NotADirectory(path.unwrap_or("").to_string()));
         }
@@ -452,6 +550,23 @@ pub struct GrepMatch {
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────
+
+/// Extract the leading prefix of a glob pattern up to (but excluding) the
+/// first component containing glob metacharacters (`*`, `?`, `[`, `{`).
+/// Used to validate that the search base stays within the workspace.
+///
+/// Examples: `src/**/*.rs` → `src`, `../outside/**` → `..`,
+/// `C:/Users/foo/*.rs` → `C:/Users/foo`, `**/*.rs` → ``.
+fn glob_base_prefix(pattern: &str) -> String {
+    let normalized = pattern.replace('\\', "/");
+    let mut parts: Vec<&str> = normalized.split('/').collect();
+    let first_glob = parts
+        .iter()
+        .position(|p| p.contains(['*', '?', '[', '{']))
+        .unwrap_or(parts.len());
+    parts.truncate(first_glob);
+    parts.join("/")
+}
 
 fn detect_line_end(text: &str) -> String {
     if text.contains("\r\n") {
@@ -568,13 +683,24 @@ mod tests {
 
     fn test_config() -> FilesystemConfig {
         let mut cfg = FilesystemConfig::default();
-        // Use generous limits for tests �?we're testing sandbox logic,
+        // Use generous limits for tests — we're testing sandbox logic,
         // not the specific limit values.
         cfg.max_read_bytes = 10_000_000;
         cfg.max_write_bytes = 1_000_000;
         cfg.forbid_binary_writes = true;
         cfg.forbid_hidden_file_writes = false; // allow .files in tests
+        cfg.read_only_paths = vec![]; // hermetic: no auto-detected roots
         cfg
+    }
+
+    /// A workspace plus a separate temp dir configured as a read-only root.
+    fn setup_fs_with_read_root() -> (tempfile::TempDir, tempfile::TempDir, WorkspaceFs) {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut cfg = test_config();
+        cfg.read_only_paths = vec![outside.path().to_string_lossy().into_owned()];
+        let fs = WorkspaceFs::new(dir.path(), &cfg).unwrap();
+        (dir, outside, fs)
     }
 
     fn setup_fs() -> (tempfile::TempDir, WorkspaceFs) {
@@ -725,6 +851,141 @@ mod tests {
         assert!(
             matches!(result, Err(FsError::HiddenFileBlocked(_))),
             "expected HiddenFileBlocked, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_glob_rejects_escape_pattern() {
+        let (_dir, fs) = setup_fs();
+        // `..` traversal must error, not silently return an empty list.
+        let result = fs.glob("../outside/**/*.rs");
+        assert!(
+            matches!(result, Err(FsError::WorkspaceEscape(_))),
+            "expected WorkspaceEscape, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_glob_rejects_absolute_pattern() {
+        let (_dir, fs) = setup_fs();
+        // Absolute paths are outside the sandbox and must be rejected.
+        let pattern = if cfg!(windows) {
+            "C:/Windows/System32/*.dll"
+        } else {
+            "/etc/**/*.conf"
+        };
+        let result = fs.glob(pattern);
+        assert!(
+            matches!(result, Err(FsError::WorkspaceEscape(_))),
+            "expected WorkspaceEscape, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_grep_rejects_out_of_workspace_glob() {
+        let (_dir, fs) = setup_fs();
+        let result = fs.grep("fn", Some("../outside/**/*.rs"));
+        assert!(
+            matches!(result, Err(FsError::WorkspaceEscape(_))),
+            "expected WorkspaceEscape, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_glob_base_prefix() {
+        assert_eq!(glob_base_prefix("*.rs"), "");
+        assert_eq!(glob_base_prefix("src/**/*.rs"), "src");
+        assert_eq!(glob_base_prefix("src/tui/*.rs"), "src/tui");
+        assert_eq!(glob_base_prefix("a/b/c.txt"), "a/b/c.txt");
+        assert_eq!(glob_base_prefix("**/*.rs"), "");
+        assert_eq!(glob_base_prefix("../outside/**/*.rs"), "../outside");
+    }
+
+    // ── Read-only roots ────────────────────────────────────────────────
+
+    #[test]
+    fn test_read_only_root_allows_read() {
+        let (_dir, outside, fs) = setup_fs_with_read_root();
+        let f = outside.path().join("lib.rs");
+        std::fs::write(&f, "pub fn f() {}\n").unwrap();
+        let result = fs.read(&f.to_string_lossy(), None, None).unwrap();
+        assert!(result.contains("pub fn f"), "got: {result}");
+    }
+
+    #[test]
+    fn test_read_only_root_allows_ls() {
+        let (_dir, outside, fs) = setup_fs_with_read_root();
+        std::fs::write(outside.path().join("a.rs"), "").unwrap();
+        let entries = fs.ls(Some(&outside.path().to_string_lossy())).unwrap();
+        assert!(entries.iter().any(|e| e.name == "a.rs"), "got: {entries:?}");
+    }
+
+    #[test]
+    fn test_read_only_root_allows_glob_and_grep() {
+        let (_dir, outside, fs) = setup_fs_with_read_root();
+        std::fs::create_dir_all(outside.path().join("src")).unwrap();
+        std::fs::write(outside.path().join("src/lib.rs"), "fn hello() {}\n").unwrap();
+        let pat = format!("{}/src/*.rs", outside.path().to_string_lossy().replace('\\', "/"));
+
+        // Glob returns absolute paths for read-only-root files.
+        let files = fs.glob(&pat).unwrap();
+        assert_eq!(files.len(), 1, "got: {files:?}");
+        assert!(files[0].contains("lib.rs"), "got: {files:?}");
+
+        // Grep resolves those absolute paths via read-mode.
+        let matches = fs.grep("hello", Some(&pat)).unwrap();
+        assert_eq!(matches.len(), 1, "got: {matches:?}");
+    }
+
+    #[test]
+    fn test_read_only_root_rejects_write() {
+        let (_dir, outside, fs) = setup_fs_with_read_root();
+        let f = outside.path().join("x.txt");
+        let result = fs.write(&f.to_string_lossy(), "content");
+        assert!(
+            matches!(result, Err(FsError::WorkspaceEscape(_))),
+            "expected WorkspaceEscape, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_read_only_root_rejects_edit() {
+        let (_dir, outside, fs) = setup_fs_with_read_root();
+        let f = outside.path().join("x.txt");
+        std::fs::write(&f, "line1\n").unwrap();
+        let result = fs.edit_lines(&f.to_string_lossy(), 1, 1, "changed");
+        assert!(
+            matches!(result, Err(FsError::WorkspaceEscape(_))),
+            "expected WorkspaceEscape, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_read_outside_all_roots_rejected() {
+        let (_dir, _outside, fs) = setup_fs_with_read_root();
+        // A third directory outside both workspace and read-only root.
+        let third = tempfile::tempdir().unwrap();
+        std::fs::write(third.path().join("f.txt"), "x").unwrap();
+        let result = fs.read(&third.path().join("f.txt").to_string_lossy(), None, None);
+        assert!(
+            matches!(result, Err(FsError::WorkspaceEscape(_))),
+            "expected WorkspaceEscape, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_glob_rejects_absolute_outside_read_roots() {
+        let (_dir, _outside, fs) = setup_fs_with_read_root();
+        // Absolute pattern that is in no allowed root must error.
+        let pattern = if cfg!(windows) {
+            "C:/Windows/System32/*.dll"
+        } else {
+            "/etc/**/*.conf"
+        };
+        let result = fs.glob(pattern);
+        assert!(
+            matches!(result, Err(FsError::WorkspaceEscape(_))),
+            "expected WorkspaceEscape, got {result:?}"
         );
     }
 

@@ -174,27 +174,23 @@ fn detect_os_version() -> String {
     }
 }
 
-/// Detect which shell the user is running under.
+/// Report the shell backend used for command execution (not the parent
+/// terminal — on Windows commands always run via `cmd`, see ShellTool).
 fn detect_shell() -> String {
     if std::env::var("MSYSTEM").is_ok() || std::env::var("MINGW_PREFIX").is_ok() {
         return "Git Bash (MSYS2 / MinGW)".to_string();
     }
     #[cfg(windows)]
     {
-        if std::env::var("PSModulePath").is_ok() {
-            return "PowerShell".to_string();
-        }
-        if let Ok(comspec) = std::env::var("ComSpec") {
-            return comspec;
-        }
+        // Commands always execute via `cmd /C` regardless of the terminal
+        // Loomis was launched from — report the real backend, not the
+        // parent shell (which used to claim "PowerShell" via PSModulePath).
+        "cmd".to_string()
     }
     #[cfg(not(windows))]
     {
-        if let Ok(shell) = std::env::var("SHELL") {
-            return shell;
-        }
+        std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string())
     }
-    "unknown".to_string()
 }
 
 /// Best-effort git branch and dirty-status string.

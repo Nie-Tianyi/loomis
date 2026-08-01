@@ -24,15 +24,27 @@ use sandbox::watchdog::Watchdog;
 /// and output is truncated at [`MAX_OUTPUT_BYTES`] to prevent flooding
 /// the conversation context.
 pub fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
+    // Windows: `cmd /S /C "<command>"` via raw_arg so inner quotes survive.
+    // See ShellTool for the full rationale — cmd's quote-stripping is
+    // incompatible with Rust's CRT-style argument escaping.
     #[cfg(target_os = "windows")]
-    let (shell, shell_arg) = ("cmd", "/C");
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut c = Command::new("cmd");
+        c.raw_arg("/S");
+        c.raw_arg("/C");
+        c.raw_arg(format!("\"{command}\""));
+        c
+    };
     #[cfg(not(target_os = "windows"))]
-    let (shell, shell_arg) = ("sh", "-c");
+    let mut cmd = {
+        let mut c = Command::new("sh");
+        c.arg("-c");
+        c.arg(command);
+        c
+    };
 
-    let mut cmd = Command::new(shell);
-    cmd.arg(shell_arg)
-        .arg(command)
-        .current_dir(workspace_root)
+    cmd.current_dir(workspace_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

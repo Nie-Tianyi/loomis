@@ -133,7 +133,7 @@ Key constants in `libs/hooks/src/compact.rs`: `DEFAULT_COMPACT_TOKEN_LIMIT`,
 
 | Layer | Component (crate) | Role |
 | --- | --- | --- |
-| 1 | `WorkspaceFs` (sandbox) | Path sandbox — canonicalization, file-size caps, extension blocklist, hidden-file protection, binary detection, TOCTOU re-check |
+| 1 | `WorkspaceFs` (sandbox) | Path sandbox — canonicalization, file-size caps, extension blocklist, hidden-file protection, binary detection, TOCTOU re-check; read-only roots (`filesystem.read_only_paths`, defaults to the cargo registry cache) are readable via `read`/`ls`/`glob`/`grep` but never writable |
 | 2 | `ShellFilter` (sandbox) | Command classification — auto-approve prefixes (`git`, `cargo`, …), deny patterns (`rm -rf /`, `sudo`), prompt for rest |
 | 3 | `SandboxHook` (sandbox) | Orchestrator — quotas, user prompts via `InterventionRequired` + `ResponseRouter` rendezvous, audit log to `.loomis/audit.jsonl` |
 | 4 | `EnvSanitizer` (sandbox) | Clears dangerous env vars in child processes |

@@ -130,16 +130,30 @@ impl ShellTool {
             .max(1);
 
         // ── Platform shell selection ──────────────────────────────────
+        // Windows: use `cmd /S /C "<command>"` built with raw_arg. cmd's
+        // own quote-stripping rules are incompatible with Rust's CRT-style
+        // argument escaping (`\"` inside the command mangles inner quotes).
+        // `/S` makes cmd strip only the outermost quote pair, preserving
+        // inner quotes — so `git commit -m "msg"` and `findstr /c:"a b"` work.
         #[cfg(target_os = "windows")]
-        let (shell, shell_arg) = ("cmd", "/C");
+        let mut cmd = {
+            use std::os::windows::process::CommandExt;
+            let mut c = Command::new("cmd");
+            c.raw_arg("/S");
+            c.raw_arg("/C");
+            c.raw_arg(format!("\"{command}\""));
+            c
+        };
         #[cfg(not(target_os = "windows"))]
-        let (shell, shell_arg) = ("sh", "-c");
+        let mut cmd = {
+            let mut c = Command::new("sh");
+            c.arg("-c");
+            c.arg(&command);
+            c
+        };
 
         // ── Spawn child process ───────────────────────────────────────
-        let mut cmd = Command::new(shell);
-        cmd.arg(shell_arg)
-            .arg(&command)
-            .current_dir(&self.workspace_root)
+        cmd.current_dir(&self.workspace_root)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -258,6 +272,43 @@ mod tests {
             .unwrap()
             .poll_done();
         assert!(result.contains("hello"), "got: {result}");
+    }
+
+    /// Regression: quoted arguments must survive to the shell.
+    /// `findstr /c:` with a space in the search string used to be mangled
+    /// by CRT-style escaping on Windows (cmd /S /C handling).
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_execute_quoted_findstr() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("probe.txt"), "alpha beta\n").unwrap();
+        let tool = ShellTool::new(dir.path().to_path_buf(), &SandboxConfig::default());
+        let result = Tool::execute_stream(
+            &tool,
+            r#"{"command": "findstr /n /c:\"alpha beta\" probe.txt"}"#,
+        )
+        .unwrap()
+        .poll_done();
+        assert!(result.contains("alpha beta"), "got: {result}");
+    }
+
+    #[test]
+    fn test_execute_quoted_echo() {
+        let tool = make_tool();
+        // Quotes must be preserved, not escaped into backslash-quotes.
+        #[cfg(target_os = "windows")]
+        let expected = "\"hello world\"";
+        #[cfg(not(target_os = "windows"))]
+        let expected = "hello world";
+        let result = Tool::execute_stream(&tool, r#"{"command": "echo \"hello world\""}"#)
+            .unwrap()
+            .poll_done();
+        let trimmed = result.trim();
+        assert_eq!(trimmed, expected, "got: {result}");
+        assert!(
+            !result.contains("\\\""),
+            "backslash-quote escaping must not leak to cmd: {result}"
+        );
     }
 
     #[test]
