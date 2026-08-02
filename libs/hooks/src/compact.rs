@@ -18,6 +18,8 @@ use engine::AgentHook;
 use memory::SharedMemory;
 use provider::{CompletionRequest, LLMClient, Message, Role};
 
+use crate::insert_before_history;
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /// Fallback placeholder used when a compacted tool output's arguments
@@ -241,7 +243,7 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
                 "macro-compaction summary inserted as System message",
             );
             let mut mem = memory.write().expect("memory lock poisoned");
-            mem.messages.insert(0, Message::new(Role::System, summary));
+            insert_before_history(&mut mem.messages, Message::new(Role::System, summary));
         } else {
             tracing::warn!("macro-compaction produced empty summary");
         }

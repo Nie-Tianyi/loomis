@@ -178,8 +178,9 @@ TUI. `TraceStore` is a thread-safe ring buffer (4096 entries) with lock-free
 `.loomis/logs/loomis.log` (daily rolling).
 
 ### Plan Mode (read-only research & planning)
-Toggled via `/plan`. `PlanModeHook` runs at position 1 — `before_tool_call`
-blocks write/edit/shell (except `.loomis/plan.md`). Allowed tools: `read`,
+Toggled via `/plan`. `PlanModeHook` runs at position 5 (after `SkillHook`) —
+`before_tool_call` blocks write/edit/shell (except `.loomis/plan.md`).
+Allowed tools: `read`,
 `ls`, `glob`, `grep`, `calculator`, `ask_user_question`, `todo`, `task`/
 `subagent`, `enter_plan_mode`, `exit_plan_mode`, `write` (only to
 `.loomis/plan.md`). On `/approve` or `exit_plan_mode` approval, the plan is
@@ -203,7 +204,9 @@ shared between the TUI, SkillTool, and SkillHook.
 
 ### Profile system
 `ProfileHook` builds a user profile across sessions and injects a `[PROFILE]`
-System message at index 0 into every LLM call. Two-tier design:
+System message at the tail of the System block (via `insert_before_history`,
+never at index 0 — a front-of-request insert would invalidate the
+prompt-cache prefix) into every LLM call. Two-tier design:
 
 1. **Real-time** (zero-token): language detection from user input (CJK heuristic),
    per-tool invocation counters, session count + timestamp.

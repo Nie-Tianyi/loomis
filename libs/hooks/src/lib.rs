@@ -16,8 +16,33 @@
 //! # Custom hooks
 //!
 //! Implement [`engine::AgentHook`] directly for one-off behaviours.
+//!
+//! # Shared helpers
+//!
+//! [`insert_before_history`] is the canonical way for injector hooks to place
+//! a System message without breaking the provider's prompt-cache prefix.
+
+use provider::{Message, Role};
 
 mod compact;
+
+/// Insert `msg` after the trailing System-message block — i.e. before the
+/// first non-System message, or at the end if there are none.
+///
+/// Injector hooks must use this instead of `insert(0, …)`: volatile injected
+/// content ([TODO], [SKILL], [PROFILE], [PLAN_MODE], compaction summaries)
+/// placed in front of the static system prompt would invalidate the
+/// provider's prompt-cache prefix on every change, forcing a full re-parse of
+/// the most expensive (and most stable) part of the request.  Anchoring the
+/// insert at the tail of the System block keeps the static head
+/// byte-identical, so only the dynamic history misses.
+pub fn insert_before_history(messages: &mut Vec<Message>, msg: Message) {
+    let idx = messages
+        .iter()
+        .position(|m| m.role != Role::System)
+        .unwrap_or(messages.len());
+    messages.insert(idx, msg);
+}
 
 pub use compact::{
     COMPACTED_TOOL_OUTPUT_PLACEHOLDER, COMPACTED_TOOL_OUTPUT_PREFIX, CompactError,

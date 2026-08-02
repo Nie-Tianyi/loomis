@@ -9,6 +9,12 @@
 //! The hook reads the shared [`TodoItem`](crate::tools::TodoItem) list and
 //! ensures exactly one `[TODO]` System message exists in memory, updating
 //! it in-place when the list changes so the LLM always sees its current plan.
+//!
+//! The message is inserted **after** the static System-message block (never
+//! at index 0) via [`insert_before_history`]: the todo list is the most
+//! volatile injected content, so it must sit at the tail of the stable
+//! prefix — a byte change there otherwise invalidates the provider's
+//! prompt-cache prefix (system prompt included) on every plan update.
 
 use std::sync::{Arc, RwLock};
 
@@ -16,6 +22,7 @@ use engine::AgentHook;
 use memory::SharedMemory;
 use provider::{Message, Role};
 
+use crate::hooks::insert_before_history;
 use crate::tools::{TODO_MARKER, TodoItem};
 
 // ── TodoListHook ─────────────────────────────────────────────────────────────
@@ -67,13 +74,16 @@ impl AgentHook for TodoListHook {
         };
 
         // Find and remove any existing [TODO] System message(s), then
-        // insert a single one at index 0 if the list is non-empty.
+        // insert a single one at the tail of the System block if the list
+        // is non-empty.  Never insert at index 0: the todo list changes on
+        // every plan update, and a change at the front of the request
+        // invalidates the whole prompt-cache prefix.
         mem.messages
             .retain(|m| !(m.role == Role::System && m.content.starts_with(TODO_MARKER)));
 
         let item_count = state.len();
         if let Some(c) = content {
-            mem.messages.insert(0, Message::new(Role::System, c));
+            insert_before_history(&mut mem.messages, Message::new(Role::System, c));
         }
         tracing::debug!(items = item_count, "Synced [TODO] system message",);
     }
@@ -192,6 +202,48 @@ mod tests {
             !todo_msg.content.contains("old task"),
             "should NOT contain old content, got: {}",
             todo_msg.content
+        );
+    }
+
+    #[test]
+    fn test_inserts_todo_after_system_block_not_at_front() {
+        let state = make_state(vec![make_item(1, "pending")]);
+        let memory = make_memory();
+
+        // Seed a static system prompt + one user message, like a real run.
+        {
+            let mut mem = memory.write().unwrap();
+            mem.push(Message::new(Role::System, "You are a helpful assistant."));
+            mem.push(Message::new(Role::User, "hello"));
+        }
+
+        let hook = TodoListHook::new(state);
+        hook.on_llm_start("test", &memory);
+
+        let mem = memory.read().unwrap();
+        let todo_idx = mem
+            .messages
+            .iter()
+            .position(|m| m.content.starts_with(TODO_MARKER))
+            .expect("[TODO] message should exist");
+        assert!(
+            todo_idx > 0,
+            "[TODO] must not sit at the front of the request"
+        );
+        assert!(
+            mem.messages[..todo_idx]
+                .iter()
+                .all(|m| m.role == Role::System),
+            "messages before [TODO] should all be System (stable cache prefix)"
+        );
+        let first_user = mem
+            .messages
+            .iter()
+            .position(|m| m.role == Role::User)
+            .expect("seeded user message should exist");
+        assert!(
+            todo_idx < first_user,
+            "[TODO] should sit before the conversation history"
         );
     }
 

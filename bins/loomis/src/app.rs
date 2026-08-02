@@ -356,15 +356,20 @@ pub fn build_coding_agent(
 
     let hooks: Vec<Box<dyn engine::AgentHook>> = vec![
         Box::new(system_prompt_hook), // 0. Seed system prompts on run start
-        Box::new(plan_mode_hook),     // 1. Plan mode filtering + prompt injection
-        Box::new(observability_hook), // 2. Full-chain trace event collection
-        Box::new(persistence_hook),   // 3. Save conversation after each run
-        Box::new(todo_list_hook),     // 4. Maintain [TODO] System message
-        Box::new(SkillHook::new(active_skills.clone())), // 5. Maintain [SKILL: ...] System messages
-        Box::new(profile_hook),       // 6. Maintain [PROFILE] System message + synthesis
-        Box::new(macro_compact),      // 7. LLM summarisation
-        Box::new(micro_compact),      // 8. Tool output clearing
-        Box::new(approval_hook),      // 9. Security sandbox
+        Box::new(observability_hook), // 1. Full-chain trace event collection
+        Box::new(persistence_hook),   // 2. Save conversation after each run
+        Box::new(SkillHook::new(active_skills.clone())), // 3. Maintain [SKILL: ...] System messages
+        Box::new(plan_mode_hook),     // 4. Plan mode filtering + prompt injection — registered
+        //    after Skill so toggling /plan only invalidates the
+        //    cache prefix past the stable system prompt + skills
+        Box::new(profile_hook), // 5. Maintain [PROFILE] System message + synthesis
+        Box::new(todo_list_hook), // 6. Maintain [TODO] System message — registered after
+        //    Skill/Profile so it lands at the tail of the stable
+        //    System block (most volatile injector; see
+        //    insert_before_history)
+        Box::new(macro_compact), // 7. LLM summarisation
+        Box::new(micro_compact), // 8. Tool output clearing
+        Box::new(approval_hook), // 9. Security sandbox
     ];
 
     tracing::info!(

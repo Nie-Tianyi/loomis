@@ -18,6 +18,8 @@ use engine::AgentHook;
 use memory::SharedMemory;
 use provider::{Message, Role, ToolCall};
 
+use crate::hooks::insert_before_history;
+
 // ── PlanModeState ─────────────────────────────────────────────────────────────
 
 /// Shared plan-mode toggle between the TUI and [`PlanModeHook`].
@@ -213,7 +215,10 @@ impl AgentHook for PlanModeHook {
     ///
     /// Follows the same pattern as [`TodoListHook::on_llm_start`]:
     /// - When plan mode is **active**: ensure exactly one `[PLAN_MODE]` System
-    ///   message exists at index 0.
+    ///   message exists at the tail of the System block (via
+    ///   [`insert_before_history`](crate::hooks::insert_before_history), so
+    ///   toggling plan mode only invalidates the cache prefix after the
+    ///   static system prompt + skills).
     /// - When plan mode is **inactive**: remove any existing `[PLAN_MODE]`
     ///   System message(s).
     fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
@@ -243,7 +248,7 @@ impl AgentHook for PlanModeHook {
                 include_str!("../../prompts/plan_mode.md")
                     .replace("{plan_file_path}", &plan_file_str)
             );
-            mem.messages.insert(0, Message::new(Role::System, content));
+            insert_before_history(&mut mem.messages, Message::new(Role::System, content));
             tracing::info!(
                 path = %self.plan_file_path.display(),
                 "Plan mode active: [PLAN_MODE] system message injected",

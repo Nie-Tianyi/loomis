@@ -18,6 +18,8 @@ use memory::SharedMemory;
 use provider::{Message, Role};
 use skills::ActiveSkills;
 
+use crate::hooks::insert_before_history;
+
 /// Marker prefix for injected skill System messages.
 ///
 /// Follows the same convention as
@@ -49,6 +51,10 @@ impl AgentHook for SkillHook {
     /// the next LLM call — all tool results from the previous step are
     /// already committed to memory, so inserting System messages here does
     /// not violate any API ordering constraint.
+    ///
+    /// Messages are inserted at the tail of the System block (not index 0)
+    /// so the static prefix — system prompt, profile, plan-mode prompt —
+    /// stays byte-identical and keeps hitting the provider's prompt cache.
     fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
         // Clone under lock to minimize contention.
         let active = match self.active.read() {
@@ -67,11 +73,11 @@ impl AgentHook for SkillHook {
 
         let names: Vec<&String> = active.keys().collect();
 
-        // Insert one System message per active skill at index 0.
-        // Iterate in reverse so skills inserted first appear first in memory.
+        // Insert one System message per active skill at the tail of the
+        // System block (see [`insert_before_history`] for the cache rationale).
         for (name, content) in active.iter() {
             let msg = format!("{SKILL_MARKER_PREFIX} {name}]\n\n{content}");
-            mem.messages.insert(0, Message::new(Role::System, msg));
+            insert_before_history(&mut mem.messages, Message::new(Role::System, msg));
         }
 
         tracing::debug!(

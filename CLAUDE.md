@@ -149,13 +149,20 @@ missing). Shell output is capped at 100 KB.
 Hooks run in registration order:
 
 1. `SystemPromptHook` — seed system prompts on run start
-2. `PlanModeHook` — plan-mode filtering + prompt injection
-3. `ObservabilityHook` — full-chain trace event collection
-4. `PersistenceHook` — save conversation after each run
-5. `TodoListHook` — maintain `[TODO]` System message
-6. `SkillHook` — maintain `[SKILL: ...]` System messages
-7. `ProfileHook` — maintain `[PROFILE]` System message + synthesis
-8. `MacroCompactHook` — LLM summarisation
+2. `ObservabilityHook` — full-chain trace event collection
+3. `PersistenceHook` — save conversation after each run
+4. `SkillHook` — maintain `[SKILL: ...]` System messages
+5. `PlanModeHook` — plan-mode filtering + prompt injection (registered after
+   Skill so toggling `/plan` only invalidates the cache prefix past the
+   stable system prompt + skills)
+6. `ProfileHook` — maintain `[PROFILE]` System message + synthesis
+7. `TodoListHook` — maintain `[TODO]` System message (registered last among
+   the injectors so the most volatile content lands at the tail of the
+   stable System block — all injectors use `insert_before_history` (from the
+   `hooks` crate), never `insert(0, …)`, to avoid invalidating the
+   prompt-cache prefix)
+8. `MacroCompactHook` — LLM summarisation (summary also placed via
+   `insert_before_history`, after the System block)
 9. `MicroCompactHook` — tool output clearing
 10. `SandboxHook` — security sandbox
 
@@ -164,7 +171,7 @@ their messages survive; SandboxHook runs last so it sees the final tool call.
 
 ### Plan Mode
 
-`/plan` toggles read-only mode (`PlanModeHook`, position 1). Allowed: `read`,
+`/plan` toggles read-only mode (`PlanModeHook`, position 5). Allowed: `read`,
 `ls`, `glob`, `grep`, `calculator`, `ask_user_question`, `todo`,
 `task`/subagent, `enter_plan_mode`, `exit_plan_mode`, `write` (only to
 `.loomis/plan.md`). Blocked: `edit`, `shell`, `write` elsewhere. `/approve`
@@ -194,7 +201,8 @@ hand-editable) in two tiers:
    extracts preferences, avoidances, expertise signals, coding conventions,
    verbosity. Merging is conservative — only non-empty fields overwrite.
 
-A `[PROFILE]` System message is injected at index 0 by `on_llm_start()`
+A `[PROFILE]` System message is injected at the tail of the System block by
+`on_llm_start()` (via `insert_before_history`)
 (remove-then-reinsert, same pattern as SkillHook).
 
 ### Other patterns

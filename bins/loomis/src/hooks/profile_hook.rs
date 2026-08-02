@@ -38,6 +38,7 @@ use engine::{AgentHook, RunOutcome};
 use memory::SharedMemory;
 use provider::{CompletionRequest, LLMClient, Message, Role, ToolCall};
 
+use crate::hooks::insert_before_history;
 use crate::profile::{
     PROFILE_MARKER, ProfileStore, Verbosity, build_profile_system_message, has_cjk, truncate,
 };
@@ -179,11 +180,14 @@ impl AgentHook for ProfileHook {
     /// Refresh the `[PROFILE]` System message.
     ///
     /// Fires before every LLM call — removes any stale `[PROFILE]`
-    /// message and inserts a fresh one at index 0.  This runs after
-    /// all tool results from the previous step are committed to
-    /// memory, so inserting a System message here does not violate
-    /// the API ordering constraint (assistant tool_calls message must
-    /// be followed by tool result messages).
+    /// message and inserts a fresh one at the tail of the System block.
+    /// This runs after all tool results from the previous step are
+    /// committed to memory, so inserting a System message here does not
+    /// violate the API ordering constraint (assistant tool_calls message
+    /// must be followed by tool result messages).
+    ///
+    /// Never inserts at index 0: a front-of-request insert would make the
+    /// whole prompt-cache prefix dependent on this message's bytes.
     fn on_llm_start(&self, _session_id: &str, memory: &SharedMemory) {
         let profile_msg = {
             let store = self.store.read().expect("profile store lock poisoned");
@@ -196,9 +200,8 @@ impl AgentHook for ProfileHook {
         mem.messages
             .retain(|m| !(m.role == Role::System && m.content.starts_with(PROFILE_MARKER)));
 
-        // Insert the fresh [PROFILE] at index 0.
-        mem.messages
-            .insert(0, Message::new(Role::System, profile_msg));
+        // Insert the fresh [PROFILE] before the conversation history.
+        insert_before_history(&mut mem.messages, Message::new(Role::System, profile_msg));
     }
 }
 
