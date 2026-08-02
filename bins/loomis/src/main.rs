@@ -36,6 +36,7 @@ fn install_panic_hook() {
             std::io::stdout(),
             crossterm::terminal::LeaveAlternateScreen,
             crossterm::event::DisableMouseCapture,
+            crossterm::event::DisableBracketedPaste,
         );
 
         // 3. Let the default hook print the panic to stderr.

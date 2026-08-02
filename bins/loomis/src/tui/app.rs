@@ -21,8 +21,10 @@ use observability::TraceStore;
 use skills::{self, SkillRegistry};
 
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
 use super::messages::{ChatMessage, SelectionState, ToolCallState};
+use super::paste::PasteStore;
 use crate::hooks::PlanModeState;
 use crate::tools::TodoItem;
 
@@ -44,6 +46,9 @@ pub struct App {
     pub input: String,
     /// Byte offset into `input`.
     pub input_cursor: usize,
+    /// Multi-line pastes referenced by `[Pasted text #N …]` placeholders
+    /// inside `input`. Cleared on every submit.
+    pub paste_store: PasteStore,
 
     // ── Scrolling ──
     /// How many lines the user has scrolled up (0 = bottom).
@@ -126,6 +131,11 @@ pub struct App {
     pub total_rendered_lines: usize,
     /// Number of visible rows inside the chat border — set each frame.
     pub visible_chat_height: usize,
+    /// Plain text of each wrapped chat line — rebuilt each frame by
+    /// [`super::ui::draw_chat`]. Selection copy slices these strings by
+    /// display column, so what lands on the clipboard is exactly what was
+    /// highlighted on screen.
+    pub rendered_chat_lines: Vec<String>,
 
     // ── Persistence ──
     pub persistence_config: PersistenceConfig,
@@ -186,6 +196,7 @@ impl App {
             line_counts: vec![1],
             input: String::new(),
             input_cursor: 0,
+            paste_store: PasteStore::default(),
             scroll_offset: 0,
             auto_scroll: true,
             streaming: false,
@@ -215,6 +226,7 @@ impl App {
             chat_area: Rect::default(),
             total_rendered_lines: 0,
             visible_chat_height: 0,
+            rendered_chat_lines: Vec::new(),
             persistence_config,
             trace_store,
             plan_mode,
@@ -456,96 +468,86 @@ fn improve_error_message(error: &str) -> String {
 
 // ── Text Selection ────────────────────────────────────────────────────────────────
 
+/// Extracts the substring of `text` covered by the display-column range
+/// `[start_col, end_col)`.
+///
+/// Display columns are terminal cells, not bytes: a CJK character occupies
+/// two columns. A character whose cells only *partially* overlap the range
+/// is included in full — half a glyph can neither be displayed nor
+/// meaningfully copied.
+fn slice_by_display_columns(text: &str, start_col: usize, end_col: usize) -> String {
+    if start_col >= end_col || text.is_empty() {
+        return String::new();
+    }
+
+    let mut selected_byte_start: Option<usize> = None;
+    let mut selected_byte_end: usize = 0;
+    let mut column: usize = 0;
+
+    for (byte_index, ch) in text.char_indices() {
+        let char_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        let char_end_column = column + char_width;
+        // The character is selected when its cells overlap the range.
+        if char_end_column > start_col && column < end_col {
+            if selected_byte_start.is_none() {
+                selected_byte_start = Some(byte_index);
+            }
+            selected_byte_end = byte_index + ch.len_utf8();
+        }
+        column = char_end_column;
+    }
+
+    match selected_byte_start {
+        Some(start) => text[start..selected_byte_end].to_string(),
+        None => String::new(),
+    }
+}
+
 impl App {
-    /// Extracts plain text for the currently selected line range.
+    /// Extracts exactly the text covered by the current selection.
     ///
-    /// Walks `messages` + `line_counts` in parallel to find which messages
-    /// overlap with the selection, then joins their text content.
+    /// Slices the per-frame [`App::rendered_chat_lines`] cache by display
+    /// column, so the clipboard receives what was visibly highlighted —
+    /// including the timestamp and `>` prefixes the user saw selected.
     pub fn get_selection_text(&self) -> String {
         let sel = match &self.selection {
             Some(s) if !s.dragging => s,
             _ => return String::new(),
         };
-        let start = sel.start_line.min(sel.end_line);
-        let end = sel.start_line.max(sel.end_line);
+        let (start_line, start_col, end_line, end_col) = sel.ordered_bounds();
 
-        let mut texts: Vec<String> = Vec::new();
-        let mut line_offset: usize = 0;
+        let lines = &self.rendered_chat_lines;
+        if start_line >= lines.len() {
+            return String::new();
+        }
+        // The selection may point past the end after new content arrived.
+        let last_line = end_line.min(lines.len() - 1);
 
-        for (msg, &count) in self.messages.iter().zip(self.line_counts.iter()) {
-            let msg_end = line_offset + count;
-            if msg_end > start && line_offset <= end {
-                let text = match msg {
-                    ChatMessage::User { content, .. } => content.clone(),
-                    ChatMessage::Assistant { content, .. } => content.clone(),
-                    ChatMessage::Reasoning { content, .. } => content.clone(),
-                    ChatMessage::ToolCall {
-                        name,
-                        args,
-                        state,
-                        origin,
-                        ..
-                    } => {
-                        let is_user = matches!(origin, CallOrigin::User);
-                        match state {
-                            ToolCallState::Running => {
-                                if is_user {
-                                    format!("$ {args}")
-                                } else {
-                                    format!("{name} {args}")
-                                }
-                            }
-                            ToolCallState::Complete(output) => {
-                                if is_user {
-                                    format!("$ {args}\n{output}")
-                                } else {
-                                    format!("{name} {args}\n{output}")
-                                }
-                            }
-                            ToolCallState::Rejected(reason) => {
-                                format!("{name} {args}\nRejected: {reason}")
-                            }
-                            ToolCallState::Error(error) => {
-                                format!("{name} {args}\nError: {error}")
-                            }
-                        }
-                    }
-                    ChatMessage::System { content, .. } => content.clone(),
-                    ChatMessage::Welcome { model, .. } => format!("Loomis — model {model}"),
-                    ChatMessage::Intervene {
-                        title,
-                        description,
-                        options,
-                        responded,
-                        chosen,
-                        custom_text,
-                        ..
-                    } => {
-                        if *responded {
-                            if let Some(idx) = chosen {
-                                let label = options.get(*idx).map(|s| s.as_str()).unwrap_or("?");
-                                if let Some(text) = custom_text {
-                                    format!("{title}: {label}: {text}")
-                                } else {
-                                    format!("{title}: {label}")
-                                }
-                            } else {
-                                format!("{title}: Cancelled")
-                            }
-                        } else {
-                            format!("{title}\n{description}\n[{}]", options.join(" / "))
-                        }
-                    }
-                    ChatMessage::Error { content, .. } => content.clone(),
-                };
-                if !text.is_empty() {
-                    texts.push(text);
-                }
-            }
-            line_offset = msg_end;
+        let mut selected_parts: Vec<String> = Vec::new();
+        for (line_index, line_text) in lines
+            .iter()
+            .enumerate()
+            .skip(start_line)
+            .take(last_line - start_line + 1)
+        {
+            let part = if line_index == start_line && line_index == last_line {
+                // Single-line selection: slice out the column range.
+                slice_by_display_columns(line_text, start_col, end_col)
+            } else if line_index == start_line {
+                // First line of a multi-line selection: start column → EOL.
+                let line_width = UnicodeWidthStr::width(line_text.as_str());
+                slice_by_display_columns(line_text, start_col, line_width)
+            } else if line_index == last_line {
+                // Last line: BOL → end column.
+                slice_by_display_columns(line_text, 0, end_col)
+            } else {
+                // Middle lines are selected in full.
+                line_text.clone()
+            };
+            selected_parts.push(part);
         }
 
-        texts.join("\n")
+        selected_parts.join("\n")
     }
 
     /// Clears the current selection.
@@ -564,9 +566,9 @@ impl App {
             && row < inner.y + inner.height
     }
 
-    /// Converts terminal screen coordinates to a line index in the wrapped
-    /// `all_lines` vec (used for mouse-to-text mapping).
-    fn screen_to_line(&self, _col: u16, row: u16) -> usize {
+    /// Converts terminal screen coordinates to a `(line, display_column)`
+    /// position in the wrapped `rendered_chat_lines` vec.
+    fn screen_to_position(&self, col: u16, row: u16) -> (usize, usize) {
         let block = ratatui::widgets::Block::default().borders(ratatui::widgets::Borders::ALL);
         let inner = block.inner(self.chat_area);
         let visible_row = (row.saturating_sub(inner.y)) as usize;
@@ -576,7 +578,9 @@ impl App {
         let scroll = max_scroll
             .saturating_sub(self.scroll_offset)
             .min(max_scroll);
-        scroll + visible_row
+        let line_index = scroll + visible_row;
+        let display_column = col.saturating_sub(inner.x) as usize;
+        (line_index, display_column)
     }
 
     /// Handles a crossterm mouse event for text selection (Left click/drag/up)
@@ -590,10 +594,12 @@ impl App {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.is_in_chat_area(col, row) {
-                    let line = self.screen_to_line(col, row);
+                    let (line_index, display_column) = self.screen_to_position(col, row);
                     self.selection = Some(SelectionState {
-                        start_line: line,
-                        end_line: line,
+                        start_line: line_index,
+                        start_col: display_column,
+                        end_line: line_index,
+                        end_col: display_column,
                         dragging: true,
                     });
                 } else {
@@ -602,21 +608,37 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                let line = self.screen_to_line(col, row);
+                let (line_index, display_column) = self.screen_to_position(col, row);
                 if let Some(ref mut sel) = self.selection
                     && sel.dragging
                 {
-                    sel.end_line = line;
+                    sel.end_line = line_index;
+                    sel.end_col = display_column;
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if let Some(ref mut sel) = self.selection {
+                let was_empty_click = if let Some(ref mut sel) = self.selection {
                     sel.dragging = false;
-                    // Normalize: ensure start ≤ end.
-                    if sel.start_line > sel.end_line {
-                        std::mem::swap(&mut sel.start_line, &mut sel.end_line);
-                    }
+                    // A click without movement is not a selection — dropping
+                    // it keeps an accidental click from hijacking the next
+                    // Ctrl+C (which would copy one line instead of
+                    // cancelling the stream).
+                    sel.start_line == sel.end_line && sel.start_col == sel.end_col
+                } else {
+                    false
+                };
+                if was_empty_click {
+                    self.selection = None;
                 }
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                // Windows terminal convention: right-click pastes. Only
+                // terminals that forward the right button to the
+                // application reach this arm — terminals that inject the
+                // clipboard themselves (legacy conhost, Windows Terminal)
+                // deliver the paste as a key-event burst instead, which
+                // the event loop coalesces.
+                self.paste_from_clipboard();
             }
             MouseEventKind::ScrollUp => {
                 self.scroll_offset = self.scroll_offset.saturating_add(4);
@@ -1428,6 +1450,273 @@ mod tests {
             }
             other => panic!("expected System, got {other:?}"),
         }
+    }
+
+    // ── slice_by_display_columns ────────────────────────────────
+
+    #[test]
+    fn test_slice_by_display_columns_ascii() {
+        assert_eq!(slice_by_display_columns("hello world", 0, 5), "hello");
+        assert_eq!(slice_by_display_columns("hello world", 6, 11), "world");
+    }
+
+    #[test]
+    fn test_slice_by_display_columns_cjk_aligned() {
+        // Each CJK char occupies 2 columns: 你[0,2) 好[2,4) 世[4,6) 界[6,8).
+        assert_eq!(slice_by_display_columns("你好世界", 2, 6), "好世");
+    }
+
+    #[test]
+    fn test_slice_by_display_columns_cjk_partial_overlap_keeps_whole_char() {
+        // [1,4) clips 你's right cell and 好's left cell — both chars are
+        // still copied in full.
+        assert_eq!(slice_by_display_columns("你好世界", 1, 4), "你好");
+    }
+
+    #[test]
+    fn test_slice_by_display_columns_out_of_bounds() {
+        assert_eq!(slice_by_display_columns("abc", 5, 9), "");
+        assert_eq!(slice_by_display_columns("abc", 2, 99), "c");
+        assert_eq!(slice_by_display_columns("abc", 3, 3), "");
+        assert_eq!(slice_by_display_columns("", 0, 4), "");
+    }
+
+    // ── get_selection_text ──────────────────────────────────────
+
+    /// Builds an app whose chat area renders `lines`, with the chat block
+    /// occupying (0,0)-(40,12) so the inner text area starts at (1,1).
+    fn app_with_chat_lines(lines: &[&str]) -> App {
+        let mut app = make_app();
+        app.rendered_chat_lines = lines.iter().map(|line| line.to_string()).collect();
+        app.total_rendered_lines = lines.len();
+        app.visible_chat_height = 10;
+        app.chat_area = Rect::new(0, 0, 40, 12);
+        app
+    }
+
+    #[test]
+    fn test_get_selection_text_single_line_column_range() {
+        let mut app = app_with_chat_lines(&["10:00:00 > hello world"]);
+        // Column 11 is the 'h' in "hello" (8 timestamp + space + "> ").
+        app.selection = Some(SelectionState {
+            start_line: 0,
+            start_col: 11,
+            end_line: 0,
+            end_col: 16,
+            dragging: false,
+        });
+        assert_eq!(app.get_selection_text(), "hello");
+    }
+
+    #[test]
+    fn test_get_selection_text_multi_line_truncates_first_and_last() {
+        let mut app = app_with_chat_lines(&["first line", "middle line", "last line"]);
+        app.selection = Some(SelectionState {
+            start_line: 0,
+            start_col: 6,
+            end_line: 2,
+            end_col: 4,
+            dragging: false,
+        });
+        assert_eq!(app.get_selection_text(), "line\nmiddle line\nlast");
+    }
+
+    #[test]
+    fn test_get_selection_text_upward_drag_same_result() {
+        let mut app = app_with_chat_lines(&["first line", "middle line", "last line"]);
+        // Dragging from bottom to top must select the same text.
+        app.selection = Some(SelectionState {
+            start_line: 2,
+            start_col: 4,
+            end_line: 0,
+            end_col: 6,
+            dragging: false,
+        });
+        assert_eq!(app.get_selection_text(), "line\nmiddle line\nlast");
+    }
+
+    #[test]
+    fn test_get_selection_text_empty_without_finalized_selection() {
+        let mut app = app_with_chat_lines(&["some text"]);
+        // No selection at all.
+        assert_eq!(app.get_selection_text(), "");
+        // Still dragging — copy must wait for mouse-up.
+        app.selection = Some(SelectionState {
+            start_line: 0,
+            start_col: 0,
+            end_line: 0,
+            end_col: 4,
+            dragging: true,
+        });
+        assert_eq!(app.get_selection_text(), "");
+    }
+
+    // ── Mouse-driven selection ──────────────────────────────────
+
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    /// Builds a mouse event at `(col, row)` with no modifiers held.
+    fn mouse_event(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn test_mouse_click_without_drag_clears_selection() {
+        let mut app = app_with_chat_lines(&["a", "b", "c"]);
+        app.handle_mouse_event(&mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 5));
+        assert!(app.selection.is_some(), "mouse-down starts a selection");
+
+        app.handle_mouse_event(&mouse_event(MouseEventKind::Up(MouseButton::Left), 5, 5));
+        assert!(
+            app.selection.is_none(),
+            "click without movement must not leave a selection"
+        );
+    }
+
+    #[test]
+    fn test_mouse_drag_records_line_and_column() {
+        let mut app = app_with_chat_lines(&["a", "b", "c", "d", "e", "f", "g", "h"]);
+        app.handle_mouse_event(&mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 5));
+        app.handle_mouse_event(&mouse_event(MouseEventKind::Drag(MouseButton::Left), 10, 7));
+        app.handle_mouse_event(&mouse_event(MouseEventKind::Up(MouseButton::Left), 10, 7));
+
+        let sel = app.selection.expect("drag leaves a finalized selection");
+        assert!(!sel.dragging);
+        // Inner area starts at (1,1): down(5,5) → (line 4, col 4),
+        // up(10,7) → (line 6, col 9).
+        assert_eq!((sel.start_line, sel.start_col), (4, 4));
+        assert_eq!((sel.end_line, sel.end_col), (6, 9));
+    }
+
+    // ── Paste placeholders ──────────────────────────────────────
+
+    #[test]
+    fn test_paste_multi_line_becomes_placeholder() {
+        let mut app = make_app();
+        app.handle_paste("alpha\nbeta\ngamma");
+        assert_eq!(app.input, "[Pasted text #1 +3 lines]");
+        assert_eq!(app.input_cursor, app.input.len());
+        assert_eq!(app.paste_store.len(), 1);
+    }
+
+    #[test]
+    fn test_paste_single_line_inserts_literally() {
+        let mut app = make_app();
+        app.handle_paste("just one line");
+        assert_eq!(app.input, "just one line");
+        assert_eq!(app.paste_store.len(), 0, "single-line paste needs no block");
+    }
+
+    #[test]
+    fn test_paste_normalizes_crlf() {
+        let mut app = make_app();
+        app.handle_paste("a\r\nb");
+        assert_eq!(app.input, "[Pasted text #1 +2 lines]");
+        // The stored content must be '\n'-only.
+        let expanded = app.paste_store.expand_all(&app.input);
+        assert_eq!(expanded, "a\nb");
+    }
+
+    #[test]
+    fn test_paste_dropped_while_modal_active() {
+        let mut app = make_app();
+        app.show_help = true;
+        app.handle_paste("a\nb");
+        assert!(app.input.is_empty());
+        assert_eq!(app.paste_store.len(), 0);
+    }
+
+    #[test]
+    fn test_backspace_deletes_placeholder_atomically() {
+        let mut app = make_app();
+        app.handle_paste("a\nb");
+        let backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        app.handle_key(backspace);
+        assert_eq!(app.input, "");
+        assert_eq!(app.input_cursor, 0);
+        assert_eq!(app.paste_store.len(), 0, "block removed with its placeholder");
+    }
+
+    #[test]
+    fn test_backspace_after_placeholder_deletes_one_char() {
+        let mut app = make_app();
+        app.handle_paste("a\nb");
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        // Only the typed 'x' is gone; the placeholder survives.
+        assert_eq!(app.input, "[Pasted text #1 +2 lines]");
+        assert_eq!(app.paste_store.len(), 1);
+    }
+
+    #[test]
+    fn test_enter_expands_placeholders_into_one_message() {
+        let mut app = make_app();
+        app.messages.clear();
+        app.input = "review: ".to_string();
+        app.input_cursor = app.input.len();
+        app.handle_paste("line one\nline two");
+
+        let result = submit_via_enter(&mut app);
+        match result {
+            Some(TuiCommand::RunAgent(content)) => {
+                assert_eq!(content, "review: line one\nline two");
+            }
+            other => panic!("expected RunAgent, got {other:?}"),
+        }
+        assert_eq!(app.paste_store.len(), 0, "store cleared on submit");
+        // History stores the expanded form so Up-recall never needs blocks.
+        assert_eq!(
+            app.history.last().map(|entry| entry.as_str()),
+            Some("review: line one\nline two")
+        );
+    }
+
+    #[test]
+    fn test_enter_expands_placeholders_while_streaming() {
+        let mut app = make_app();
+        app.streaming = true;
+        app.handle_paste("hint line 1\nhint line 2");
+
+        let result = submit_via_enter(&mut app);
+        assert!(result.is_none(), "streaming inject returns no command");
+        let pending = app.pending_hints.lock().expect("pending hints lock poisoned");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].content, "hint line 1\nhint line 2");
+    }
+
+    #[test]
+    fn test_hand_typed_placeholder_passes_through_untouched() {
+        let mut app = make_app();
+        app.messages.clear();
+        // No paste block is registered — the literal text is the message.
+        app.input = "what does [Pasted text #1 +2 lines] mean?".to_string();
+        app.input_cursor = app.input.len();
+
+        let result = submit_via_enter(&mut app);
+        match result {
+            Some(TuiCommand::RunAgent(content)) => {
+                assert_eq!(content, "what does [Pasted text #1 +2 lines] mean?");
+            }
+            other => panic!("expected RunAgent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_unbound_ctrl_letter_does_not_insert_character() {
+        let mut app = make_app();
+        // Ctrl+Z is not a bound shortcut — it must not insert a literal 'z'
+        // (crossterm reports Ctrl+letters as Char(c) + CONTROL).
+        app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+        assert_eq!(app.input, "");
+
+        // A plain 'z' (no CONTROL) still inserts normally.
+        app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+        assert_eq!(app.input, "z");
     }
 
     // ── Test Helpers ────────────────────────────────────────────

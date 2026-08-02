@@ -92,19 +92,39 @@ pub enum ToolCallState {
 
 /// Tracks mouse-based text selection in the chat area.
 ///
-/// Start and end are line indices into the wrapped `all_lines` vec
-/// produced by [`super::ui::wrap_to_width`]. When `dragging` is `true`,
-/// the user is still holding the mouse button and the selection updates
-/// live. When `false`, the selection is stable — Ctrl+C will copy it.
+/// Start and end are `(line, column)` positions: line indices into the
+/// wrapped `all_lines` vec produced by [`super::ui::wrap_to_width`], and
+/// **display columns** within those lines (CJK characters count as two
+/// columns, matching what the user sees on screen). When `dragging` is
+/// `true`, the user is still holding the mouse button and the selection
+/// updates live. When `false`, the selection is stable — Ctrl+C copies it.
 #[derive(Debug, Clone)]
 pub struct SelectionState {
     /// Start line index in the wrapped `all_lines` vec (inclusive).
     pub start_line: usize,
+    /// Display column within `start_line` where the selection begins.
+    pub start_col: usize,
     /// End line index (inclusive). May be less than `start_line` while
     /// dragging upward; normalized to `start_line ≤ end_line` on mouse up.
     pub end_line: usize,
+    /// Display column within `end_line` where the selection ends.
+    pub end_col: usize,
     /// `true` while the user is still holding the left mouse button.
     pub dragging: bool,
+}
+
+impl SelectionState {
+    /// Returns `(start_line, start_col, end_line, end_col)` in document
+    /// order, regardless of which direction the user dragged.
+    pub fn ordered_bounds(&self) -> (usize, usize, usize, usize) {
+        let dragged_downward = self.start_line < self.end_line
+            || (self.start_line == self.end_line && self.start_col <= self.end_col);
+        if dragged_downward {
+            (self.start_line, self.start_col, self.end_line, self.end_col)
+        } else {
+            (self.end_line, self.end_col, self.start_line, self.start_col)
+        }
+    }
 }
 
 // ── TuiCommand ───────────────────────────────────────────────────────────────────

@@ -118,6 +118,17 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &mut App) {
     // Cache for mouse-to-line coordinate mapping.
     app.total_rendered_lines = total_lines;
     app.visible_chat_height = visible_height;
+    // Cache each wrapped line's plain text so selection copy can slice
+    // exactly the highlighted display columns (see App::get_selection_text).
+    app.rendered_chat_lines = all_lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
 
     // When scrollbar is visible, shrink the paragraph's rendering area by
     // 1 column so text and scrollbar don't overlap.
@@ -193,20 +204,34 @@ fn draw_chat(frame: &mut Frame, area: Rect, app: &mut App) {
 
     // ── Selection highlight overlay ────────────────────────────
     if let Some(ref sel) = app.selection {
-        let start = sel.start_line.min(sel.end_line);
-        let end = sel.start_line.max(sel.end_line);
+        let (start_line, start_col, end_line, end_col) = sel.ordered_bounds();
         let highlight_bg = theme::SELECTION_BG;
+        // Middle lines of a multi-line selection are highlighted to the
+        // full text width; only the first/last lines are column-clipped.
+        let full_width = inner.width as usize;
 
         for visible_row in 0..visible_height {
             let actual_line = scroll as usize + visible_row;
-            if actual_line >= start && actual_line <= end {
-                let y = inner.y + visible_row as u16;
-                for x in inner.x..inner.x + inner.width {
-                    if let Some(cell) = frame.buffer_mut().cell_mut((x, y))
-                        && cell.symbol() != " "
-                    {
-                        cell.bg = highlight_bg;
-                    }
+            if actual_line < start_line || actual_line > end_line {
+                continue;
+            }
+            let (col_start, col_end) = if actual_line == start_line && actual_line == end_line {
+                (start_col, end_col)
+            } else if actual_line == start_line {
+                (start_col, full_width)
+            } else if actual_line == end_line {
+                (0, end_col)
+            } else {
+                (0, full_width)
+            };
+
+            let y = inner.y + visible_row as u16;
+            for column_offset in col_start..col_end.min(full_width) {
+                let x = inner.x + column_offset as u16;
+                if let Some(cell) = frame.buffer_mut().cell_mut((x, y))
+                    && cell.symbol() != " "
+                {
+                    cell.bg = highlight_bg;
                 }
             }
         }

@@ -17,7 +17,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crossterm::event::{Event, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures_util::FutureExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -83,6 +83,10 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         stdout,
         crossterm::terminal::EnterAlternateScreen,
         crossterm::event::EnableMouseCapture,
+        // Bracketed paste makes the terminal wrap pasted text in escape
+        // markers, so a paste arrives as one Event::Paste instead of a
+        // burst of keystrokes that would submit one message per line.
+        crossterm::event::EnableBracketedPaste,
     )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -119,6 +123,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
         io::stdout(),
         crossterm::terminal::LeaveAlternateScreen,
         crossterm::event::DisableMouseCapture,
+        crossterm::event::DisableBracketedPaste,
     )?;
 
     result
@@ -152,36 +157,43 @@ fn run_event_loop(
         // ── Render ───────────────────────────────────────────────────
         terminal.draw(|frame| super::ui::draw(frame, app))?;
 
-        // ── Poll keyboard ────────────────────────────────────────────
+        // ── Poll terminal input ──────────────────────────────────────
         if crossterm::event::poll(std::time::Duration::from_millis(50))? {
-            match crossterm::event::read()? {
-                Event::Key(key)
-                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
-                {
-                    if let Some(cmd) = app.handle_key(key) {
-                        match cmd {
-                            TuiCommand::Exit => {
-                                return Ok(());
-                            }
-                            cmd => {
-                                if cmd_tx.send(cmd).is_err() {
-                                    tracing::error!("Failed to send TuiCommand to agent handler");
-                                }
-                            }
-                        }
+            // Read the event that woke us, then drain everything already
+            // queued behind it. A terminal-injected paste (right-click in
+            // conhost / Windows Terminal, or a terminal-side Ctrl+V)
+            // arrives as one instant burst of key events — coalescing the
+            // batch is what lets us tell it apart from human typing. This
+            // matters on Windows, where crossterm's backend never emits
+            // Event::Paste (bracketed-paste parsing is Unix-only).
+            let mut event_batch = vec![crossterm::event::read()?];
+            while crossterm::event::poll(std::time::Duration::ZERO)? {
+                event_batch.push(crossterm::event::read()?);
+            }
+
+            if looks_like_paste_burst(&event_batch) {
+                // Large pastes can be split across pipe chunks; keep
+                // absorbing events while they arrive within a brief
+                // trailing window so one paste isn't cut in two.
+                while crossterm::event::poll(std::time::Duration::from_millis(2))? {
+                    event_batch.push(crossterm::event::read()?);
+                    while crossterm::event::poll(std::time::Duration::ZERO)? {
+                        event_batch.push(crossterm::event::read()?);
                     }
                 }
-                Event::Resize(..) => {
-                    // ratatui handles resize in terminal.draw(),
-                    // but we reset scroll so the viewport doesn't end up
-                    // in a weird state.
-                    app.scroll_offset = 0;
-                    app.auto_scroll = true;
+                app.handle_paste(&paste_batch_to_text(&event_batch));
+            } else {
+                for event in event_batch {
+                    let Some(cmd) = dispatch_terminal_event(app, event) else {
+                        continue;
+                    };
+                    if matches!(cmd, TuiCommand::Exit) {
+                        return Ok(());
+                    }
+                    if cmd_tx.send(cmd).is_err() {
+                        tracing::error!("Failed to send TuiCommand to agent handler");
+                    }
                 }
-                Event::Mouse(mouse_event) => {
-                    app.handle_mouse_event(&mouse_event);
-                }
-                _ => {}
             }
         }
 
@@ -200,6 +212,96 @@ fn run_event_loop(
             return Ok(());
         }
     }
+}
+
+// ── Terminal Event Dispatch ─────────────────────────────────────────────────────
+
+/// Routes one terminal event to its handler, returning a command for the
+/// agent task when the event triggers one.
+fn dispatch_terminal_event(app: &mut App, event: Event) -> Option<TuiCommand> {
+    match event {
+        Event::Key(key)
+            if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
+        {
+            app.handle_key(key)
+        }
+        Event::Resize(..) => {
+            // ratatui handles resize in terminal.draw(), but we reset
+            // scroll so the viewport doesn't end up in a weird state.
+            app.scroll_offset = 0;
+            app.auto_scroll = true;
+            // Re-wrapping invalidates the line/column indices an
+            // in-progress selection points at — drop it.
+            app.clear_selection();
+            None
+        }
+        Event::Mouse(mouse_event) => {
+            app.handle_mouse_event(&mouse_event);
+            None
+        }
+        Event::Paste(text) => {
+            // Bracketed paste — emitted by Unix terminals only.
+            app.handle_paste(&text);
+            None
+        }
+        _ => None,
+    }
+}
+
+// ── Paste Burst Detection ────────────────────────────────────────────────────────
+
+/// Minimum key presses in one event batch before it is considered a paste.
+///
+/// A human produces one keypress per poll window (occasionally two when
+/// rolling between keys); a terminal-injected paste produces dozens in a
+/// single instant.
+const MIN_PASTE_BURST_KEYS: usize = 3;
+
+/// Returns `true` when a batch of events read from a single poll window
+/// looks like a terminal-injected paste rather than human typing:
+/// several key presses, at least one of them Enter.
+///
+/// The Enter is the telltale sign — humans never press Enter bundled with
+/// other keys in the same instant, so an Enter inside a multi-key burst
+/// is a pasted newline, not a submission. Without this check, a multi-line
+/// paste on Windows submits one message per line.
+fn looks_like_paste_burst(event_batch: &[Event]) -> bool {
+    let pressed_keys: Vec<&KeyEvent> = event_batch
+        .iter()
+        .filter_map(|event| match event {
+            Event::Key(key)
+                if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
+            {
+                Some(key)
+            }
+            _ => None,
+        })
+        .collect();
+    let contains_newline = pressed_keys.iter().any(|key| key.code == KeyCode::Enter);
+    pressed_keys.len() >= MIN_PASTE_BURST_KEYS && contains_newline
+}
+
+/// Flattens a paste burst back into the pasted text: characters become
+/// themselves, Enter becomes `'\n'`. Key releases and control combinations
+/// are not paste content and are dropped.
+fn paste_batch_to_text(event_batch: &[Event]) -> String {
+    let mut pasted_text = String::new();
+    for event in event_batch {
+        let Event::Key(key) = event else {
+            continue;
+        };
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                pasted_text.push(c);
+            }
+            KeyCode::Enter => pasted_text.push('\n'),
+            _ => {}
+        }
+    }
+    pasted_text
 }
 
 // ── Agent Handler ────────────────────────────────────────────────────────────────
@@ -430,5 +532,81 @@ async fn agent_handler(
                 break;
             }
         }
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a key event with no modifiers and the given kind.
+    fn key(code: KeyCode, kind: KeyEventKind) -> Event {
+        Event::Key(KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind))
+    }
+
+    /// Builds the event sequence one typed/pasted character produces on
+    /// Windows: a Press followed by a Release.
+    fn keystroke(code: KeyCode) -> Vec<Event> {
+        vec![
+            key(code, KeyEventKind::Press),
+            key(code, KeyEventKind::Release),
+        ]
+    }
+
+    #[test]
+    fn test_multi_line_paste_burst_is_detected() {
+        // Pasting "a\nb": three presses (a, Enter, b) interleaved with
+        // releases — exactly what conhost/Windows Terminal injects.
+        let mut batch = keystroke(KeyCode::Char('a'));
+        batch.extend(keystroke(KeyCode::Enter));
+        batch.extend(keystroke(KeyCode::Char('b')));
+
+        assert!(looks_like_paste_burst(&batch));
+        assert_eq!(paste_batch_to_text(&batch), "a\nb");
+    }
+
+    #[test]
+    fn test_lone_enter_is_not_a_paste() {
+        // A human pressing Enter: below the burst threshold, so it stays
+        // a normal submission.
+        let batch = keystroke(KeyCode::Enter);
+        assert!(!looks_like_paste_burst(&batch));
+    }
+
+    #[test]
+    fn test_fast_typist_rollover_is_not_a_paste() {
+        // Two keys rolling over into one poll window (Enter + next char)
+        // must not be mistaken for a paste — humans do this constantly.
+        let mut batch = keystroke(KeyCode::Enter);
+        batch.extend(keystroke(KeyCode::Char('x')));
+        assert!(!looks_like_paste_burst(&batch));
+    }
+
+    #[test]
+    fn test_single_line_keystroke_burst_is_not_a_paste() {
+        // A terminal-injected single-line paste has many presses but no
+        // Enter — dispatch normally; the chars land in the input either way.
+        let batch: Vec<Event> = "hello"
+            .chars()
+            .flat_map(|c| keystroke(KeyCode::Char(c)))
+            .collect();
+        assert!(!looks_like_paste_burst(&batch));
+    }
+
+    #[test]
+    fn test_paste_text_skips_control_chars_and_releases() {
+        let mut batch = vec![Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Press,
+        ))];
+        batch.extend(keystroke(KeyCode::Char('x')));
+        batch.extend(keystroke(KeyCode::Enter));
+
+        assert!(looks_like_paste_burst(&batch));
+        // Ctrl+C is a shortcut, not text; only 'x' and the newline survive.
+        assert_eq!(paste_batch_to_text(&batch), "x\n");
     }
 }

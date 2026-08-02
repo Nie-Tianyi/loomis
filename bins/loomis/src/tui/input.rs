@@ -14,7 +14,71 @@ use super::messages::{
     ChatMessage, SLASH_COMMANDS, SlashCompletionState, TuiCommand, is_valid_thread_name,
     truncate_for_display,
 };
+use super::paste::normalize_newlines;
 use sandbox::shell_filter::CommandVerdict;
+
+// ── Paste Handling ───────────────────────────────────────────────────────────────
+
+impl App {
+    /// `true` while a modal (thread picker, intervention prompt, shell
+    /// confirmation, help overlay) owns keyboard input — the same set of
+    /// intercepts [`App::handle_key`] applies at its top.
+    pub(super) fn is_modal_active(&self) -> bool {
+        self.thread_picker.is_some()
+            || self.has_pending_intervene()
+            || self.pending_shell_confirm.is_some()
+            || self.show_help
+    }
+
+    /// Reads the system clipboard and runs its text through the paste
+    /// pipeline. No-op when the clipboard is empty or holds non-text data.
+    ///
+    /// Used by the Ctrl+V binding and by right-click paste in terminals
+    /// that forward the right mouse button to the application.
+    pub fn paste_from_clipboard(&mut self) {
+        if let Ok(text) =
+            arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text())
+        {
+            self.handle_paste(&text);
+        }
+    }
+
+    /// Handles pasted text from any source: a bracketed-paste event
+    /// (Unix terminals), a coalesced key-event burst (Windows — see the
+    /// event loop), or a direct clipboard read (Ctrl+V / right-click).
+    ///
+    /// A multi-line paste is stored in the [`super::paste::PasteStore`] and
+    /// appears in the input as a compact `[Pasted text #N +M lines]`
+    /// placeholder (Claude Code style); a single-line paste is inserted
+    /// like typed text. The real content is restored on submit.
+    pub fn handle_paste(&mut self, text: &str) {
+        // A modal owns the input focus — pasting into it would insert text
+        // its key handler doesn't expect, so the event is dropped.
+        if self.is_modal_active() {
+            tracing::trace!("Paste event dropped while a modal is active");
+            return;
+        }
+
+        let normalized = normalize_newlines(text);
+        if normalized.is_empty() {
+            return;
+        }
+
+        let inserted = if normalized.contains('\n') {
+            self.paste_store.add_text(normalized)
+        } else {
+            normalized
+        };
+        self.input.insert_str(self.input_cursor, &inserted);
+        self.input_cursor += inserted.len();
+
+        // A pasted `/`-prefix deserves the same completion popup as a
+        // typed one.
+        if !self.streaming && !self.slash_dismissed && self.input.starts_with('/') {
+            self.update_slash_completion();
+        }
+    }
+}
 
 // ── Keyboard Handling ────────────────────────────────────────────────────────────
 
@@ -76,15 +140,30 @@ impl App {
                 self.slash_completion = None;
                 self.slash_dismissed = false;
 
-                let input = self.input.trim().to_string();
-                if input.is_empty() {
+                let raw_input = self.input.trim().to_string();
+                if raw_input.is_empty() {
                     self.input.clear();
                     self.input_cursor = 0;
                     return None;
                 }
 
-                // Save to history
-                self.history.push(input.clone());
+                // Restore pasted content: `[Pasted text #N …]` placeholders
+                // stand in for text kept in the paste store. The bang/slash
+                // checks below deliberately inspect the RAW input so a
+                // paste can never smuggle a command past the user; only the
+                // message sent to the agent is expanded.
+                let expanded_input = self.paste_store.expand_all(&raw_input);
+                if expanded_input.trim().is_empty() {
+                    // The placeholder was edited beyond recognition.
+                    self.input.clear();
+                    self.input_cursor = 0;
+                    self.paste_store.clear();
+                    return None;
+                }
+
+                // Save to history — the expanded form, so recalling it with
+                // Up never depends on paste blocks that no longer exist.
+                self.history.push(expanded_input.clone());
                 self.history_index = None;
                 self.draft_input.clear();
 
@@ -99,24 +178,26 @@ impl App {
                             .pending_hints
                             .lock()
                             .expect("pending hints lock poisoned");
-                        pending.push(Message::new(Role::User, input.clone()));
+                        pending.push(Message::new(Role::User, expanded_input.clone()));
                     }
                     self.messages.push(ChatMessage::User {
-                        content: input,
+                        content: expanded_input,
                         timestamp: ChatMessage::now_timestamp(),
                     });
                     self.input.clear();
                     self.input_cursor = 0;
+                    self.paste_store.clear();
                     self.auto_scroll = true;
                     self.scroll_offset = 0;
                     return None;
                 }
 
                 // Check for bang commands (!command — execute asynchronously)
-                if input.starts_with('!') && !input.starts_with("!!") {
-                    let command = input[1..].trim().to_string();
+                if raw_input.starts_with('!') && !raw_input.starts_with("!!") {
+                    let command = raw_input[1..].trim().to_string();
                     self.input.clear();
                     self.input_cursor = 0;
+                    self.paste_store.clear();
                     self.auto_scroll = true;
                     if command.is_empty() {
                         self.messages.push(ChatMessage::System {
@@ -151,9 +232,10 @@ impl App {
                 }
 
                 // Check for slash commands
-                if let Some(cmd) = self.handle_slash_command(&input) {
+                if let Some(cmd) = self.handle_slash_command(&raw_input) {
                     self.input.clear();
                     self.input_cursor = 0;
+                    self.paste_store.clear();
                     self.auto_scroll = true;
                     return cmd;
                 }
@@ -161,7 +243,7 @@ impl App {
                 // Normal user message — generate auto-save thread name from
                 // the first message of this conversation.
                 if self.conversation_title.is_none() {
-                    let title = memory::thread_name_from_message(&input);
+                    let title = memory::thread_name_from_message(&expanded_input);
                     let _ = memory::write_current_thread_name(
                         &title,
                         &self.workspace_root,
@@ -171,18 +253,30 @@ impl App {
                 }
 
                 self.messages.push(ChatMessage::User {
-                    content: input.clone(),
+                    content: expanded_input.clone(),
                     timestamp: ChatMessage::now_timestamp(),
                 });
                 self.input.clear();
                 self.input_cursor = 0;
+                self.paste_store.clear();
                 self.auto_scroll = true;
                 self.scroll_offset = 0;
                 self.streaming = true;
                 // Remember for Ctrl+R retry after a failure.
-                self.last_submitted_input = Some(input.clone());
+                self.last_submitted_input = Some(expanded_input.clone());
 
-                Some(TuiCommand::RunAgent(input))
+                Some(TuiCommand::RunAgent(expanded_input))
+            }
+
+            // ── Paste from clipboard ───────────────────────────
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Terminals that handle Ctrl+V themselves never send this
+                // key (their paste arrives via bracketed paste / a key-event
+                // burst instead). Terminals that DON'T forward Ctrl+V to the
+                // application as a plain key event — read the clipboard
+                // directly so paste works there too.
+                self.paste_from_clipboard();
+                None
             }
 
             // ── Exit / Cancel ──────────────────────────────────
@@ -421,9 +515,22 @@ impl App {
             // ── Editing ────────────────────────────────────────
             KeyCode::Backspace => {
                 if self.input_cursor > 0 {
-                    let prev = self.prev_char_boundary();
-                    self.input.remove(prev);
-                    self.input_cursor = prev;
+                    // A paste placeholder is deleted atomically: it stands
+                    // for content held in the paste store, so the text and
+                    // the stored block are dropped together.
+                    let placeholder = self
+                        .paste_store
+                        .placeholder_suffix(&self.input[..self.input_cursor]);
+                    if let Some(placeholder) = placeholder {
+                        let placeholder_start = self.input_cursor - placeholder.len();
+                        self.input.drain(placeholder_start..self.input_cursor);
+                        self.input_cursor = placeholder_start;
+                        self.paste_store.remove_by_placeholder(&placeholder);
+                    } else {
+                        let prev = self.prev_char_boundary();
+                        self.input.remove(prev);
+                        self.input_cursor = prev;
+                    }
                 }
                 // Editing the filter text starts a new completion session.
                 self.slash_dismissed = false;
@@ -442,6 +549,14 @@ impl App {
                 // the intervention key handler.
                 if self.has_pending_intervene() {
                     return self.handle_intervene_key(key);
+                }
+
+                // Unbound Ctrl+letter combinations are shortcuts we don't
+                // handle, not text — crossterm reports them as Char(c) +
+                // CONTROL, and without this guard they'd insert a literal
+                // letter (e.g. Ctrl+Z inserting 'z').
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    return None;
                 }
 
                 // `?` on an empty, idle input opens the help overlay
