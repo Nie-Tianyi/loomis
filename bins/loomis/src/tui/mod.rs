@@ -25,6 +25,7 @@
 //! | [`app`] | `App` state machine + event application |
 //! | [`messages`] | `ChatMessage`, `TuiCommand`, `ThreadPicker` type definitions |
 //! | [`input`] | Keyboard handling, slash commands, shell confirmation |
+//! | [`keyboard`] | Platform-aware shortcut helpers (Cmd vs Ctrl) |
 //! | [`paste`] | Pasted-content model: placeholders + expansion |
 //! | [`ui`] | ratatui rendering: chat area, input area, status bar |
 //! | [`event`] | Event loop, terminal lifecycle, agent background task |
@@ -34,6 +35,7 @@
 mod app;
 mod event;
 mod input;
+mod keyboard;
 mod markdown;
 mod messages;
 mod paste;

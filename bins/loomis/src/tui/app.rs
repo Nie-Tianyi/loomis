@@ -550,6 +550,33 @@ impl App {
         selected_parts.join("\n")
     }
 
+    /// Copies the finalized selection to the system clipboard. No-op when
+    /// there is no finalized selection or it holds no text.
+    ///
+    /// Shared by the copy shortcut (`Cmd+C` on macOS, `Ctrl+C` elsewhere)
+    /// and — on macOS — by selection completion, where the terminal
+    /// intercepts the copy key and the text must be copied the moment the
+    /// selection is made (the native "select = copy" behaviour).
+    pub fn copy_selection_to_clipboard(&mut self) {
+        // `get_selection_text` returns an empty string when there is no
+        // finalized selection or it covers no text — both are no-ops.
+        let text = self.get_selection_text();
+        if text.is_empty() {
+            return;
+        }
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => {
+                let _ = clipboard.set_text(text);
+            }
+            Err(e) => {
+                self.messages.push(ChatMessage::System {
+                    content: format!("Clipboard error: {e}"),
+                    timestamp: ChatMessage::now_timestamp(),
+                });
+            }
+        }
+    }
+
     /// Clears the current selection.
     pub fn clear_selection(&mut self) {
         self.selection = None;
@@ -617,17 +644,24 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                let was_empty_click = if let Some(ref mut sel) = self.selection {
+                let is_completed_selection = if let Some(ref mut sel) = self.selection {
                     sel.dragging = false;
                     // A click without movement is not a selection — dropping
                     // it keeps an accidental click from hijacking the next
                     // Ctrl+C (which would copy one line instead of
                     // cancelling the stream).
-                    sel.start_line == sel.end_line && sel.start_col == sel.end_col
+                    sel.start_line != sel.end_line || sel.start_col != sel.end_col
                 } else {
                     false
                 };
-                if was_empty_click {
+                if is_completed_selection && cfg!(target_os = "macos") {
+                    // macOS terminals swallow the Cmd+C menu shortcut at
+                    // the terminal level, so the app never receives the
+                    // copy key. Copy the selection as it completes — the
+                    // native terminal "select = copy" behaviour — so
+                    // selected text reaches the clipboard regardless.
+                    self.copy_selection_to_clipboard();
+                } else if !is_completed_selection && self.selection.is_some() {
                     self.selection = None;
                 }
             }
@@ -1639,7 +1673,11 @@ mod tests {
         app.handle_key(backspace);
         assert_eq!(app.input, "");
         assert_eq!(app.input_cursor, 0);
-        assert_eq!(app.paste_store.len(), 0, "block removed with its placeholder");
+        assert_eq!(
+            app.paste_store.len(),
+            0,
+            "block removed with its placeholder"
+        );
     }
 
     #[test]
@@ -1684,7 +1722,10 @@ mod tests {
 
         let result = submit_via_enter(&mut app);
         assert!(result.is_none(), "streaming inject returns no command");
-        let pending = app.pending_hints.lock().expect("pending hints lock poisoned");
+        let pending = app
+            .pending_hints
+            .lock()
+            .expect("pending hints lock poisoned");
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].content, "hint line 1\nhint line 2");
     }

@@ -220,9 +220,7 @@ fn run_event_loop(
 /// agent task when the event triggers one.
 fn dispatch_terminal_event(app: &mut App, event: Event) -> Option<TuiCommand> {
     match event {
-        Event::Key(key)
-            if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
-        {
+        Event::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
             app.handle_key(key)
         }
         Event::Resize(..) => {

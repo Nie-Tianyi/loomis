@@ -10,6 +10,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use provider::{Message, Role};
 
 use super::app::App;
+use super::keyboard::{
+    cancel_shortcut_label, copy_shortcut_label, has_shortcut_modifier, is_cancel_shortcut,
+    is_copy_shortcut, is_paste_shortcut, paste_shortcut_label,
+};
 use super::messages::{
     ChatMessage, SLASH_COMMANDS, SlashCompletionState, TuiCommand, is_valid_thread_name,
     truncate_for_display,
@@ -36,9 +40,7 @@ impl App {
     /// Used by the Ctrl+V binding and by right-click paste in terminals
     /// that forward the right mouse button to the application.
     pub fn paste_from_clipboard(&mut self) {
-        if let Ok(text) =
-            arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text())
-        {
+        if let Ok(text) = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
             self.handle_paste(&text);
         }
     }
@@ -127,6 +129,23 @@ impl App {
         }
 
         match key.code {
+            // ── Clipboard shortcuts — platform-aware ──────────
+            // Wildcard arms: the shortcut helpers accept any key code, so
+            // they must run before the generic `Char(c)` insertion arm
+            // below. The bindings are OS-native — Cmd+C/V on macOS,
+            // Ctrl+C/V elsewhere (see [`super::keyboard`]).
+            _ if is_paste_shortcut(&key) => {
+                // Terminals that handle the paste chord themselves never
+                // send this key (their paste arrives via bracketed paste /
+                // a key-event burst instead). Terminals that DON'T forward
+                // it — read the clipboard directly so paste works there too.
+                self.paste_from_clipboard();
+                None
+            }
+            _ if is_copy_shortcut(&key) || is_cancel_shortcut(&key) => {
+                self.handle_copy_or_cancel(&key)
+            }
+
             // ── Submit / Newline ───────────────────────────────
             KeyCode::Enter => {
                 // Shift+Enter inserts a newline
@@ -268,54 +287,6 @@ impl App {
                 Some(TuiCommand::RunAgent(expanded_input))
             }
 
-            // ── Paste from clipboard ───────────────────────────
-            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Terminals that handle Ctrl+V themselves never send this
-                // key (their paste arrives via bracketed paste / a key-event
-                // burst instead). Terminals that DON'T forward Ctrl+V to the
-                // application as a plain key event — read the clipboard
-                // directly so paste works there too.
-                self.paste_from_clipboard();
-                None
-            }
-
-            // ── Exit / Cancel ──────────────────────────────────
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // If a finalized selection is active, copy it to the
-                // system clipboard and clear the highlight.
-                if let Some(ref sel) = self.selection
-                    && !sel.dragging
-                {
-                    let text = self.get_selection_text();
-                    match arboard::Clipboard::new() {
-                        Ok(mut clipboard) => {
-                            let _ = clipboard.set_text(text);
-                        }
-                        Err(e) => {
-                            self.messages.push(ChatMessage::System {
-                                content: format!("Clipboard error: {e}"),
-                                timestamp: ChatMessage::now_timestamp(),
-                            });
-                        }
-                    }
-                    self.selection = None;
-                    return None;
-                }
-                // Cancel streaming — Ctrl+C is the "interrupt" key here.
-                if self.streaming {
-                    self.streaming = false;
-                    return Some(TuiCommand::CancelGeneration);
-                }
-                // Idle: Ctrl+C does NOT quit (Nielsen #4: consistency — the
-                // key means copy/cancel everywhere). Point at the real exit
-                // bindings instead.
-                self.messages.push(ChatMessage::System {
-                    content: "Press Ctrl+D to exit, or type /exit.".into(),
-                    timestamp: ChatMessage::now_timestamp(),
-                });
-                None
-            }
-
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.input.is_empty() && !self.streaming {
                     self.should_quit = true;
@@ -331,9 +302,7 @@ impl App {
                 if self.streaming {
                     return None;
                 }
-                let Some(last) = self.last_submitted_input.clone() else {
-                    return None;
-                };
+                let last = self.last_submitted_input.clone()?;
                 // Re-submit the previous input as-is. Not pushed to history
                 // again — it's already there from the first submission.
                 self.messages.push(ChatMessage::User {
@@ -551,11 +520,12 @@ impl App {
                     return self.handle_intervene_key(key);
                 }
 
-                // Unbound Ctrl+letter combinations are shortcuts we don't
+                // Unbound modifier+letter chords are shortcuts we don't
                 // handle, not text — crossterm reports them as Char(c) +
-                // CONTROL, and without this guard they'd insert a literal
-                // letter (e.g. Ctrl+Z inserting 'z').
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                // CONTROL (plus SUPER on macOS), and without this guard
+                // they'd insert a literal letter (Ctrl+Z inserting 'z',
+                // Cmd+Z inserting 'z' on macOS).
+                if has_shortcut_modifier(&key) {
                     return None;
                 }
 
@@ -580,6 +550,58 @@ impl App {
 
             _ => None,
         }
+    }
+}
+
+impl App {
+    /// Handles the copy / cancel chord — the platform-sensitive part of
+    /// `Ctrl+C`-style handling (see [`super::keyboard`]).
+    ///
+    /// Priority order (first match wins):
+    /// 1. **Copy** — a finalized text selection + the platform copy
+    ///    shortcut (`Cmd+C` on macOS, `Ctrl+C` elsewhere).
+    /// 2. **Cancel** — the agent is streaming + the cancel shortcut
+    ///    (`Ctrl+C` on every platform).
+    /// 3. **Hint** — idle; point at the real exit bindings instead of
+    ///    quitting (Nielsen #4: consistency).
+    fn handle_copy_or_cancel(&mut self, key: &KeyEvent) -> Option<TuiCommand> {
+        // Copy the selection to the system clipboard and clear the
+        // highlight. On macOS this fires for Cmd+C only — Ctrl+C never
+        // copies there, it stays the pure interrupt key. (Terminals that
+        // intercept Cmd+C never send it here at all; on macOS the
+        // selection is also copied on mouse-up — see [`App::handle_mouse_event`].)
+        if is_copy_shortcut(key)
+            && let Some(ref sel) = self.selection
+            && !sel.dragging
+        {
+            self.copy_selection_to_clipboard();
+            self.selection = None;
+            return None;
+        }
+
+        // Cancel streaming — the "interrupt" chord.
+        if is_cancel_shortcut(key) {
+            if self.streaming {
+                self.streaming = false;
+                return Some(TuiCommand::CancelGeneration);
+            }
+            // Idle: Ctrl+C does NOT quit — the key means copy/cancel
+            // everywhere (Nielsen #4). Point at the real exit bindings;
+            // on macOS also name the copy key since it differs from Ctrl+C.
+            let content = if cfg!(target_os = "macos") {
+                format!(
+                    "Press Ctrl+D to exit, or type /exit. ({} copies selected text)",
+                    copy_shortcut_label()
+                )
+            } else {
+                "Press Ctrl+D to exit, or type /exit.".into()
+            };
+            self.messages.push(ChatMessage::System {
+                content,
+                timestamp: ChatMessage::now_timestamp(),
+            });
+        }
+        None
     }
 }
 
@@ -716,7 +738,10 @@ impl App {
                 }
                 None
             }
-            KeyCode::Char(c) => {
+            // A modified chord (Ctrl+letter, or Cmd+letter on macOS) is a
+            // shortcut, not text — re-dispatch so the main handler can
+            // interpret it instead of inserting the letter.
+            KeyCode::Char(c) if !has_shortcut_modifier(&key) => {
                 self.input.insert(self.input_cursor, c);
                 self.input_cursor += c.len_utf8();
                 self.update_slash_completion();
@@ -975,6 +1000,18 @@ impl App {
             }
 
             "/help" => {
+                // Clipboard shortcuts are OS-native — Cmd on macOS, Ctrl
+                // elsewhere (see [`super::keyboard`]). On macOS the copy
+                // and cancel keys differ; on other platforms one key does
+                // both, which the two lines below make explicit.
+                let copy_shortcut = format!("  {:<13} — copy selected text", copy_shortcut_label());
+                let paste_shortcut =
+                    format!("  {:<13} — paste from clipboard", paste_shortcut_label());
+                let cancel_shortcut = format!(
+                    "  {:<13} — cancel generation / exit",
+                    cancel_shortcut_label()
+                );
+
                 let content = [
                     "Commands:",
                     "  /exit          — quit",
@@ -1000,7 +1037,9 @@ impl App {
                     "  Shift+Enter  — newline",
                     "  PgUp/PgDown/🖱 — scroll chat",
                     "  Up/Down      — input history / multi-line nav",
-                    "  Ctrl+C       — cancel generation / exit",
+                    copy_shortcut.as_str(),
+                    paste_shortcut.as_str(),
+                    cancel_shortcut.as_str(),
                     "  Esc          — cancel generation",
                     "  Y / n        — approve / deny shell command",
                 ]

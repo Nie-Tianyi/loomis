@@ -16,6 +16,7 @@ use engine::CallOrigin;
 use serde_json;
 
 use super::app::App;
+use super::keyboard::{cancel_shortcut_label, copy_shortcut_label};
 use super::markdown::render_markdown;
 use super::messages::{
     ChatMessage, SLASH_COMMANDS, SlashCompletionState, ThreadPicker, ToolCallState,
@@ -1313,7 +1314,16 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         ("Up / Down", "input history · completion nav"),
         ("PgUp / PgDn", "scroll chat · mouse wheel works too"),
         ("Esc", "cancel generation · close popup · clear selection"),
-        ("Ctrl+C", "copy selection · cancel generation"),
+        // The copy key is OS-native (Cmd+C on macOS, Ctrl+C elsewhere);
+        // on non-macOS one key both copies and cancels.
+        (
+            copy_shortcut_label(),
+            if cfg!(target_os = "macos") {
+                "copy selected text"
+            } else {
+                "copy selection · cancel generation"
+            },
+        ),
         ("Ctrl+D", "exit (empty input) · delete char forward"),
         ("Ctrl+R", "retry the last submission after a failure"),
         ("? / F1", "toggle this help"),
@@ -1321,6 +1331,15 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         lines.push(Line::from(vec![
             Span::styled(format!("  {:<16}", k), text),
             Span::styled(d, dim),
+        ]));
+    }
+
+    // On macOS the copy key (Cmd+C) and the cancel key (Ctrl+C) are
+    // distinct — the entry above covers copy, so cancel gets its own line.
+    if cfg!(target_os = "macos") {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:<16}", cancel_shortcut_label()), text),
+            Span::styled("cancel generation", dim),
         ]));
     }
 
