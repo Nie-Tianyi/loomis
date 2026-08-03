@@ -186,6 +186,7 @@ fn run_event_loop(
                     batch_events = event_batch.len(),
                     pasted_len = pasted.len(),
                     pasted_newlines = pasted.chars().filter(|&c| c == '\n').count(),
+                    pasted_cr = pasted.chars().filter(|&c| c == '\r').count(),
                     "paste burst detected",
                 );
                 app.handle_paste(&pasted);
@@ -249,6 +250,7 @@ fn dispatch_terminal_event(app: &mut App, event: Event) -> Option<TuiCommand> {
             tracing::info!(
                 paste_len = text.len(),
                 paste_newlines = text.chars().filter(|&c| c == '\n').count(),
+                paste_cr = text.chars().filter(|&c| c == '\r').count(),
                 "Event::Paste received",
             );
             app.handle_paste(&text);

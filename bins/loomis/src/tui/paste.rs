@@ -162,13 +162,21 @@ impl PasteStore {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────────
 
-/// Normalizes Windows clipboard line endings (`\r\n`) to `\n`.
+/// Normalizes clipboard line endings to `\n`.
 ///
-/// Bracketed paste delivers the clipboard verbatim; on Windows that means
-/// CRLF pairs that would render as stray carriage returns in the input area
-/// and double-spaced lines in the submitted message.
+/// Bracketed paste delivers the clipboard verbatim; the three common
+/// line-ending conventions must all be collapsed so the placeholder
+/// logic (`contains('\n')`) recognizes the paste as multi-line:
+///
+/// | Source        | Line ending | Example        |
+/// |---------------|-------------|----------------|
+/// | Windows       | `\r\n`      | CRLF           |
+/// | Old Mac OS    | `\r`        | CR             |
+/// | Unix / macOS  | `\n`        | LF             |
+///
+/// The order matters: `\r\n` → `\n` first, then any remaining `\r` → `\n`.
 pub fn normalize_newlines(text: &str) -> String {
-    text.replace("\r\n", "\n")
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
@@ -282,9 +290,14 @@ mod tests {
     }
 
     #[test]
-    fn normalize_newlines_converts_crlf_only() {
+    fn normalize_newlines_converts_crlf_and_cr() {
+        // Windows CRLF → LF
         assert_eq!(normalize_newlines("a\r\nb\r\nc"), "a\nb\nc");
-        // Bare '\r' (classic Mac) and '\n' pass through unchanged.
-        assert_eq!(normalize_newlines("a\rb\nc"), "a\rb\nc");
+        // Old Mac CR → LF
+        assert_eq!(normalize_newlines("a\rb\rc"), "a\nb\nc");
+        // Mixed CRLF + bare CR → all LF
+        assert_eq!(normalize_newlines("a\r\nb\rc"), "a\nb\nc");
+        // Unix LF passes through unchanged.
+        assert_eq!(normalize_newlines("a\nb\nc"), "a\nb\nc");
     }
 }

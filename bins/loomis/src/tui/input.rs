@@ -66,6 +66,7 @@ impl App {
             paste_len = text.len(),
             normalized_len = normalized.len(),
             has_newline = normalized.contains('\n'),
+            has_cr = text.contains('\r'),
             newline_count = normalized.chars().filter(|&c| c == '\n').count(),
             "handle_paste called"
         );
