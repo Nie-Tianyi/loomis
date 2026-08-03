@@ -62,6 +62,13 @@ impl App {
         }
 
         let normalized = normalize_newlines(text);
+        tracing::info!(
+            paste_len = text.len(),
+            normalized_len = normalized.len(),
+            has_newline = normalized.contains('\n'),
+            newline_count = normalized.chars().filter(|&c| c == '\n').count(),
+            "handle_paste called"
+        );
         if normalized.is_empty() {
             return;
         }

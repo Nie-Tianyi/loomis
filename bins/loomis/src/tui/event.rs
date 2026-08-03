@@ -181,7 +181,14 @@ fn run_event_loop(
                         event_batch.push(crossterm::event::read()?);
                     }
                 }
-                app.handle_paste(&paste_batch_to_text(&event_batch));
+                let pasted = paste_batch_to_text(&event_batch);
+                tracing::info!(
+                    batch_events = event_batch.len(),
+                    pasted_len = pasted.len(),
+                    pasted_newlines = pasted.chars().filter(|&c| c == '\n').count(),
+                    "paste burst detected",
+                );
+                app.handle_paste(&pasted);
             } else {
                 for event in event_batch {
                     let Some(cmd) = dispatch_terminal_event(app, event) else {
@@ -239,6 +246,11 @@ fn dispatch_terminal_event(app: &mut App, event: Event) -> Option<TuiCommand> {
         }
         Event::Paste(text) => {
             // Bracketed paste — emitted by Unix terminals only.
+            tracing::info!(
+                paste_len = text.len(),
+                paste_newlines = text.chars().filter(|&c| c == '\n').count(),
+                "Event::Paste received",
+            );
             app.handle_paste(&text);
             None
         }
