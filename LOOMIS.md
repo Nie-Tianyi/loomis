@@ -46,7 +46,7 @@ agent_oxide/
 │   └── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent, ResponseRouter
 ├── extensions/
 │   ├── skills/             # SkillDef, SkillRegistry, ActiveSkills — skill discovery & loading
-│   ├── hooks/              # MicroCompactHook + MacroCompactHook
+│   ├── compact/            # MicroCompactHook + MacroCompactHook
 │   ├── subagent/           # SubagentTool — spawn child agents as tools
 │   ├── observability/      # TraceEvent, TraceStore, RunMetrics — full-chain tracing
 │   └── sandbox/            # Sandbox runtime — WorkspaceFs, ShellFilter, SandboxHook, etc.

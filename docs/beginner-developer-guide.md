@@ -67,7 +67,7 @@ deepseek = { path = "../../core/deepseek" }
 tools = { path = "../../core/tools" }
 tools-macros = { path = "../../core/tools-macros" }
 memory = { path = "../../core/memory" }
-hooks = { path = "../../extensions/hooks" }
+hooks = { path = "../../extensions/compact" }
 provider = { path = "../../core/provider" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
@@ -868,7 +868,7 @@ in depth:
 | Sandbox system | `bins/loomis/src/sandbox/` | Full sandbox defense in depth |
 | TUI implementation | `bins/loomis/src/tui/` | ratatui-based terminal UI |
 | Agent assembly | `bins/loomis/src/agent_setup.rs` | How loomis wires everything |
-| Compaction hooks | `extensions/hooks/src/` | MicroCompact and MacroCompact |
+| Compaction hooks | `extensions/compact/src/` | MicroCompact and MacroCompact |
 | DeepSeek client | `core/deepseek/src/` | SSE streaming implementation |
 | Engine core | `core/engine/src/agent.rs` | The ReAct loop in full detail |
 

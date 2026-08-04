@@ -126,7 +126,7 @@ Both run in `on_llm_start()`:
    them via the flash model through `engine::block_on`, inserts the summary
    as a System message.
 
-Key constants in `extensions/hooks/src/compact.rs`: `DEFAULT_COMPACT_TOKEN_LIMIT`,
+Key constants in `extensions/compact/src/compact.rs`: `DEFAULT_COMPACT_TOKEN_LIMIT`,
 `DEFAULT_COMPACT_CHAR_LIMIT`, `DEFAULT_KEEP_LAST_N`,
 `DEFAULT_KEEP_RECENT_TOOL_OUTPUTS`.
 

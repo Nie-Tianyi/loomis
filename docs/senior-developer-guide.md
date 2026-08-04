@@ -81,8 +81,8 @@ provider ───────────────────────�
 | `sandbox` | `SandboxConfig` | Security policy (TOML) | `extensions/sandbox/src/config.rs` |
 | `tools-macros` | `#[tool]` | Proc macro codegen | `core/tools-macros/src/lib.rs` |
 | `memory` | `Memory`, `SharedMemory` | Conversation buffer | `core/memory/src/memory.rs` |
-| `hooks` | `MicroCompactHook` | Tool-output clearing | `extensions/hooks/src/compact.rs` |
-| `hooks` | `MacroCompactHook<C>` | LLM summarisation | `extensions/hooks/src/compact.rs` |
+| `hooks` | `MicroCompactHook` | Tool-output clearing | `extensions/compact/src/compact.rs` |
+| `hooks` | `MacroCompactHook<C>` | LLM summarisation | `extensions/compact/src/compact.rs` |
 | `engine` | `Agent` | ReAct loop runner | `core/engine/src/agent.rs` |
 | `engine` | `AgentEvent` | Unified event stream (single channel) | `core/engine/src/events.rs` |
 | `engine` | `AgentHook` | 10-callback lifecycle trait | `core/engine/src/hooks.rs` |
@@ -988,7 +988,7 @@ unparseable) — the messages remain in the conversation (tool call ID
 pairing is preserved), but the content is pruned.
 
 ```rust
-// extensions/hooks/src/compact.rs
+// extensions/compact/src/compact.rs
 pub struct MicroCompactHook {
     high_volume_tools: Vec<String>,
     keep_most_recent: usize,
@@ -1048,7 +1048,7 @@ conversation.
 5. The agent continues with a drastically smaller context
 
 ```rust
-// extensions/hooks/src/compact.rs
+// extensions/compact/src/compact.rs
 pub const DEFAULT_COMPACT_CHARS: usize = 2_000_000;  // ~2M chars
 pub const DEFAULT_KEEP_LAST_N: usize = 10;
 
@@ -2001,7 +2001,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | See how TUI renders events | `bins/loomis/src/tui/` |
 | See how agent is assembled | `bins/loomis/src/agent_setup.rs` |
 | Understand SSE streaming | `core/deepseek/src/client.rs` |
-| Understand compaction | `extensions/hooks/src/compact.rs` |
+| Understand compaction | `extensions/compact/src/compact.rs` |
 | Understand subagents | `extensions/subagent/src/tool.rs` |
 | Understand the Tool trait | `core/tools/src/tool.rs` |
 | Understand the hook lifecycle | `core/engine/src/hooks.rs` |

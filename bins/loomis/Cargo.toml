@@ -18,7 +18,7 @@ deepseek = { path = "../../core/deepseek" }
 tools = { path = "../../core/tools" }
 memory = { path = "../../core/memory" }
 engine = { path = "../../core/engine" }
-hooks = { path = "../../extensions/hooks" }
+hooks = { path = "../../extensions/compact" }
 subagent = { path = "../../extensions/subagent" }
 observability = { path = "../../extensions/observability" }
 skills = { path = "../../extensions/skills" }
