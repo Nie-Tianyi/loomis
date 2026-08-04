@@ -36,35 +36,34 @@ Environment (loaded via `dotenvy` from `.env`, see `.env.example`):
 ## Architecture
 
 **Rust 2024** agent framework, Tokio async. Cargo workspace with
-`members = ["libs/*", "bins/*"]`. Uses native async fn in traits (RPITIT) —
+`members = ["core/*", "extensions/*", "bins/*"]`. Uses native async fn in traits (RPITIT) —
 do NOT use `async-trait`. Prefer sync traits for dyn-dispatch; keep async work
 in dedicated components.
 
 ### Crates & dependency graph
 
-```text
-provider          LLMClient trait, Message, Role, ToolCall, ToolDef,
-                  CompletionRequest/Response, ProviderError, Usage (no internal deps)
-deepseek          DeepSeekClient — SSE-streaming LLMClient impl
-tools             Tool trait (sync, Send+Sync), ToolRegistry, ProgressStream,
-                  ToolError, generate_schema
-tools-macros      #[tool] proc macro — generates Tool impl
-memory            Memory, SharedMemory, PendingHints, PersistenceConfig
-skills            SkillDef, SkillRegistry, ActiveSkills (no workspace deps)
-sandbox           SandboxConfig, FilesystemConfig, WorkspaceFs (Layer 1),
-                  ShellFilter (Layer 2), SandboxHook (Layer 3),
-                  EnvSanitizer (Layer 4), Watchdog (Layer 5),
-                  AuditLogger, ResourceTracker
-engine            Agent (ReAct loop), AgentBuilder, EngineContext, AgentHook,
-                  AgentEvent, ResponseRouter, block_on
-hooks             MicroCompactHook, MacroCompactHook<C>
-observability     TraceEvent, TraceStore (4096-entry ring buffer), RunMetrics
-subagent          SubagentTool<C>, SubagentConfig
-loomis (bin)      14 tools, 8 hooks, TUI, build_coding_agent()
-
-provider ← deepseek, tools, memory
-provider+tools+memory ← engine ← sandbox, hooks, observability ← subagent
-everything ← loomis (bin)
+```
+agent_oxide/
+├── Cargo.toml              # [workspace] — members = ["core/*", "extensions/*", "bins/*"]
+├── core/
+│   ├── provider/           # LLMClient trait + shared types
+│   ├── deepseek/           # DeepSeekClient — implements LLMClient
+│   ├── tools/              # Tool trait, ToolRegistry, WorkspaceFs, ProgressStream
+│   ├── tools-macros/       # #[tool] proc macro
+│   ├── memory/             # Memory buffer, PendingHints, conversation persistence
+│   └── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent, ResponseRouter
+├── extensions/
+│   ├── skills/             # SkillDef, SkillRegistry, ActiveSkills — skill discovery & loading
+│   ├── hooks/              # MicroCompactHook + MacroCompactHook
+│   ├── subagent/           # SubagentTool — spawn child agents as tools
+│   ├── observability/      # TraceEvent, TraceStore, RunMetrics — full-chain tracing
+│   └── sandbox/            # Sandbox runtime — WorkspaceFs, ShellFilter, SandboxHook, etc.
+├── bins/
+│   └── loomis/             # Binary — concrete tools, hooks, sandbox, TUI
+└── docs/
+    ├── beginner-developer-guide.md
+    ├── senior-developer-guide.md
+    └── sandbox-architecture.md
 ```
 
 ### The ReAct loop (engine)
@@ -127,7 +126,7 @@ Both run in `on_llm_start()`:
    them via the flash model through `engine::block_on`, inserts the summary
    as a System message.
 
-Key constants in `libs/hooks/src/compact.rs`: `DEFAULT_COMPACT_TOKEN_LIMIT`,
+Key constants in `extensions/hooks/src/compact.rs`: `DEFAULT_COMPACT_TOKEN_LIMIT`,
 `DEFAULT_COMPACT_CHAR_LIMIT`, `DEFAULT_KEEP_LAST_N`,
 `DEFAULT_KEEP_RECENT_TOOL_OUTPUTS`.
 

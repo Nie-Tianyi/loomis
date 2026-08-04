@@ -5,10 +5,10 @@ edition = "2024"
 description = "Subagent as Tool — spawn autonomous sub-agents for complex sub-tasks"
 
 [dependencies]
-provider = { path = "../provider" }
-tools = { path = "../tools" }
-engine = { path = "../engine" }
-memory = { path = "../memory" }
+provider = { path = "../../core/provider" }
+tools = { path = "../../core/tools" }
+engine = { path = "../../core/engine" }
+memory = { path = "../../core/memory" }
 observability = { path = "../observability" }
 tokio = { workspace = true }
 serde = { workspace = true }

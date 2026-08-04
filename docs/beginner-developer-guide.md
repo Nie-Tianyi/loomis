@@ -62,13 +62,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-engine = { path = "../../libs/engine" }
-deepseek = { path = "../../libs/deepseek" }
-tools = { path = "../../libs/tools" }
-tools-macros = { path = "../../libs/tools-macros" }
-memory = { path = "../../libs/memory" }
-hooks = { path = "../../libs/hooks" }
-provider = { path = "../../libs/provider" }
+engine = { path = "../../core/engine" }
+deepseek = { path = "../../core/deepseek" }
+tools = { path = "../../core/tools" }
+tools-macros = { path = "../../core/tools-macros" }
+memory = { path = "../../core/memory" }
+hooks = { path = "../../extensions/hooks" }
+provider = { path = "../../core/provider" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -868,9 +868,9 @@ in depth:
 | Sandbox system | `bins/loomis/src/sandbox/` | Full sandbox defense in depth |
 | TUI implementation | `bins/loomis/src/tui/` | ratatui-based terminal UI |
 | Agent assembly | `bins/loomis/src/agent_setup.rs` | How loomis wires everything |
-| Compaction hooks | `libs/hooks/src/` | MicroCompact and MacroCompact |
-| DeepSeek client | `libs/deepseek/src/` | SSE streaming implementation |
-| Engine core | `libs/engine/src/agent.rs` | The ReAct loop in full detail |
+| Compaction hooks | `extensions/hooks/src/` | MicroCompact and MacroCompact |
+| DeepSeek client | `core/deepseek/src/` | SSE streaming implementation |
+| Engine core | `core/engine/src/agent.rs` | The ReAct loop in full detail |
 
 ### Ideas for Your Next Project
 
@@ -890,4 +890,4 @@ in depth:
 ---
 
 **Happy building!**  If you have questions, check the [Senior Developer Guide](senior-developer-guide.md)
-or explore the source code in `libs/` and `bins/loomis/`.
+or explore the source code in `core/`, `extensions/`, and `bins/loomis/`.

@@ -5,6 +5,6 @@ edition = "2024"
 
 [dependencies]
 tracing = { workspace = true }
-provider = { path = "../provider" }
-engine = { path = "../engine" }
-memory = { path = "../memory" }
+provider = { path = "../../core/provider" }
+engine = { path = "../../core/engine" }
+memory = { path = "../../core/memory" }

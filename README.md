@@ -188,7 +188,7 @@ max_steps_per_session = 50   # 单次对话最多 50 轮
 max_concurrent_shells = 2    # 最多同时跑 2 个命令
 ```
 
-完整配置项请参考 [SandboxConfig](libs/tools/src/sandbox/config.rs)。
+完整配置项请参考 [SandboxConfig](extensions/sandbox/src/config.rs)。
 
 ---
 

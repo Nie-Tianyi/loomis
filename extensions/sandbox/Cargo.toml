@@ -5,9 +5,9 @@ edition = "2024"
 description = "Sandbox runtime components — command filtering, environment sanitization, resource tracking, audit logging, and configuration"
 
 [dependencies]
-engine = { path = "../engine" }
-memory = { path = "../memory" }
-provider = { path = "../provider" }
+engine = { path = "../../core/engine" }
+memory = { path = "../../core/memory" }
+provider = { path = "../../core/provider" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

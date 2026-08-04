@@ -36,18 +36,20 @@ async work in dedicated components.
 
 ```
 agent_oxide/
-├── Cargo.toml              # [workspace] — members = ["libs/*", "bins/*"]
-├── libs/
+├── Cargo.toml              # [workspace] — members = ["core/*", "extensions/*", "bins/*"]
+├── core/
 │   ├── provider/           # LLMClient trait + shared types
 │   ├── deepseek/           # DeepSeekClient — implements LLMClient
 │   ├── tools/              # Tool trait, ToolRegistry, WorkspaceFs, ProgressStream
 │   ├── tools-macros/       # #[tool] proc macro
 │   ├── memory/             # Memory buffer, PendingHints, conversation persistence
+│   └── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent, ResponseRouter
+├── extensions/
 │   ├── skills/             # SkillDef, SkillRegistry, ActiveSkills — skill discovery & loading
 │   ├── hooks/              # MicroCompactHook + MacroCompactHook
-│   ├── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent, ResponseRouter
 │   ├── subagent/           # SubagentTool — spawn child agents as tools
-│   └── observability/      # TraceEvent, TraceStore, RunMetrics — full-chain tracing
+│   ├── observability/      # TraceEvent, TraceStore, RunMetrics — full-chain tracing
+│   └── sandbox/            # Sandbox runtime — WorkspaceFs, ShellFilter, SandboxHook, etc.
 ├── bins/
 │   └── loomis/             # Binary — concrete tools, hooks, sandbox, TUI
 └── docs/
@@ -59,22 +61,24 @@ agent_oxide/
 ### Dependency graph
 
 ```text
-provider (no internal deps)
-    ↑
-    ├── deepseek ──────── (impl LLMClient)
-    ├── tools ─────────── (uses provider + tools-macros)
-    ├── memory ────────── (uses provider)
-    ├── skills ────────── (no workspace deps)
-    ↑
-    ├── engine ────────── (uses provider + tools + memory)
-    │       ↑
-    ├── hooks ─────────── (uses provider + memory + engine)
-    │       ↑
-    ├── observability ─── (uses provider + engine + memory)
-    │       ↑
-    ├── subagent ──────── (uses provider + tools + engine + memory + observability)
-    │       ↑
-    └── loomis (bin) ──── (uses all libs including skills)
+core/
+    provider (no internal deps)
+        ↑
+        ├── deepseek ──── (impl LLMClient)
+        ├── tools ─────── (uses provider + tools-macros)
+        ├── memory ────── (uses provider)
+        ↑
+        └── engine ────── (uses provider + tools + memory)
+                ↑
+extensions/
+    skills ────────────── (no internal deps)
+    hooks ─────────────── (uses provider + memory + engine)
+    observability ─────── (uses provider + engine + memory)
+    sandbox ───────────── (uses engine + memory + provider)
+    subagent ──────────── (uses provider + tools + engine + memory + observability)
+                ↑
+bins/
+    loomis ────────────── (uses all crates from core/ and extensions/)
 ```
 
 ## Key patterns
@@ -193,7 +197,7 @@ System messages. Three components work together:
 
 | Component | Crate | Role |
 | --- | --- | --- |
-| `SkillRegistry` | `libs/skills` | Discover + parse `.md` skill files (YAML frontmatter + body) from skill directories |
+| `SkillRegistry` | `extensions/skills` | Discover + parse `.md` skill files (YAML frontmatter + body) from skill directories |
 | `SkillTool` | `bins/loomis` | Tool (`name = "skill"`) — loaded as System message, gives the agent the skill's instructions |
 | `SkillHook` | `bins/loomis` | Maintains `[SKILL: name]` System messages in memory, synced with `ActiveSkills` |
 

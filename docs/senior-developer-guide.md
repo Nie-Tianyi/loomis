@@ -29,15 +29,19 @@
 
 ```
 agent_oxide/
-├── Cargo.toml              # [workspace] — members = ["libs/*", "bins/*"]
-├── libs/
+├── Cargo.toml              # [workspace] — members = ["core/*", "extensions/*", "bins/*"]
+├── core/
 │   ├── provider/           # LLMClient trait + shared types
 │   ├── deepseek/           # DeepSeekClient — implements LLMClient
-│   ├── tools/              # Tool trait, ToolRegistry, WorkspaceFs sandbox
+│   ├── tools/              # Tool trait, ToolRegistry
 │   ├── tools-macros/       # #[tool] proc macro — generates Tool trait impls
 │   ├── memory/             # Memory (Vec<Message> buffer), persistence I/O
+│   └── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent
+├── extensions/
 │   ├── hooks/              # MicroCompactHook, MacroCompactHook
-│   ├── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent
+│   ├── observability/      # TraceEvent, TraceStore, RunMetrics
+│   ├── sandbox/            # WorkspaceFs, ShellFilter, SandboxHook, etc.
+│   ├── skills/             # SkillDef, SkillRegistry, ActiveSkills
 │   └── subagent/           # SubagentTool — spawn child agents as tools
 └── bins/
     └── loomis/             # Binary — tools, sandbox, hooks, TUI, main.rs
@@ -65,27 +69,27 @@ provider ───────────────────────�
 
 | Crate | Key Type | Role | Location |
 |---|---|---|---|
-| `provider` | `LLMClient` | Abstraction over LLM APIs | `libs/provider/src/lib.rs` |
-| `provider` | `Message`, `Role`, `ToolCall`, `ToolDef` | Conversation primitives | `libs/provider/src/types.rs` |
-| `provider` | `CompletionRequest`, `CompletionResponse` | API request/response types | `libs/provider/src/types.rs` |
-| `provider` | `StreamChunk`, `Delta` | SSE streaming primitives | `libs/provider/src/types.rs` |
-| `deepseek` | `DeepSeekClient` | Concrete LLMClient impl | `libs/deepseek/src/lib.rs` |
-| `tools` | `Tool` | Trait — sync, Send+Sync, object-safe | `libs/tools/src/tool.rs` |
-| `tools` | `ToolRegistry` | Name-indexed tool collection | `libs/tools/src/registry.rs` |
-| `tools` | `Progress`, `ProgressStream` | Tool output streaming | `libs/tools/src/progress.rs` |
-| `tools` | `WorkspaceFs` | Sandboxed filesystem | `libs/tools/src/sandbox/` |
-| `tools` | `SandboxConfig` | Security policy (TOML) | `libs/tools/src/sandbox/config.rs` |
-| `tools-macros` | `#[tool]` | Proc macro codegen | `libs/tools-macros/src/lib.rs` |
-| `memory` | `Memory`, `SharedMemory` | Conversation buffer | `libs/memory/src/memory.rs` |
-| `hooks` | `MicroCompactHook` | Tool-output clearing | `libs/hooks/src/compact.rs` |
-| `hooks` | `MacroCompactHook<C>` | LLM summarisation | `libs/hooks/src/compact.rs` |
-| `engine` | `Agent` | ReAct loop runner | `libs/engine/src/agent.rs` |
-| `engine` | `AgentEvent` | Unified event stream (single channel) | `libs/engine/src/events.rs` |
-| `engine` | `AgentHook` | 10-callback lifecycle trait | `libs/engine/src/hooks.rs` |
-| `engine` | `EngineContext` | Agent dependencies (advanced API) | `libs/engine/src/context.rs` |
-| `engine` | `InterveneRequest`, `InterveneResponse` | User-interaction protocol | `libs/engine/src/events.rs` |
-| `subagent` | `SubagentTool<C>` | Child agent as a Tool | `libs/subagent/src/tool.rs` |
-| `subagent` | `SubagentConfig` | Child agent policy | `libs/subagent/src/config.rs` |
+| `provider` | `LLMClient` | Abstraction over LLM APIs | `core/provider/src/lib.rs` |
+| `provider` | `Message`, `Role`, `ToolCall`, `ToolDef` | Conversation primitives | `core/provider/src/types.rs` |
+| `provider` | `CompletionRequest`, `CompletionResponse` | API request/response types | `core/provider/src/types.rs` |
+| `provider` | `StreamChunk`, `Delta` | SSE streaming primitives | `core/provider/src/types.rs` |
+| `deepseek` | `DeepSeekClient` | Concrete LLMClient impl | `core/deepseek/src/lib.rs` |
+| `tools` | `Tool` | Trait — sync, Send+Sync, object-safe | `core/tools/src/tool.rs` |
+| `tools` | `ToolRegistry` | Name-indexed tool collection | `core/tools/src/registry.rs` |
+| `tools` | `Progress`, `ProgressStream` | Tool output streaming | `core/tools/src/progress.rs` |
+| `sandbox` | `WorkspaceFs` | Sandboxed filesystem | `extensions/sandbox/src/fs.rs` |
+| `sandbox` | `SandboxConfig` | Security policy (TOML) | `extensions/sandbox/src/config.rs` |
+| `tools-macros` | `#[tool]` | Proc macro codegen | `core/tools-macros/src/lib.rs` |
+| `memory` | `Memory`, `SharedMemory` | Conversation buffer | `core/memory/src/memory.rs` |
+| `hooks` | `MicroCompactHook` | Tool-output clearing | `extensions/hooks/src/compact.rs` |
+| `hooks` | `MacroCompactHook<C>` | LLM summarisation | `extensions/hooks/src/compact.rs` |
+| `engine` | `Agent` | ReAct loop runner | `core/engine/src/agent.rs` |
+| `engine` | `AgentEvent` | Unified event stream (single channel) | `core/engine/src/events.rs` |
+| `engine` | `AgentHook` | 10-callback lifecycle trait | `core/engine/src/hooks.rs` |
+| `engine` | `EngineContext` | Agent dependencies (advanced API) | `core/engine/src/context.rs` |
+| `engine` | `InterveneRequest`, `InterveneResponse` | User-interaction protocol | `core/engine/src/events.rs` |
+| `subagent` | `SubagentTool<C>` | Child agent as a Tool | `extensions/subagent/src/tool.rs` |
+| `subagent` | `SubagentConfig` | Child agent policy | `extensions/subagent/src/config.rs` |
 
 ### Design Decisions
 
@@ -116,7 +120,7 @@ shared memory across agents, custom compaction setup).
 ### Trait Definition
 
 ```rust
-// libs/provider/src/lib.rs
+// core/provider/src/lib.rs
 use crate::CompletionRequest;
 use crate::CompletionResponse;
 use crate::ProviderError;
@@ -143,7 +147,7 @@ This is Rust 2024 native `async fn` in traits (RPITIT) — **no `#[async_trait]`
 ### Key Types
 
 ```rust
-// libs/provider/src/types.rs
+// core/provider/src/types.rs
 
 pub struct CompletionRequest {
     pub model: String,
@@ -399,7 +403,7 @@ impl LLMClient for AnthropicClient {
 ### Error Handling
 
 ```rust
-// libs/provider/src/lib.rs
+// core/provider/src/lib.rs
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
     #[error("HTTP error: {0}")]
@@ -449,7 +453,7 @@ While `#[tool]` covers 95% of cases, manual implementation gives you full contro
 The trait is sync and object-safe:
 
 ```rust
-// libs/tools/src/tool.rs
+// core/tools/src/tool.rs
 use serde_json::Value;
 use crate::{ProgressStream, ToolError};
 
@@ -522,7 +526,7 @@ impl Tool for MyTool {
 ### `ProgressStream` Internals
 
 ```rust
-// libs/tools/src/progress.rs
+// core/tools/src/progress.rs
 
 pub enum Progress {
     /// Non-terminal update from a long-running tool.
@@ -575,7 +579,7 @@ fn execute_stream(&self, args: MyArgs) -> Result<ProgressStream, ToolError> {
 ### `ToolError`
 
 ```rust
-// libs/tools/src/lib.rs
+// core/tools/src/lib.rs
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
     #[error("Invalid arguments: {0}")]
@@ -634,7 +638,7 @@ share across agents (e.g., parent agent and subagents).
 ### Full Trait Definition
 
 ```rust
-// libs/engine/src/hooks.rs
+// core/engine/src/hooks.rs
 use memory::SharedMemory;
 use provider::{Message, ProviderError};
 use crate::{CallOrigin, InterveneRequest, InterveneResponse, RunOutcome};
@@ -946,7 +950,7 @@ The two APIs are interchangeable — choose `Agent::builder()` for simplicity,
 ### Memory Internals
 
 ```rust
-// libs/memory/src/memory.rs
+// core/memory/src/memory.rs
 pub struct Memory {
     pub messages: Vec<Message>,
     pub last_usage: Option<Usage>,
@@ -984,7 +988,7 @@ unparseable) — the messages remain in the conversation (tool call ID
 pairing is preserved), but the content is pruned.
 
 ```rust
-// libs/hooks/src/compact.rs
+// extensions/hooks/src/compact.rs
 pub struct MicroCompactHook {
     high_volume_tools: Vec<String>,
     keep_most_recent: usize,
@@ -1044,7 +1048,7 @@ conversation.
 5. The agent continues with a drastically smaller context
 
 ```rust
-// libs/hooks/src/compact.rs
+// extensions/hooks/src/compact.rs
 pub const DEFAULT_COMPACT_CHARS: usize = 2_000_000;  // ~2M chars
 pub const DEFAULT_KEEP_LAST_N: usize = 10;
 
@@ -1155,7 +1159,7 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
 ### Complete `AgentEvent` Enum
 
 ```rust
-// libs/engine/src/events.rs
+// core/engine/src/events.rs
 pub enum AgentEvent {
     /// Run is starting. user_input is the original user question.
     RunStarted { user_input: String },
@@ -1991,18 +1995,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Want to... | Read this file |
 |---|---|
-| Understand the ReAct loop | `libs/engine/src/agent.rs` |
+| Understand the ReAct loop | `core/engine/src/agent.rs` |
 | See how tools are defined | `bins/loomis/src/tools/calculator.rs` |
 | See how sandbox works | `bins/loomis/src/sandbox/` |
 | See how TUI renders events | `bins/loomis/src/tui/` |
 | See how agent is assembled | `bins/loomis/src/agent_setup.rs` |
-| Understand SSE streaming | `libs/deepseek/src/client.rs` |
-| Understand compaction | `libs/hooks/src/compact.rs` |
-| Understand subagents | `libs/subagent/src/tool.rs` |
-| Understand the Tool trait | `libs/tools/src/tool.rs` |
-| Understand the hook lifecycle | `libs/engine/src/hooks.rs` |
-| Understand events | `libs/engine/src/events.rs` |
-| Understand sandbox config | `libs/tools/src/sandbox/config.rs` |
+| Understand SSE streaming | `core/deepseek/src/client.rs` |
+| Understand compaction | `extensions/hooks/src/compact.rs` |
+| Understand subagents | `extensions/subagent/src/tool.rs` |
+| Understand the Tool trait | `core/tools/src/tool.rs` |
+| Understand the hook lifecycle | `core/engine/src/hooks.rs` |
+| Understand events | `core/engine/src/events.rs` |
+| Understand sandbox config | `extensions/sandbox/src/config.rs` |
 
 ### D. Glossary
 

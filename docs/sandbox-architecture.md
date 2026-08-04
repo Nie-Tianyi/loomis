@@ -12,7 +12,7 @@
 
 ## 第零步：Agent Loop 调度
 
-代码位置：[`libs/engine/src/agent.rs`](../libs/engine/src/agent.rs#L217-L269)
+代码位置：[`core/engine/src/agent.rs`](../core/engine/src/agent.rs#L217-L269)
 ![Agent Loop权限检查流程](./assets/sandbox.png)
 
 当前注册的唯一 Hook 是 `SandboxHook`
@@ -21,7 +21,7 @@
 
 ## 第一步：SandboxHook::before_tool_call()
 
-代码位置：[`libs/sandbox/src/sandbox_hook.rs`](../libs/sandbox/src/sandbox_hook.rs)
+代码位置：[`extensions/sandbox/src/sandbox_hook.rs`](../extensions/sandbox/src/sandbox_hook.rs)
 
 ![before_tool_call工具调用权限检查](./assets/pre-hook.png)
 
@@ -48,7 +48,7 @@
 
 ![文件工具权限检查](./assets/toolcall.png)
 
-代码位置：[`libs/sandbox/src/fs.rs`](../libs/sandbox/src/fs.rs)
+代码位置：[`extensions/sandbox/src/fs.rs`](../extensions/sandbox/src/fs.rs)
 
 ### Shell 工具 (shell)
 

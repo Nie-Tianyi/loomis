@@ -13,15 +13,15 @@ name = "loomis"
 path = "src/lib.rs"
 
 [dependencies]
-provider = { path = "../../libs/provider" }
-deepseek = { path = "../../libs/deepseek" }
-tools = { path = "../../libs/tools" }
-memory = { path = "../../libs/memory" }
-engine = { path = "../../libs/engine" }
-hooks = { path = "../../libs/hooks" }
-subagent = { path = "../../libs/subagent" }
-observability = { path = "../../libs/observability" }
-skills = { path = "../../libs/skills" }
+provider = { path = "../../core/provider" }
+deepseek = { path = "../../core/deepseek" }
+tools = { path = "../../core/tools" }
+memory = { path = "../../core/memory" }
+engine = { path = "../../core/engine" }
+hooks = { path = "../../extensions/hooks" }
+subagent = { path = "../../extensions/subagent" }
+observability = { path = "../../extensions/observability" }
+skills = { path = "../../extensions/skills" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -32,7 +32,7 @@ crossterm = { workspace = true }
 unicode-width = { workspace = true }
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
-sandbox = { path = "../../libs/sandbox" }
+sandbox = { path = "../../extensions/sandbox" }
 schemars = { workspace = true }
 glob = { workspace = true }
 tracing = { workspace = true }
