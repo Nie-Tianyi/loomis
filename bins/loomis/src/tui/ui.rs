@@ -86,10 +86,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Place the hardware cursor inside the input area. `metrics.cursor_col`
-    // already includes the 2-col prompt prefix on row 0; subtract the
-    // scroll offset so the cursor follows the visible window.
+    // already includes the 2-col prompt prefix on row 0; add only the 1-col
+    // left border. Subtract the scroll offset so the cursor follows the
+    // visible window.
     frame.set_cursor_position((
-        layout[1].x + 2 + metrics.cursor_col as u16,
+        layout[1].x + 1 + metrics.cursor_col as u16,
         layout[1].y
             + 1
             + (metrics.cursor_row as u16).saturating_sub(app.input_scroll_offset as u16),
@@ -1046,6 +1047,9 @@ fn build_input_lines(input: &str, cursor: usize, cursor_style: Style, width: u16
     let mut lines: Vec<Line<'_>> = Vec::new();
 
     let mut line_start = 0usize;
+    // Only one chunk can carry the cursor (mirrors `input_metrics`); once
+    // rendered, later chunks on the same logical line stay plain.
+    let mut found = false;
     while line_start <= input.len() {
         let rel_end = input[line_start..]
             .find('\n')
@@ -1073,17 +1077,21 @@ fn build_input_lines(input: &str, cursor: usize, cursor_style: Style, width: u16
                 }
                 let chunk_end = offset + chunk.len();
                 // The cursor belongs to this chunk when it sits strictly
-                // inside it, or exactly at its end when that end is the end
-                // of the logical line (a mid-line boundary belongs to the
-                // next chunk, whose row starts there).
-                let cursor_in_chunk =
-                    cursor_here && (cursor_in_line < chunk_end || chunk_end == line.len());
+                // inside it (and not in an earlier chunk), or exactly at its
+                // end when that end is the end of the logical line (a
+                // mid-line boundary belongs to the next chunk, whose row
+                // starts there).
+                let cursor_in_chunk = cursor_here
+                    && !found
+                    && cursor_in_line >= offset
+                    && (cursor_in_line < chunk_end || chunk_end == line.len());
 
                 let mut spans: Vec<Span<'_>> = Vec::new();
                 if first_row {
                     spans.push(prefix_span());
                 }
                 if cursor_in_chunk {
+                    found = true;
                     spans.push(Span::raw(&line[offset..cursor_in_line]));
                     if cursor_in_line < chunk_end {
                         let ch = line[cursor_in_line..].chars().next().unwrap_or(' ');
@@ -1094,7 +1102,30 @@ fn build_input_lines(input: &str, cursor: usize, cursor_style: Style, width: u16
                         }
                     } else {
                         // Cursor at end of the logical line — trailing space.
+                        // The hardware cursor sits on this cell. If the last
+                        // character was wide (CJK, 2 terminal columns), also
+                        // restyle the cell to its right with a visually-blank
+                        // style: that cell carried the wide char's right half,
+                        // and without a change there the buffer diff would
+                        // skip it, leaving a ghost half-character on the
+                        // terminal after the char is deleted. (A wide char is
+                        // itself rewritten over both columns; only the narrow
+                        // trailing space needs this.)
                         spans.push(Span::styled(" ", cursor_style));
+                        let prev_w = line[..cursor_in_line]
+                            .chars()
+                            .next_back()
+                            .map(|c| {
+                                let mut b = [0u8; 4];
+                                UnicodeWidthStr::width(c.encode_utf8(&mut b))
+                            })
+                            .unwrap_or(1);
+                        if prev_w >= 2 {
+                            spans.push(Span::styled(
+                                " ",
+                                Style::default().fg(theme::TEXT_SECONDARY),
+                            ));
+                        }
                     }
                 } else {
                     spans.push(Span::raw(chunk));
@@ -1610,9 +1641,13 @@ fn input_metrics(input: &str, cursor: usize, width: u16) -> InputMetrics {
                 }
                 let chunk_end = offset + chunk.len();
                 // Same rule as build_input_lines: the cursor belongs to this
-                // chunk when strictly inside it, or at its end when that end
-                // is the end of the logical line.
-                if cursor_here && !found && (cursor_in_line < chunk_end || chunk_end == line.len())
+                // chunk when strictly inside it (and not in an earlier
+                // chunk), or at its end when that end is the end of the
+                // logical line.
+                if cursor_here
+                    && !found
+                    && cursor_in_line >= offset
+                    && (cursor_in_line < chunk_end || chunk_end == line.len())
                 {
                     found = true;
                     cursor_row = rows;
@@ -1871,6 +1906,7 @@ mod tests {
             ("0123456789abc", 13, 10),
             ("0123456789abc", 8, 10),
             ("0123456789abc", 9, 10),
+            ("0123456789abcdef", 3, 10), // cursor in first chunk of a 2-chunk line
             ("ab\ncd", 5, 80),
             ("a\n", 2, 80),
             ("你好世界", 12, 4),
@@ -1918,7 +1954,167 @@ mod tests {
         assert_eq!(lines[1].spans.last().unwrap().content.as_ref(), " ");
     }
 
-    // ── wrap_to_width / split_at_display_width tests ────────────
+    #[test]
+    fn test_build_input_lines_cursor_in_non_terminal_wrapped_chunk() {
+        // Regression: a cursor in an early chunk must NOT bleed into later
+        // chunks of the same wrapped line (missing lower-bound check caused
+        // `line[offset..cursor]` slice panics and phantom cursor highlights).
+        let style = Style::default().bg(ratatui::style::Color::Red);
+        // width=10 → first_cap=8, w=10. 16 chars → two chunks:
+        // "01234567" + "89abcdef". Cursor at byte 3 belongs to chunk 1 only.
+        let lines = build_input_lines("0123456789abcdef", 3, style, 10);
+        assert_eq!(lines.len(), 2);
+        // Row 0: prefix, "012", highlighted "3", "4567".
+        assert_eq!(lines[0].spans.len(), 4, "first chunk should have cursor");
+        assert_eq!(lines[0].spans[2].content.as_ref(), "3");
+        assert_eq!(lines[0].spans[2].style.bg, Some(ratatui::style::Color::Red));
+        // Row 1 must be entirely plain — no cursor highlight.
+        let second_has_cursor = lines[1]
+            .spans
+            .iter()
+            .any(|s| s.style.bg == Some(ratatui::style::Color::Red));
+        assert!(!second_has_cursor, "second chunk should not have cursor");
+    }
+
+    #[test]
+    fn test_input_metrics_cjk_cursor_col_with_prefix() {
+        // `cursor_col` includes the 2-col prompt prefix on row 0; the
+        // hardware cursor formula adds only the 1-col border on top.
+        let m = input_metrics("你好", "你好".len(), 80);
+        assert_eq!(m.rows, 1);
+        assert_eq!(m.cursor_row, 0);
+        assert_eq!(m.cursor_col, 2 + 4); // 2 prefix + 4 CJK display cols
+
+        // Cursor after "你" (2 display cols): 2 prefix + 2 = 4.
+        let m = input_metrics("你好", "你".len(), 80);
+        assert_eq!(m.cursor_col, 2 + 2);
+    }
+
+    #[test]
+    fn test_build_input_lines_cjk_delete_scenario() {
+        // Post-Delete state: was "你好世界" (12 bytes), Delete at byte 3
+        // removed "好", leaving "你世界" (9 bytes) with the cursor still at
+        // byte 3 — now on "世". The cursor highlight must land on "世".
+        let style = Style::default().bg(ratatui::style::Color::Red);
+        let lines = build_input_lines("你世界", 3, style, 80);
+        assert_eq!(lines.len(), 1);
+        let spans = &lines[0].spans;
+        // prefix, "你", highlighted "世", "界"
+        assert_eq!(spans.len(), 4);
+        assert_eq!(spans[2].content.as_ref(), "世");
+        assert_eq!(spans[2].style.bg, Some(ratatui::style::Color::Red));
+        assert_eq!(spans[3].content.as_ref(), "界");
+    }
+
+    #[test]
+    fn test_build_input_lines_wide_char_trailing_ghost_guard() {
+        // Regression: deleting the last CJK char leaves the wide char's
+        // right-half cell unchanged in the buffer, so ratatui's diff skips
+        // it and the terminal shows a ghost half-character under the cursor
+        // block. The trailing-space cursor must restyle that cell (visually
+        // blank) to force a redraw. ASCII (1-col) trailing cursors stay one
+        // cell — no guard needed.
+        let style = Style::default().bg(ratatui::style::Color::Red);
+
+        // CJK end-of-line: cursor space + ghost-guard cell.
+        let lines = build_input_lines("你好世", 9, style, 80);
+        let spans = &lines[0].spans;
+        assert_eq!(spans.len(), 4); // prefix, 你好世, cursor " ", guard " "
+        assert_eq!(spans[2].content.as_ref(), " ");
+        assert_eq!(spans[2].style.bg, Some(ratatui::style::Color::Red));
+        assert_eq!(spans[3].content.as_ref(), " ");
+        // The guard is visually blank (no bg) but carries a fg so the
+        // buffer cell differs from the plain " " it replaces.
+        assert_eq!(spans[3].style.bg, None);
+        assert_ne!(spans[3].style.fg, None);
+
+        // ASCII end-of-line: cursor space only, no guard.
+        let lines = build_input_lines("hell", 4, style, 80);
+        let spans = &lines[0].spans;
+        assert_eq!(spans.len(), 3); // prefix, hell, cursor " "
+        assert_eq!(spans[2].content.as_ref(), " ");
+
+        // Cursor mid-string (on a CJK char): no trailing space at all.
+        let lines = build_input_lines("你好世界", 3, style, 80);
+        let spans = &lines[0].spans;
+        assert_eq!(spans.len(), 4); // prefix, 你, cursor 好, 世界
+    }
+
+    #[test]
+    fn test_cjk_delete_clears_wide_char_trailing_cell() {
+        use memory::{PendingHints, PersistenceConfig};
+        use observability::TraceStore;
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        use std::path::PathBuf;
+        use std::sync::{Arc, RwLock};
+
+        fn make_app() -> App {
+            let memory = Arc::new(RwLock::new(memory::Memory::new()));
+            let pending_hints = PendingHints::default();
+            let todos = Arc::new(RwLock::new(Vec::<crate::tools::TodoItem>::new()));
+            let trace_store = Arc::new(TraceStore::new());
+            let plan_mode = Arc::new(crate::hooks::PlanModeState::default());
+            let plan_dir = PathBuf::from(".loomis/plan");
+            let skill_registry = Arc::new(skills::SkillRegistry::empty());
+            let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
+            let shell_filter = sandbox::shell_filter::ShellFilter::from_config(
+                &sandbox::SandboxConfig::default(),
+            );
+            App::new(
+                "test-model",
+                memory,
+                vec!["echo".into(), "ls".into()],
+                todos,
+                PathBuf::from("."),
+                pending_hints,
+                PersistenceConfig::default(),
+                trace_store,
+                plan_mode,
+                plan_dir,
+                skill_registry,
+                active_skills,
+                shell_filter,
+            )
+        }
+
+        // Full-frame check: rendering "你好世界" with the cursor before the
+        // last char, then deleting it, must leave the cell to the right of
+        // the trailing cursor space changed — ratatui's diff redraws it and
+        // the terminal clears the wide char's ghost right half.
+        let mut app = make_app();
+        app.input = "你好世界".into();
+        app.input_cursor = 9; // cursor before "界"
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let before = terminal.backend().buffer().cell((9, 19)).unwrap().clone();
+
+        // Simulate Delete at cursor 9 (drain bytes 9..12 = "界").
+        // cursor stays 9 = end of "你好世".
+        app.input.drain(9..12);
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let after_cursor = buf.cell((9, 19)).unwrap().clone();
+        let after_right = buf.cell((10, 19)).unwrap().clone();
+
+        // Cursor cell: was the wide char, now the trailing space.
+        assert_eq!(after_cursor.symbol(), " ");
+        assert!(after_cursor.style().bg.is_some());
+        // Right-half cell must differ from the pre-delete frame so the
+        // diff redraws it (previously identical → ghost left behind).
+        assert_ne!(
+            after_right.style().fg,
+            before.style().fg,
+            "wide char's right-half cell must change to force a redraw"
+        );
+        assert_eq!(after_right.symbol(), " ");
+        assert_ne!(
+            after_right.style().bg,
+            Some(ratatui::style::Color::Red),
+            "guard cell stays visually blank (no cursor background)"
+        );
+    }
 
     #[test]
     fn test_split_at_display_width_empty() {
