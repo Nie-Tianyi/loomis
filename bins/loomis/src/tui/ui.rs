@@ -2044,8 +2044,8 @@ mod tests {
     fn test_cjk_delete_clears_wide_char_trailing_cell() {
         use memory::{PendingHints, PersistenceConfig};
         use observability::TraceStore;
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
         use std::path::PathBuf;
         use std::sync::{Arc, RwLock};
 
@@ -2058,9 +2058,8 @@ mod tests {
             let plan_dir = PathBuf::from(".loomis/plan");
             let skill_registry = Arc::new(skills::SkillRegistry::empty());
             let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
-            let shell_filter = sandbox::shell_filter::ShellFilter::from_config(
-                &sandbox::SandboxConfig::default(),
-            );
+            let shell_filter =
+                sandbox::shell_filter::ShellFilter::from_config(&sandbox::SandboxConfig::default());
             App::new(
                 "test-model",
                 memory,
