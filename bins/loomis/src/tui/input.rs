@@ -767,9 +767,17 @@ impl App {
     /// Handles slash commands that don't need the agent. Returns
     /// `Some(TuiCommand)` when the command needs agent-thread action.
     fn handle_slash_command(&mut self, input: &str) -> Option<Option<TuiCommand>> {
-        // ── Prefix commands (have arguments) ──
-        if let Some(name) = input.strip_prefix("/save ") {
-            let name = name.trim();
+        // Split the command name from any trailing text so "/plan <text>"
+        // and "/init <text>" are recognized as commands instead of silently
+        // becoming chat messages (Nielsen #5: error prevention).
+        let (cmd, rest) = match input.split_once(char::is_whitespace) {
+            Some((c, r)) => (c, r.trim()),
+            None => (input, ""),
+        };
+
+        // ── Argument-taking commands ──
+        if cmd == "/save" {
+            let name = rest;
             if name.is_empty() || !is_valid_thread_name(name) {
                 self.messages.push(ChatMessage::System {
                     content: "Usage: /save <name>  —  name must not contain control characters or any of: / \\ : * ? \" < > |".into(),
@@ -805,18 +813,17 @@ impl App {
             return Some(None);
         }
 
-        if let Some(name) = input.strip_prefix("/resume ") {
-            let name = name.trim();
-            if name.is_empty() {
+        if cmd == "/resume" {
+            if rest.is_empty() {
                 self.open_thread_picker();
                 return Some(None);
             }
-            return Some(self.do_resume(name));
+            return Some(self.do_resume(rest));
         }
 
         // ── /skill <name> — load a named skill ──
-        if let Some(name) = input.strip_prefix("/skill ") {
-            let name = name.trim();
+        if cmd == "/skill" {
+            let name = rest;
             if name.is_empty() {
                 let available = self.skill_registry.names().join(", ");
                 let content = if available.is_empty() {
@@ -859,8 +866,8 @@ impl App {
             return Some(None);
         }
 
-        // ── Exact-match commands ──
-        match input {
+        // ── Commands that take no arguments (or ignore them) ──
+        match cmd {
             "/exit" => {
                 self.should_quit = true;
                 Some(Some(TuiCommand::Exit))
@@ -894,11 +901,15 @@ impl App {
             }
 
             "/plan" => {
-                let new_state = !self.plan_mode.active.load(Ordering::SeqCst);
+                // "/plan <text>" means "enter plan mode and make this plan" —
+                // the text is forwarded to the agent; a bare "/plan" keeps
+                // its documented toggle behaviour.
+                let was_active = self.plan_mode.active.load(Ordering::SeqCst);
+                let new_state = if rest.is_empty() { !was_active } else { true };
                 self.plan_mode.active.store(new_state, Ordering::SeqCst);
 
                 let plan_path = self.workspace_root.join(".loomis").join("plan.md");
-                let content = if new_state {
+                let content = if new_state && !was_active {
                     // Ensure the .loomis directory exists.
                     if let Some(parent) = plan_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
@@ -907,15 +918,26 @@ impl App {
                         "Plan mode activated. Plan file: {}\nUse /plan again to deactivate, or /approve to exit plan mode.",
                         plan_path.display()
                     )
-                } else {
+                } else if !new_state {
                     "Plan mode deactivated. Full access restored.".into()
+                } else {
+                    // "/plan <text>" while already in plan mode — the request
+                    // is forwarded below; no state-change announcement.
+                    String::new()
                 };
 
-                self.messages.push(ChatMessage::System {
-                    content,
-                    timestamp: ChatMessage::now_timestamp(),
-                });
-                Some(None)
+                if !content.is_empty() {
+                    self.messages.push(ChatMessage::System {
+                        content,
+                        timestamp: ChatMessage::now_timestamp(),
+                    });
+                }
+
+                if rest.is_empty() {
+                    Some(None)
+                } else {
+                    Some(Some(TuiCommand::RunAgent(rest.to_string())))
+                }
             }
 
             "/approve" => {
@@ -958,7 +980,7 @@ impl App {
                 Some(None)
             }
 
-            "/resume" | "/threads" => {
+            "/threads" => {
                 self.open_thread_picker();
                 Some(None)
             }
@@ -997,6 +1019,13 @@ impl App {
 
             "/init" => {
                 let init_prompt = include_str!("../../prompts/init.md");
+                // Trailing text is appended as an additional instruction —
+                // "/init 记得带上日志" tells the agent what to focus on.
+                let prompt = if rest.is_empty() {
+                    init_prompt.to_string()
+                } else {
+                    format!("{init_prompt}\n\n### Additional instruction from the user\n\n{rest}")
+                };
                 self.messages.push(ChatMessage::System {
                     content: "Initializing project documentation…\n\
                               I'll explore the codebase, ask a few questions, \
@@ -1004,7 +1033,7 @@ impl App {
                         .into(),
                     timestamp: ChatMessage::now_timestamp(),
                 });
-                Some(Some(TuiCommand::RunAgent(init_prompt.to_string())))
+                Some(Some(TuiCommand::RunAgent(prompt)))
             }
 
             "/help" => {
@@ -1024,8 +1053,10 @@ impl App {
                     "Commands:",
                     "  /exit          — quit",
                     "  /new           — start a new conversation",
-                    "  /init          — initialize or update project rules (LOOMIS.md)",
-                    "  /plan          — toggle plan mode (read-only research & planning)",
+                    "  /init [text]   — initialize or update project rules (LOOMIS.md);",
+                    "                    text = extra instruction for the init agent",
+                    "  /plan [text]   — toggle plan mode (read-only research & planning);",
+                    "                    with text, enter plan mode and make the plan",
                     "  /approve       — approve plan and exit plan mode",
                     "  /save <name>   — save conversation as a named thread",
                     "  /resume [name] — restore a thread (no name = picker)",

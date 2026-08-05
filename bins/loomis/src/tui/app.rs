@@ -942,6 +942,64 @@ mod tests {
     }
 
     #[test]
+    fn test_slash_plan_with_text_activates_and_runs_agent() {
+        let mut app = make_app();
+        app.input = "/plan 帮我出份计划".into();
+        app.input_cursor = app.input.len();
+
+        let result = submit_via_enter(&mut app);
+        // Trailing text must still be recognized as the /plan command: plan
+        // mode is activated and the text is forwarded to the agent.
+        assert!(
+            app.plan_mode
+                .active
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        match result {
+            Some(TuiCommand::RunAgent(msg)) => assert_eq!(msg, "帮我出份计划"),
+            other => panic!("expected RunAgent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_slash_plan_bare_still_toggles() {
+        let mut app = make_app();
+        app.input = "/plan".into();
+        app.input_cursor = 5;
+        assert!(submit_via_enter(&mut app).is_none());
+        assert!(
+            app.plan_mode
+                .active
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+
+        app.input = "/plan".into();
+        app.input_cursor = 5;
+        assert!(submit_via_enter(&mut app).is_none());
+        assert!(
+            !app.plan_mode
+                .active
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+
+    #[test]
+    fn test_slash_init_with_text_appends_instruction() {
+        let mut app = make_app();
+        app.input = "/init 记得带上日志".into();
+        app.input_cursor = app.input.len();
+
+        let result = submit_via_enter(&mut app);
+        match result {
+            Some(TuiCommand::RunAgent(prompt)) => {
+                assert!(prompt.contains("INIT MODE"));
+                assert!(prompt.contains("记得带上日志"));
+            }
+            other => panic!("expected RunAgent, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_normal_message_returns_run_agent() {
         let mut app = make_app();
         app.input = "hello".into();

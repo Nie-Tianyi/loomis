@@ -177,13 +177,13 @@ pub static SLASH_COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "init",
-        usage: "/init",
-        desc: "Initialize project rules (LOOMIS.md)",
+        usage: "/init [text]",
+        desc: "Initialize project rules (LOOMIS.md); text = extra instruction",
     },
     CommandInfo {
         name: "plan",
-        usage: "/plan",
-        desc: "Toggle plan mode",
+        usage: "/plan [text]",
+        desc: "Toggle plan mode; with text, enter plan mode and make the plan",
     },
     CommandInfo {
         name: "approve",
