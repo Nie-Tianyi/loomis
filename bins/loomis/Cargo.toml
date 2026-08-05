@@ -39,6 +39,7 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 arboard = { workspace = true }
+time = { version = "0.3", features = ["local-offset"] }
 
 [dev-dependencies]
 futures-executor = { workspace = true }

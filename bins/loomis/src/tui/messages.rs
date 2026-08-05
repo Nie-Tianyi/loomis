@@ -59,16 +59,36 @@ pub enum ChatMessage {
     Error { content: String, timestamp: String },
 }
 
+/// Returns the local timezone's offset from UTC in seconds.
+/// Positive = east of UTC (e.g., +28800 for UTC+8).
+/// Cross-platform (Windows / macOS / Linux) and DST-aware via the `time`
+/// crate (already in the dependency tree through `tracing-appender`).
+/// Cached: queried once on first call, reused thereafter.
+fn local_utc_offset_seconds() -> i64 {
+    use std::sync::OnceLock;
+    static OFFSET: OnceLock<i64> = OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        time::UtcOffset::current_local_offset()
+            .map(|offset| offset.whole_seconds() as i64)
+            .unwrap_or(0)
+    })
+}
+
 impl ChatMessage {
     /// Returns a formatted local-time timestamp string (HH:MM:SS).
     pub fn now_timestamp() -> String {
         let secs = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
-        // Approximate local time from UTC — works for display purposes.
-        // On Windows this gives UTC; use a simple offset heuristic.
-        let total_secs = secs % 86400; // seconds within the day
+            .as_secs() as i64;
+        let offset = local_utc_offset_seconds();
+        let local_secs = (secs + offset) % 86400;
+        // Handle negative wrap (shouldn't happen with realistic offsets).
+        let total_secs = if local_secs < 0 {
+            local_secs + 86400
+        } else {
+            local_secs
+        } as u64;
         let hours = total_secs / 3600;
         let minutes = (total_secs % 3600) / 60;
         let seconds = total_secs % 60;
@@ -274,4 +294,34 @@ pub fn truncate_for_display(text: &str, max_len: usize) -> String {
 /// (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`) are rejected.
 pub fn is_valid_thread_name(name: &str) -> bool {
     !name.is_empty() && name == memory::sanitize_filename(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses `HH:MM:SS` into seconds-of-day.
+    fn secs_of_day(ts: &str) -> u64 {
+        let mut it = ts.split(':').map(|p| p.parse::<u64>().unwrap());
+        let h = it.next().unwrap();
+        let m = it.next().unwrap();
+        let s = it.next().unwrap();
+        h * 3600 + m * 60 + s
+    }
+
+    /// `now_timestamp()` must match local wall-clock time (any timezone).
+    /// Allows a 1-second skew for the boundary between the two calls.
+    #[test]
+    fn now_timestamp_matches_local_time() {
+        let ts = ChatMessage::now_timestamp();
+        let local = time::OffsetDateTime::now_local().expect("local offset available");
+        let expected =
+            (local.hour() as u64) * 3600 + (local.minute() as u64) * 60 + local.second() as u64;
+        let actual = secs_of_day(&ts);
+        let diff = actual.abs_diff(expected);
+        assert!(
+            diff <= 1 || diff >= 86399,
+            "now_timestamp() = {ts} but local time = {expected}s of day"
+        );
+    }
 }

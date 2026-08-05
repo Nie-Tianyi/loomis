@@ -1886,7 +1886,10 @@ mod tests {
                     .iter()
                     .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
                     .sum();
-                assert!(total <= width as usize, "row {i} too wide: {total} > {width}");
+                assert!(
+                    total <= width as usize,
+                    "row {i} too wide: {total} > {width}"
+                );
             }
         }
     }
