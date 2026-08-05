@@ -49,6 +49,9 @@ pub struct App {
     /// Multi-line pastes referenced by `[Pasted text #N …]` placeholders
     /// inside `input`. Cleared on every submit.
     pub paste_store: PasteStore,
+    /// Visual rows scrolled out of view at the top of the input area when
+    /// the input exceeds the allocated height (0 = first visual row shown).
+    pub input_scroll_offset: usize,
 
     // ── Scrolling ──
     /// How many lines the user has scrolled up (0 = bottom).
@@ -197,6 +200,7 @@ impl App {
             input: String::new(),
             input_cursor: 0,
             paste_store: PasteStore::default(),
+            input_scroll_offset: 0,
             scroll_offset: 0,
             auto_scroll: true,
             streaming: false,
@@ -1062,6 +1066,22 @@ mod tests {
         let result = app.handle_key(key);
         assert!(matches!(result, Some(TuiCommand::CancelGeneration)));
         assert!(!app.streaming);
+    }
+
+    #[test]
+    fn test_input_scroll_offset_follows_cursor() {
+        let mut app = make_app();
+        // Cursor rows within the visible window → no scrolling.
+        app.update_input_scroll_offset(0, 15);
+        assert_eq!(app.input_scroll_offset, 0);
+        app.update_input_scroll_offset(14, 15);
+        assert_eq!(app.input_scroll_offset, 0);
+        // Cursor past the bottom → scroll down to keep it visible.
+        app.update_input_scroll_offset(20, 15);
+        assert_eq!(app.input_scroll_offset, 6);
+        // Cursor above the window → scroll back up.
+        app.update_input_scroll_offset(3, 15);
+        assert_eq!(app.input_scroll_offset, 3);
     }
 
     // ── Slash completion ────────────────────────────────────────

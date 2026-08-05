@@ -26,6 +26,11 @@ use super::welcome;
 
 // ── Layout ───────────────────────────────────────────────────────────────────────
 
+/// Minimum visible text rows in the input area (before borders).
+const MIN_INPUT_ROWS: u16 = 3;
+/// Maximum visible text rows — beyond this the input area scrolls.
+const MAX_INPUT_ROWS: u16 = 15;
+
 /// Entry point called from the event loop on every frame.
 ///
 /// Splits the terminal into three vertical regions and delegates to
@@ -36,15 +41,30 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Rebuild line counts for accurate scrolling computation
     app.rebuild_line_counts(area.width);
 
+    // The input area grows with its content (wrapped rows), capped at
+    // MAX_INPUT_ROWS — beyond that it scrolls (see draw_input). Input text
+    // is wrapped manually (like the chat area) so cursor placement is exact;
+    // `input_width` is the text width inside the input's border block.
+    let input_width = area.width.saturating_sub(2).max(1);
+    let metrics = input_metrics(&app.input, app.input_cursor, input_width);
+    // Cap against the terminal height too (rows + 2 border + 1 status bar)
+    // so the status bar never gets pushed off screen on short terminals.
+    let max_rows = MAX_INPUT_ROWS.min(area.height.saturating_sub(4).max(MIN_INPUT_ROWS));
+    let input_rows = (metrics.rows as u16).clamp(MIN_INPUT_ROWS, max_rows).max(1);
+
     let layout = Layout::vertical([
-        Constraint::Fill(1),   // chat
-        Constraint::Length(5), // input (3 lines + border)
-        Constraint::Length(1), // status bar
+        Constraint::Fill(1),                // chat
+        Constraint::Length(input_rows + 2), // input (rows + border)
+        Constraint::Length(1),              // status bar
     ])
     .split(area);
 
     // Cache chat area for mouse coordinate mapping.
     app.chat_area = layout[0];
+
+    // Keep the cursor row within the visible input window (follows the
+    // cursor like the chat scroll offset).
+    app.update_input_scroll_offset(metrics.cursor_row as u16, input_rows);
 
     draw_chat(frame, layout[0], app);
     draw_input(frame, layout[1], app);
@@ -65,11 +85,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_help_overlay(frame, area);
     }
 
-    // Place the hardware cursor inside the input area.
-    // Account for multi-line input (vertical offset) and CJK width.
+    // Place the hardware cursor inside the input area. `metrics.cursor_col`
+    // already includes the 2-col prompt prefix on row 0; subtract the
+    // scroll offset so the cursor follows the visible window.
     frame.set_cursor_position((
-        layout[1].x + 2 + app.cursor_column(),
-        layout[1].y + 1 + app.cursor_row(),
+        layout[1].x + 2 + metrics.cursor_col as u16,
+        layout[1].y
+            + 1
+            + (metrics.cursor_row as u16).saturating_sub(app.input_scroll_offset as u16),
     ));
 }
 
@@ -935,7 +958,12 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
             .fg(theme::CURSOR_FG)
     };
 
-    let display_lines = build_input_lines(app, cursor_style);
+    let display_lines = build_input_lines(
+        &app.input,
+        app.input_cursor,
+        cursor_style,
+        area.width.saturating_sub(2).max(1),
+    );
 
     // Show a hint when the input is empty
     let lines: Vec<Line<'_>> = if app.pending_shell_confirm.is_some() {
@@ -985,77 +1013,104 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     // Clear residual characters from previous frame before rendering.
     frame.render_widget(Clear, area);
 
-    let paragraph = Paragraph::new(lines).block(block);
+    // Lines are pre-wrapped (build_input_lines) so each Line is exactly one
+    // visual row; the scroll offset is a direct row offset. Manual wrapping
+    // keeps the cursor placement in draw() exact.
+    let paragraph = Paragraph::new(lines)
+        .scroll((app.input_scroll_offset as u16, 0))
+        .block(block);
     frame.render_widget(paragraph, area);
 }
 
-/// Builds the styled input lines: `"> "` prompt prefix on each line,
-/// with cursor highlighting on the active line.
-fn build_input_lines(app: &App, cursor_style: Style) -> Vec<Line<'_>> {
-    let input = &app.input;
-    let cursor = app.input_cursor;
+/// The `"> "` prompt prefix span, styled consistently on every input row.
+fn prefix_span() -> Span<'static> {
+    Span::styled(
+        theme::ICON_USER,
+        Style::default()
+            .fg(theme::ACCENT)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+/// Builds the styled input lines, wrapping long lines to `width` columns —
+/// the exact layout [`input_metrics`] measures.
+///
+/// Each `\n`-separated logical line becomes one or more visual rows: the
+/// first row carries the `"> "` prompt prefix (leaving `width - 2` columns
+/// of text), continuation rows start at the left edge and fill `width`.
+/// The cursor character is highlighted on its row; a cursor at the end of
+/// a row shows as a highlighted trailing space.
+fn build_input_lines(input: &str, cursor: usize, cursor_style: Style, width: u16) -> Vec<Line<'_>> {
+    let w = (width as usize).max(1);
+    let first_cap = w.saturating_sub(2).max(1);
     let mut lines: Vec<Line<'_>> = Vec::new();
 
-    // Find which line the cursor is on
-    let cursor_line_idx = input[..cursor].chars().filter(|&c| c == '\n').count();
+    let mut line_start = 0usize;
+    while line_start <= input.len() {
+        let rel_end = input[line_start..]
+            .find('\n')
+            .unwrap_or(input.len() - line_start);
+        let line = &input[line_start..line_start + rel_end];
+        let cursor_in_line = cursor.saturating_sub(line_start);
+        let cursor_here = cursor_in_line <= line.len();
 
-    for (line_idx, text_line) in input.lines().enumerate() {
-        let line_start = input
-            .lines()
-            .take(line_idx)
-            .map(|l| l.len() + 1) // +1 for the \n
-            .sum::<usize>();
-
-        let mut spans: Vec<Span<'_>> = Vec::new();
-
-        // Prompt prefix on every line
-        spans.push(Span::styled(
-            theme::ICON_USER,
-            Style::default()
-                .fg(theme::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        ));
-
-        if line_idx == cursor_line_idx {
-            // This line contains the cursor
-            let cursor_in_line = cursor - line_start;
-
-            // Text before cursor
-            if cursor_in_line > 0 && cursor_in_line <= text_line.len() {
-                spans.push(Span::raw(&text_line[..cursor_in_line.min(text_line.len())]));
-            }
-
-            // Cursor character
-            if cursor_in_line < text_line.len() {
-                let ch = text_line[cursor_in_line..].chars().next().unwrap_or(' ');
-                spans.push(Span::styled(ch.to_string(), cursor_style));
-                let after_start = cursor_in_line + ch.len_utf8();
-                if after_start < text_line.len() {
-                    spans.push(Span::raw(&text_line[after_start..]));
-                }
-            } else {
-                // Cursor at end of line — show a space
+        if line.is_empty() {
+            // Single row: prefix, plus the cursor space when it's on this
+            // (empty) line.
+            let mut spans = vec![prefix_span()];
+            if cursor_here {
                 spans.push(Span::styled(" ", cursor_style));
             }
+            lines.push(Line::from(spans));
         } else {
-            // Plain text line
-            spans.push(Span::raw(text_line));
+            let mut offset = 0usize;
+            let mut cap = first_cap;
+            let mut first_row = true;
+            while offset < line.len() {
+                let (chunk, _) = split_at_display_width(&line[offset..], cap);
+                if chunk.is_empty() {
+                    break;
+                }
+                let chunk_end = offset + chunk.len();
+                // The cursor belongs to this chunk when it sits strictly
+                // inside it, or exactly at its end when that end is the end
+                // of the logical line (a mid-line boundary belongs to the
+                // next chunk, whose row starts there).
+                let cursor_in_chunk =
+                    cursor_here && (cursor_in_line < chunk_end || chunk_end == line.len());
+
+                let mut spans: Vec<Span<'_>> = Vec::new();
+                if first_row {
+                    spans.push(prefix_span());
+                }
+                if cursor_in_chunk {
+                    spans.push(Span::raw(&line[offset..cursor_in_line]));
+                    if cursor_in_line < chunk_end {
+                        let ch = line[cursor_in_line..].chars().next().unwrap_or(' ');
+                        spans.push(Span::styled(ch.to_string(), cursor_style));
+                        let after_start = cursor_in_line + ch.len_utf8();
+                        if after_start < chunk_end {
+                            spans.push(Span::raw(&line[after_start..chunk_end]));
+                        }
+                    } else {
+                        // Cursor at end of the logical line — trailing space.
+                        spans.push(Span::styled(" ", cursor_style));
+                    }
+                } else {
+                    spans.push(Span::raw(chunk));
+                }
+                lines.push(Line::from(spans));
+
+                offset = chunk_end;
+                cap = w;
+                first_row = false;
+            }
         }
 
-        lines.push(Line::from(spans));
-    }
-
-    if lines.is_empty() {
-        // No content — show cursor on empty first line
-        lines.push(Line::from(vec![
-            Span::styled(
-                theme::ICON_USER,
-                Style::default()
-                    .fg(theme::ACCENT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", cursor_style),
-        ]));
+        if line_start + rel_end >= input.len() {
+            break;
+        }
+        line_start += rel_end + 1;
     }
 
     lines
@@ -1486,32 +1541,100 @@ impl App {
         self.line_counts.iter().sum()
     }
 
-    /// Returns the visual column of the cursor within the input line,
-    /// accounting for CJK double-width characters.
-    pub fn cursor_column(&self) -> u16 {
-        let prefix_len = 2u16; // "> " prompt
+    /// Keeps the input-area scroll offset so the cursor row stays inside
+    /// the visible window: scrolls up when the cursor passes the top,
+    /// scrolls down when it passes the bottom. No-op while the input fits.
+    pub fn update_input_scroll_offset(&mut self, cursor_visual_row: u16, visible_rows: u16) {
+        let cursor = cursor_visual_row as usize;
+        let visible = visible_rows as usize;
+        if cursor < self.input_scroll_offset {
+            self.input_scroll_offset = cursor;
+        } else if cursor >= self.input_scroll_offset + visible {
+            self.input_scroll_offset = cursor.saturating_sub(visible.saturating_sub(1));
+        }
+    }
+}
 
-        // For multi-line input, find the start of the current line
-        let line_start = self.input[..self.input_cursor]
-            .rfind('\n')
-            .map(|p| p + 1)
-            .unwrap_or(0);
+/// Layout metrics for the wrapped input area, computed by [`input_metrics`].
+struct InputMetrics {
+    /// Total visual rows the input occupies (always ≥ 1).
+    rows: usize,
+    /// 0-based visual row of the cursor.
+    cursor_row: usize,
+    /// Display column of the cursor within its row — includes the 2-col
+    /// prompt prefix when the row is the first row of a logical line.
+    cursor_col: usize,
+}
 
-        let col = if self.input_cursor <= line_start {
-            0
+/// Walks the input text, splitting each `\n`-separated logical line into
+/// display-width chunks (the first chunk of each line leaves 2 columns for
+/// the `"> "` prompt prefix, subsequent chunks fill the full width — the
+/// exact layout [`build_input_lines`] renders). Returns the total visual
+/// row count plus the cursor's (row, column), CJK-aware via
+/// [`split_at_display_width`].
+fn input_metrics(input: &str, cursor: usize, width: u16) -> InputMetrics {
+    let w = (width as usize).max(1);
+    let first_cap = w.saturating_sub(2).max(1);
+    let mut rows = 0usize;
+    let mut cursor_row = 0usize;
+    let mut cursor_col = 0usize;
+    let mut found = false;
+
+    let mut line_start = 0usize;
+    while line_start <= input.len() {
+        let rel_end = input[line_start..]
+            .find('\n')
+            .unwrap_or(input.len() - line_start);
+        let line = &input[line_start..line_start + rel_end];
+        let cursor_in_line = cursor.saturating_sub(line_start);
+        let cursor_here = cursor_in_line <= line.len();
+        let line_w = UnicodeWidthStr::width(line);
+
+        if line_w <= first_cap {
+            // Single row: prefix + whole line.
+            if cursor_here && !found {
+                found = true;
+                cursor_row = rows;
+                cursor_col = 2 + UnicodeWidthStr::width(&line[..cursor_in_line]);
+            }
+            rows += 1;
         } else {
-            UnicodeWidthStr::width(&self.input[line_start..self.input_cursor]) as u16
-        };
-        prefix_len + col
+            // Wrapped across multiple rows: first chunk at first_cap, the
+            // rest at `w`.
+            let mut offset = 0usize;
+            let mut cap = first_cap;
+            while offset < line.len() {
+                let (chunk, _) = split_at_display_width(&line[offset..], cap);
+                if chunk.is_empty() {
+                    break;
+                }
+                let chunk_end = offset + chunk.len();
+                // Same rule as build_input_lines: the cursor belongs to this
+                // chunk when strictly inside it, or at its end when that end
+                // is the end of the logical line.
+                if cursor_here && !found && (cursor_in_line < chunk_end || chunk_end == line.len())
+                {
+                    found = true;
+                    cursor_row = rows;
+                    let prefix = if offset == 0 { 2 } else { 0 };
+                    cursor_col = prefix + UnicodeWidthStr::width(&line[offset..cursor_in_line]);
+                }
+                rows += 1;
+                offset = chunk_end;
+                cap = w;
+            }
+        }
+
+        if line_start + rel_end >= input.len() {
+            break;
+        }
+        line_start += rel_end + 1;
     }
 
-    /// Returns the row offset of the cursor within a multi-line input
-    /// (0 = first line). Used for vertical cursor placement.
-    pub fn cursor_row(&self) -> u16 {
-        self.input[..self.input_cursor]
-            .chars()
-            .filter(|&c| c == '\n')
-            .count() as u16
+    InputMetrics {
+        rows: rows.max(1),
+        cursor_row,
+        cursor_col,
     }
 }
 
@@ -1666,10 +1789,130 @@ mod tests {
         assert_eq!(estimate_lines(&msg, 30), 2);
     }
 
+    // ── input_metrics / build_input_lines tests ─────────────────
+
     #[test]
-    fn test_cursor_column_no_prompt() {
-        // The cursor_column method includes the "> " prefix
-        // This is tested via the App struct
+    fn test_input_metrics_empty() {
+        let m = input_metrics("", 0, 80);
+        assert_eq!(m.rows, 1);
+        assert_eq!(m.cursor_row, 0);
+        assert_eq!(m.cursor_col, 2); // after the "> " prefix
+    }
+
+    #[test]
+    fn test_input_metrics_single_line() {
+        let m = input_metrics("hello", 5, 80);
+        assert_eq!(m.rows, 1);
+        assert_eq!(m.cursor_row, 0);
+        assert_eq!(m.cursor_col, 7); // 2 prefix + 5 text
+    }
+
+    #[test]
+    fn test_input_metrics_wrapped() {
+        // width 10 → first chunk 8 (prefix leaves 8), continuation 10.
+        let text = "0123456789abc"; // 13 wide → 2 rows
+        let m = input_metrics(text, text.len(), 10);
+        assert_eq!(m.rows, 2);
+        assert_eq!(m.cursor_row, 1);
+        assert_eq!(m.cursor_col, 5); // "89abc" is 5 wide, no prefix on row 1
+
+        // Cursor exactly at the first-chunk boundary (byte 8) — the block
+        // cursor covers '8', the first char of the continuation row.
+        let m = input_metrics(text, 8, 10);
+        assert_eq!(m.cursor_row, 1);
+        assert_eq!(m.cursor_col, 0);
+
+        // One char past the boundary → row 1, column 1.
+        let m = input_metrics(text, 9, 10);
+        assert_eq!(m.cursor_row, 1);
+        assert_eq!(m.cursor_col, 1);
+    }
+
+    #[test]
+    fn test_input_metrics_multi_line() {
+        let m = input_metrics("ab\ncd", 5, 80);
+        assert_eq!(m.rows, 2);
+        assert_eq!(m.cursor_row, 1);
+        assert_eq!(m.cursor_col, 4); // 2 prefix + "cd"
+
+        // Cursor on the first line.
+        let m = input_metrics("ab\ncd", 1, 80);
+        assert_eq!(m.cursor_row, 0);
+        assert_eq!(m.cursor_col, 3);
+    }
+
+    #[test]
+    fn test_input_metrics_trailing_newline() {
+        // "a\n" = line "a" + empty line — the cursor at the end sits on the
+        // empty second row.
+        let m = input_metrics("a\n", 2, 80);
+        assert_eq!(m.rows, 2);
+        assert_eq!(m.cursor_row, 1);
+        assert_eq!(m.cursor_col, 2);
+    }
+
+    #[test]
+    fn test_input_metrics_cjk() {
+        // 你好世界 = 8 display cols; width 4 → first chunk 2 → "你" | "好世" | "界".
+        let text = "你好世界";
+        let m = input_metrics(text, text.len(), 4);
+        assert_eq!(m.rows, 3);
+        assert_eq!(m.cursor_row, 2);
+        assert_eq!(m.cursor_col, 2); // "界" is 2 wide, no prefix on row 2
+    }
+
+    #[test]
+    fn test_build_input_lines_matches_metrics() {
+        // Rendering must produce exactly as many rows as input_metrics counts.
+        let style = Style::default();
+        let cases = [
+            ("", 0usize, 80u16),
+            ("hello", 5, 80),
+            ("0123456789abc", 13, 10),
+            ("0123456789abc", 8, 10),
+            ("0123456789abc", 9, 10),
+            ("ab\ncd", 5, 80),
+            ("a\n", 2, 80),
+            ("你好世界", 12, 4),
+        ];
+        for (text, cursor, width) in cases {
+            let m = input_metrics(text, cursor, width);
+            let lines = build_input_lines(text, cursor, style, width);
+            assert_eq!(lines.len(), m.rows, "rows mismatch for {text:?}");
+            // Every row fits the width (prefix row: 2 + text ≤ width).
+            for (i, line) in lines.iter().enumerate() {
+                let total: usize = line
+                    .spans
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
+                assert!(total <= width as usize, "row {i} too wide: {total} > {width}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_input_lines_highlights_cursor() {
+        let style = Style::default().bg(ratatui::style::Color::Red);
+        let lines = build_input_lines("hello", 2, style, 80);
+        assert_eq!(lines.len(), 1);
+        let spans = &lines[0].spans;
+        // ["> " prefix, "he", highlighted "l", "lo"]
+        assert_eq!(spans.len(), 4);
+        assert_eq!(spans[2].style.bg, Some(ratatui::style::Color::Red));
+        assert_eq!(spans[2].content.as_ref(), "l");
+    }
+
+    #[test]
+    fn test_build_input_lines_wrapped_cursor_row() {
+        let style = Style::default();
+        // Cursor at the end of a wrapped line: trailing-space cursor on row 1.
+        let lines = build_input_lines("0123456789abc", 13, style, 10);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].spans[1].content.as_ref(), "01234567");
+        assert_eq!(lines[1].spans[0].content.as_ref(), "89abc");
+        // Row 1 ends with the cursor space.
+        assert_eq!(lines[1].spans.last().unwrap().content.as_ref(), " ");
     }
 
     // ── wrap_to_width / split_at_display_width tests ────────────
