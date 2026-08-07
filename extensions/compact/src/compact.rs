@@ -35,7 +35,7 @@ pub const COMPACTED_TOOL_OUTPUT_PREFIX: &str = "[Cleared: ";
 const PLACEHOLDER_ARG_TRUNCATE: usize = 60;
 
 /// Default number of recent tool outputs to preserve during compaction.
-pub const DEFAULT_KEEP_RECENT_TOOL_OUTPUTS: usize = 10;
+pub const DEFAULT_KEEP_RECENT_TOOL_OUTPUTS: usize = 15;
 
 /// Default set of tool names whose outputs are eligible for compaction.
 pub const DEFAULT_COMPACT_ELIGIBLE_TOOLS: &[&str] =
