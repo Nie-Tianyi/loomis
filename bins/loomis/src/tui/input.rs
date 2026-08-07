@@ -19,6 +19,7 @@ use super::messages::{
     truncate_for_display,
 };
 use super::paste::normalize_newlines;
+use crate::hooks::insert_before_history;
 use sandbox::shell_filter::CommandVerdict;
 
 // ── Paste Handling ───────────────────────────────────────────────────────────────
@@ -845,10 +846,13 @@ impl App {
                         active.insert(skill.name.clone(), skill.content.clone());
                     }
                     // Inject directly into memory for immediate effect.
+                    // Use insert_before_history so the message lands at the
+                    // tail of the System block (SkillHook will clean it up
+                    // and re-insert on the next on_llm_start).
                     let msg = format!("[SKILL: {}]\n\n{}", skill.name, skill.content);
                     {
                         let mut mem = self.memory.write().expect("memory lock poisoned");
-                        mem.push(Message::new(Role::System, msg));
+                        insert_before_history(&mut mem.messages, Message::new(Role::System, msg));
                     }
                     self.messages.push(ChatMessage::System {
                         content: format!("Loaded skill \"{}\" — {}", skill.name, skill.description),

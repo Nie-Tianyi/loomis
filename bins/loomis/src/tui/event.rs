@@ -33,6 +33,7 @@ use super::app::App;
 use super::messages::TuiCommand;
 use super::shell_exec::execute_shell_command;
 use crate::app::AgentKit;
+use crate::hooks::SYSPROMPT_MARKER;
 
 // ── Entry Point ──────────────────────────────────────────────────────────────────
 
@@ -408,12 +409,18 @@ async fn agent_handler(
                     h.abort();
                 }
 
-                // Drain memory — preserve only System messages.
+                // Drain memory — preserve only the core system prompts
+                // (identified by the [SYSPROMPT] marker).  Everything else
+                // is regenerated on the next run: injector hooks
+                // (SkillHook, ProfileHook, TodoListHook, PlanModeHook)
+                // rebuild their marker messages from canonical state on
+                // the first `on_llm_start`, and compaction summaries are
+                // stale once the conversation is cleared.
                 let mut mem = memory.write().expect("memory lock poisoned");
                 let system_msgs: Vec<Message> = mem
                     .to_context_vec()
                     .into_iter()
-                    .filter(|m| m.role == Role::System)
+                    .filter(|m| m.role == Role::System && m.content.starts_with(SYSPROMPT_MARKER))
                     .collect();
                 let preserved = system_msgs.len();
                 *mem = memory::Memory::new();

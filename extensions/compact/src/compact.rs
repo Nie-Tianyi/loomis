@@ -52,6 +52,16 @@ pub const DEFAULT_COMPACT_TOKEN_LIMIT: usize = 1_000_000;
 /// Default number of non-System messages preserved during macro-compaction drain.
 pub const DEFAULT_KEEP_LAST_N: usize = 10;
 
+/// Marker prefix that identifies macro-compaction summary System messages.
+///
+/// Used to keep exactly **one** summary in memory: each time a new summary
+/// is generated, the old `[COMPACT_SUMMARY]` message is removed and its
+/// content is merged into the new summary (see
+/// [`MacroCompactHook::on_llm_start`]).  The `/new` handler in the TUI also
+/// discards this message — a cleared conversation has no history worth
+/// summarising.
+pub const COMPACT_SUMMARY_MARKER: &str = "[COMPACT_SUMMARY]";
+
 // ── CompactError ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -180,9 +190,26 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
             return;
         }
 
+        // Read the previous compaction summary (if any) so its content can
+        // be merged into the new summary.  It is NOT removed yet — if the
+        // summarisation call fails, the old summary must survive.
+        let prev_summary = {
+            let mem = memory.read().expect("memory lock poisoned");
+            mem.messages
+                .iter()
+                .find(|m| m.role == Role::System && m.content.starts_with(COMPACT_SUMMARY_MARKER))
+                .map(|m| {
+                    m.content
+                        .replacen(COMPACT_SUMMARY_MARKER, "", 1)
+                        .trim()
+                        .to_string()
+                })
+        };
+
         tracing::info!(
             drained_count = old.len(),
             keep_last_n = self.keep_last_n,
+            prev_summary = prev_summary.is_some(),
             "macro-compaction triggered, summarising drained messages",
         );
 
@@ -193,16 +220,36 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        let prompt = format!(
-            "Summarise the following conversation history concisely into a single paragraph. \
-             You MUST preserve:\n\
-             - Every file path the agent read or modified, with line ranges when known\n\
-             - Every shell command the agent ran and its outcome (success/failure)\n\
-             - All unfinished tasks and pending user requests\n\
-             - All decisions the agent made and the reasoning behind them\n\
-             - User preferences, constraints, and feedback\n\
-             Output only the summary, no preamble or meta-commentary:\n\n{transcript}"
-        );
+        // When a previous summary exists, the output must cover the FULL
+        // history (old summary + newly drained messages), not just the
+        // new segment — this keeps context intact across compactions.
+        let prompt = if let Some(prev) = prev_summary.as_deref() {
+            format!(
+                "Summarise the following conversation history concisely into a single paragraph. \
+                 You MUST preserve:\n\
+                 - Every file path the agent read or modified, with line ranges when known\n\
+                 - Every shell command the agent ran and its outcome (success/failure)\n\
+                 - All unfinished tasks and pending user requests\n\
+                 - All decisions the agent made and the reasoning behind them\n\
+                 - User preferences, constraints, and feedback\n\
+                 A previous summary of earlier conversation exists — incorporate its key \
+                 points so the output reflects the FULL history:\n\n\
+                 [Previous summary]\n{prev}\n\n\
+                 [New conversation]\n{transcript}\n\n\
+                 Output only the updated summary, no preamble or meta-commentary."
+            )
+        } else {
+            format!(
+                "Summarise the following conversation history concisely into a single paragraph. \
+                 You MUST preserve:\n\
+                 - Every file path the agent read or modified, with line ranges when known\n\
+                 - Every shell command the agent ran and its outcome (success/failure)\n\
+                 - All unfinished tasks and pending user requests\n\
+                 - All decisions the agent made and the reasoning behind them\n\
+                 - User preferences, constraints, and feedback\n\
+                 Output only the summary, no preamble or meta-commentary:\n\n{transcript}"
+            )
+        };
 
         let request =
             CompletionRequest::new(&self.compact_model, vec![Message::new(Role::User, prompt)]);
@@ -243,7 +290,18 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
                 "macro-compaction summary inserted as System message",
             );
             let mut mem = memory.write().expect("memory lock poisoned");
-            insert_before_history(&mut mem.messages, Message::new(Role::System, summary));
+            // Remove any stale [COMPACT_SUMMARY] message — replaced by the
+            // merged summary below.  Keeps exactly one summary in memory.
+            mem.messages.retain(|m| {
+                !(m.role == Role::System && m.content.starts_with(COMPACT_SUMMARY_MARKER))
+            });
+            insert_before_history(
+                &mut mem.messages,
+                Message::new(
+                    Role::System,
+                    format!("{COMPACT_SUMMARY_MARKER}\n\n{summary}"),
+                ),
+            );
         } else {
             tracing::warn!("macro-compaction produced empty summary");
         }
@@ -783,7 +841,10 @@ mod tests {
     // ── MacroCompactHook token-based threshold tests ──────────────────────
 
     use memory::Memory;
-    use provider::{CompletionRequest, CompletionResponse, LLMClient, ProviderError};
+    use provider::{
+        Choice, ChoiceMessage, CompletionRequest, CompletionResponse, FinishReason, LLMClient,
+        ProviderError, Usage,
+    };
     use std::sync::Arc;
 
     /// A mock LLM client that panics if called — used to verify that
@@ -825,5 +886,222 @@ mod tests {
         hook.on_llm_start("test-session", &mem);
         // Should have returned early — memory is still empty.
         assert!(mem.read().unwrap().messages.is_empty());
+    }
+
+    /// A mock LLM client that records every summarisation prompt it
+    /// receives and returns a fixed summary.
+    struct RecordingClient {
+        prompts: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl LLMClient for RecordingClient {
+        async fn generate(
+            &self,
+            req: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            self.prompts
+                .lock()
+                .expect("prompt log poisoned")
+                .push(req.messages[0].content.clone());
+            Ok(CompletionResponse {
+                id: "test".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: "test-model".into(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChoiceMessage {
+                        role: Role::Assistant,
+                        content: Some("Fresh merged summary".into()),
+                        reasoning_content: None,
+                        tool_calls: None,
+                    },
+                    finish_reason: Some(FinishReason::Stop),
+                }],
+                usage: None,
+            })
+        }
+
+        async fn stream(
+            &self,
+            _req: CompletionRequest,
+        ) -> Result<
+            futures_util::stream::BoxStream<'static, Result<provider::StreamChunk, ProviderError>>,
+            ProviderError,
+        > {
+            panic!("RecordingClient::stream should not be called");
+        }
+    }
+
+    /// Build a memory with a core system prompt, `n` user/assistant pairs,
+    /// and `last_usage` set well over any test threshold.
+    fn make_memory_with_history(n: usize) -> SharedMemory {
+        let mem: SharedMemory = Arc::new(std::sync::RwLock::new(Memory::new()));
+        {
+            let mut m = mem.write().expect("memory lock poisoned");
+            m.messages
+                .push(Message::new(Role::System, "[SYSPROMPT]\n\ncore prompt"));
+            for i in 0..n {
+                m.messages
+                    .push(Message::new(Role::User, format!("user message {i}")));
+                m.messages.push(Message::new(
+                    Role::Assistant,
+                    format!("assistant reply {i}"),
+                ));
+            }
+            m.last_usage = Some(Usage {
+                prompt_tokens: 5000,
+                completion_tokens: 10,
+                total_tokens: 5010,
+            });
+        }
+        mem
+    }
+
+    fn summary_count(mem: &SharedMemory) -> usize {
+        mem.read()
+            .expect("memory lock poisoned")
+            .messages
+            .iter()
+            .filter(|m| m.content.starts_with(COMPACT_SUMMARY_MARKER))
+            .count()
+    }
+
+    #[test]
+    fn test_macro_compact_summary_has_marker() {
+        let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let hook: MacroCompactHook<RecordingClient> = MacroCompactHook::new(
+            "test-model".into(),
+            10,
+            2,
+            RecordingClient {
+                prompts: prompts.clone(),
+            },
+        );
+        let mem = make_memory_with_history(6);
+
+        hook.on_llm_start("test", &mem);
+
+        let m = mem.read().expect("memory lock poisoned");
+        assert_eq!(
+            summary_count(&mem),
+            1,
+            "exactly one [COMPACT_SUMMARY] message"
+        );
+        let summary = m
+            .messages
+            .iter()
+            .find(|m| m.content.starts_with(COMPACT_SUMMARY_MARKER))
+            .expect("summary present");
+        assert_eq!(
+            summary.content,
+            format!("{COMPACT_SUMMARY_MARKER}\n\nFresh merged summary"),
+            "summary must carry the marker prefix"
+        );
+    }
+
+    #[test]
+    fn test_macro_compact_replaces_and_merges_old_summary() {
+        let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let hook: MacroCompactHook<RecordingClient> = MacroCompactHook::new(
+            "test-model".into(),
+            10,
+            2,
+            RecordingClient {
+                prompts: prompts.clone(),
+            },
+        );
+        let mem = make_memory_with_history(6);
+
+        // First compaction — no previous summary to merge.
+        hook.on_llm_start("test", &mem);
+        assert_eq!(summary_count(&mem), 1, "one summary after first compaction");
+
+        // Continue the conversation so there is new material to drain.
+        {
+            let mut m = mem.write().expect("memory lock poisoned");
+            for i in 6..9 {
+                m.messages
+                    .push(Message::new(Role::User, format!("user message {i}")));
+                m.messages.push(Message::new(
+                    Role::Assistant,
+                    format!("assistant reply {i}"),
+                ));
+            }
+        }
+
+        // Second compaction — old summary must be replaced, not duplicated,
+        // and its content must be fed into the new summarisation prompt.
+        hook.on_llm_start("test", &mem);
+        assert_eq!(
+            summary_count(&mem),
+            1,
+            "still exactly one summary after re-compaction"
+        );
+
+        let log = prompts.lock().expect("prompt log poisoned");
+        assert_eq!(log.len(), 2, "two summarisation calls");
+        assert!(
+            !log[0].contains("Previous summary"),
+            "first prompt must not reference a previous summary"
+        );
+        assert!(
+            log[1].contains("Previous summary"),
+            "second prompt must incorporate the old summary"
+        );
+        assert!(
+            log[1].contains("Fresh merged summary"),
+            "old summary content must be fed into the new summarisation"
+        );
+    }
+
+    #[test]
+    fn test_macro_compact_failure_preserves_old_summary() {
+        // A client that always fails — compaction must not remove the
+        // previous summary when the new one cannot be produced.
+        struct FailingClient;
+        impl LLMClient for FailingClient {
+            async fn generate(
+                &self,
+                _req: CompletionRequest,
+            ) -> Result<CompletionResponse, ProviderError> {
+                Err(ProviderError::StreamingNotSupported)
+            }
+            async fn stream(
+                &self,
+                _req: CompletionRequest,
+            ) -> Result<
+                futures_util::stream::BoxStream<
+                    'static,
+                    Result<provider::StreamChunk, ProviderError>,
+                >,
+                ProviderError,
+            > {
+                panic!("FailingClient::stream should not be called");
+            }
+        }
+
+        let hook: MacroCompactHook<FailingClient> =
+            MacroCompactHook::new("test-model".into(), 10, 2, FailingClient);
+        let mem = make_memory_with_history(6);
+
+        // First attempt fails — no summary inserted.
+        hook.on_llm_start("test", &mem);
+        assert_eq!(summary_count(&mem), 0, "no summary on failure");
+
+        // Seed a summary manually, then fail again — it must survive.
+        {
+            let mut m = mem.write().expect("memory lock poisoned");
+            m.messages.push(Message::new(
+                Role::System,
+                format!("{COMPACT_SUMMARY_MARKER}\n\nvaluable old summary"),
+            ));
+        }
+        hook.on_llm_start("test", &mem);
+        assert_eq!(
+            summary_count(&mem),
+            1,
+            "old summary must survive a failed re-compaction"
+        );
     }
 }
