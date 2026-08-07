@@ -363,12 +363,19 @@ pub fn build_coding_agent(
         //    after Skill so toggling /plan only invalidates the
         //    cache prefix past the stable system prompt + skills
         Box::new(profile_hook), // 5. Maintain [PROFILE] System message + synthesis
-        Box::new(todo_list_hook), // 6. Maintain [TODO] System message — registered after
-        //    Skill/Profile so it lands at the tail of the stable
-        //    System block (most volatile injector; see
-        //    insert_before_history)
-        Box::new(macro_compact), // 7. LLM summarisation
-        Box::new(micro_compact), // 8. Tool output clearing
+        Box::new(micro_compact), // 6. Tool output clearing — runs BEFORE the macro
+        //    summariser so the compaction input is already
+        //    placeholder-sized, not raw tool dumps (cheaper, cleaner)
+        Box::new(macro_compact), // 7. LLM summarisation — registered before TodoListHook so
+        //    [COMPACT_SUMMARY] sits before [TODO] in the System block:
+        //    the summary only changes when compaction fires (rare),
+        //    while [TODO] changes on every plan update
+        Box::new(todo_list_hook), // 8. Maintain [TODO] System message — the most volatile
+        //    injector; registered last so it lands at the very tail
+        //    of the System block (after [COMPACT_SUMMARY], hugging
+        //    the history), so a plan update only invalidates the
+        //    cache prefix past the history boundary, never the
+        //    compaction summary (see insert_before_history)
         Box::new(approval_hook), // 9. Security sandbox
     ];
 

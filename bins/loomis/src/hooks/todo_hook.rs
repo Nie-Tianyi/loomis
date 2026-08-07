@@ -269,4 +269,50 @@ mod tests {
             "non-todo System message should be preserved"
         );
     }
+
+    #[test]
+    fn test_todo_lands_after_compact_summary() {
+        // Regression: TodoListHook is registered AFTER MacroCompactHook so
+        // [TODO] lands at the very tail of the System block, after any
+        // [COMPACT_SUMMARY].  A plan update then only invalidates the cache
+        // prefix past the history boundary, never the compaction summary.
+        let state = make_state(vec![make_item(1, "pending")]);
+        let memory = make_memory();
+
+        {
+            let mut mem = memory.write().unwrap();
+            mem.push(Message::new(Role::System, "[SYSPROMPT] static head"));
+            mem.push(Message::new(
+                Role::System,
+                format!("{} summary text", hooks::COMPACT_SUMMARY_MARKER),
+            ));
+            mem.push(Message::new(Role::User, "hello"));
+        }
+
+        let hook = TodoListHook::new(state);
+        hook.on_llm_start("test", &memory);
+
+        let mem = memory.read().unwrap();
+        let summary_pos = mem
+            .messages
+            .iter()
+            .position(|m| m.content.starts_with(hooks::COMPACT_SUMMARY_MARKER))
+            .expect("[COMPACT_SUMMARY] message should be preserved");
+        let todo_pos = mem
+            .messages
+            .iter()
+            .position(|m| m.role == Role::System && m.content.starts_with(TODO_MARKER))
+            .expect("[TODO] message should exist");
+        let user_pos = mem
+            .messages
+            .iter()
+            .position(|m| m.role == Role::User)
+            .expect("user message should exist");
+
+        assert!(
+            summary_pos < todo_pos && todo_pos < user_pos,
+            "expected [COMPACT_SUMMARY] < [TODO] < user history, got \
+             summary={summary_pos} todo={todo_pos} user={user_pos}"
+        );
+    }
 }
