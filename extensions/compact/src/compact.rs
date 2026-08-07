@@ -169,11 +169,21 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
         let needs = {
             let mem = memory.read().expect("memory lock poisoned");
             match &mem.last_usage {
-                Some(usage) => usage.prompt_tokens as usize > self.threshold,
+                Some(usage) => {
+                    let triggered = usage.prompt_tokens as usize > self.threshold;
+                    tracing::debug!(
+                        prompt_tokens = usage.prompt_tokens,
+                        threshold = self.threshold,
+                        triggered,
+                        "macro-compaction token check",
+                    );
+                    triggered
+                }
                 None => {
                     // No usage data yet (first LLM call of the session).
                     // Skip compaction — after this call completes,
                     // `last_usage` will be populated for the next check.
+                    tracing::debug!("macro-compaction skipped: no usage data yet");
                     false
                 }
             }
@@ -186,6 +196,11 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
             let mut mem = memory.write().expect("memory lock poisoned");
             drain_for_compact(&mut mem.messages, self.keep_last_n)
         };
+        tracing::debug!(
+            drained_count = old.len(),
+            keep_last_n = self.keep_last_n,
+            "macro-compaction drained old messages",
+        );
         if old.is_empty() {
             return;
         }
@@ -219,6 +234,11 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
             .map(|m| format!("[{}]: {}", m.role.label(), m.content))
             .collect::<Vec<_>>()
             .join("\n\n");
+        tracing::debug!(
+            message_count = old.len(),
+            transcript_chars = transcript.len(),
+            "macro-compaction transcript built",
+        );
 
         // When a previous summary exists, the output must cover the FULL
         // history (old summary + newly drained messages), not just the
@@ -251,6 +271,13 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
             )
         };
 
+        tracing::debug!(
+            model = %self.compact_model,
+            prompt_chars = prompt.len(),
+            merges_prev_summary = prev_summary.is_some(),
+            "macro-compaction calling summariser",
+        );
+
         let request =
             CompletionRequest::new(&self.compact_model, vec![Message::new(Role::User, prompt)]);
 
@@ -263,11 +290,21 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
             Ok(resp) => {
                 // Summarisation succeeded — clear the failure flag.
                 self.compaction_failed.store(false, Ordering::Relaxed);
-                resp.choices
+                let finish_reason = resp.choices.first().and_then(|c| c.finish_reason.clone());
+                let summary = resp
+                    .choices
                     .into_iter()
                     .next()
                     .and_then(|c| c.message.content)
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                tracing::debug!(
+                    model = %resp.model,
+                    finish_reason = ?finish_reason,
+                    usage = ?resp.usage,
+                    summary_chars = summary.len(),
+                    "macro-compaction summariser succeeded",
+                );
+                summary
             }
             Err(e) => {
                 // Summarisation failed — log the error and set a flag to
@@ -284,11 +321,6 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
         };
 
         if !summary.is_empty() {
-            tracing::info!(
-                summary_len = summary.len(),
-                model = %self.compact_model,
-                "macro-compaction summary inserted as System message",
-            );
             let mut mem = memory.write().expect("memory lock poisoned");
             // Remove any stale [COMPACT_SUMMARY] message — replaced by the
             // merged summary below.  Keeps exactly one summary in memory.
@@ -302,8 +334,17 @@ impl<C: LLMClient> AgentHook for MacroCompactHook<C> {
                     format!("{COMPACT_SUMMARY_MARKER}\n\n{summary}"),
                 ),
             );
+            tracing::info!(
+                summary_len = summary.len(),
+                model = %self.compact_model,
+                total_messages = mem.messages.len(),
+                "macro-compaction summary inserted as System message",
+            );
         } else {
-            tracing::warn!("macro-compaction produced empty summary");
+            tracing::warn!(
+                drained_count = old.len(),
+                "macro-compaction produced empty summary",
+            );
         }
     }
 }
