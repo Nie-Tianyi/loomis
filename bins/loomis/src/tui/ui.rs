@@ -848,11 +848,28 @@ fn wrap_to_width(lines: Vec<Line<'_>>, max_width: u16) -> Vec<Line<'_>> {
                     rem = rest;
                 }
             } else {
-                // Doesn't fit on current line — flush and start a new
-                // wrapped line with this span.
+                // Doesn't fit on current line — flush current line.
                 out.push(Line::from(std::mem::take(&mut current_spans)));
-                current_spans.push(span);
-                current_w = span_w;
+                if span_w > max_w {
+                    // Span itself is wider than max_w — split it across
+                    // multiple lines, each inheriting this span's style.
+                    let mut rem: &str = span.content.as_ref();
+                    while !rem.is_empty() {
+                        let (chunk, rest) = split_at_display_width(rem, max_w);
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        out.push(Line::from(Span::styled(
+                            chunk.to_string(),
+                            span.style,
+                        )));
+                        rem = rest;
+                    }
+                    current_w = 0;
+                } else {
+                    current_spans.push(span);
+                    current_w = span_w;
+                }
             }
         }
 
@@ -2206,6 +2223,31 @@ mod tests {
         let wrapped = wrap_to_width(lines, 5);
         // "short" fits, "abcdefghij" → 2 lines
         assert_eq!(wrapped.len(), 3);
+    }
+
+    #[test]
+    fn test_wrap_to_width_span_after_indent_wider_than_max() {
+        // AskUserQuestion option: indent span + option text wider than max_w.
+        // The option span must be split, not overflow the boundary.
+        let lines = vec![Line::from(vec![
+            Span::raw("       "), // 7-char indent
+            Span::styled("  ▶ abcdefghij", Style::default()), // 14 chars total
+        ])];
+        let wrapped = wrap_to_width(lines, 8);
+        // indent fits on its own line; option split across 2 lines
+        assert_eq!(wrapped.len(), 3);
+        assert_eq!(wrapped[0].spans[0].content, "       ");
+        assert_eq!(wrapped[1].spans[0].content, "  ▶ abcd");
+        assert_eq!(wrapped[2].spans[0].content, "efghij");
+        // no wrapped line exceeds max_w
+        for line in &wrapped {
+            let w: usize = line
+                .spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            assert!(w <= 8);
+        }
     }
 
     // ── tool_resource_summary tests ──────────────────────────────
