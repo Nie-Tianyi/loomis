@@ -940,6 +940,26 @@ impl App {
                 if rest.is_empty() {
                     Some(None)
                 } else {
+                    // Auto-generate conversation title from the first
+                    // message, mirroring the normal user-message path.
+                    if self.conversation_title.is_none() {
+                        let title = persistence::thread_name_from_message(rest);
+                        let _ = persistence::write_current_thread_name(
+                            &title,
+                            &self.workspace_root,
+                            &self.persistence_config,
+                        );
+                        self.conversation_title = Some(title);
+                    }
+                    // Show the user's message in the chat — without this it
+                    // reaches the agent but never appears on screen.
+                    self.messages.push(ChatMessage::User {
+                        content: rest.to_string(),
+                        timestamp: ChatMessage::now_timestamp(),
+                    });
+                    self.scroll_offset = 0;
+                    self.streaming = true;
+                    self.last_submitted_input = Some(rest.to_string());
                     Some(Some(TuiCommand::RunAgent(rest.to_string())))
                 }
             }
