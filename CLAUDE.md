@@ -50,11 +50,13 @@ agent_oxide/
 │   ├── deepseek/           # DeepSeekClient — implements LLMClient
 │   ├── tools/              # Tool trait, ToolRegistry, WorkspaceFs, ProgressStream
 │   ├── tools-macros/       # #[tool] proc macro
-│   ├── memory/             # Memory buffer, PendingHints, conversation persistence
+│   ├── memory/             # Memory buffer, PendingHints
+│   ├── util/               # Shared workspace utilities (iso8601_now)
 │   └── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent, ResponseRouter
 ├── extensions/
 │   ├── skills/             # SkillDef, SkillRegistry, ActiveSkills — skill discovery & loading
 │   ├── hooks/              # MicroCompactHook + MacroCompactHook
+│   ├── persistence/        # Conversation persistence — save/load threads, PersistenceHook
 │   ├── subagent/           # SubagentTool — spawn child agents as tools
 │   ├── observability/      # TraceEvent, TraceStore, RunMetrics — full-chain tracing
 │   └── sandbox/            # Sandbox runtime — WorkspaceFs, ShellFilter, SandboxHook, etc.

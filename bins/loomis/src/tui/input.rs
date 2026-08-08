@@ -271,8 +271,8 @@ impl App {
                 // Normal user message — generate auto-save thread name from
                 // the first message of this conversation.
                 if self.conversation_title.is_none() {
-                    let title = memory::thread_name_from_message(&expanded_input);
-                    let _ = memory::write_current_thread_name(
+                    let title = persistence::thread_name_from_message(&expanded_input);
+                    let _ = persistence::write_current_thread_name(
                         &title,
                         &self.workspace_root,
                         &self.persistence_config,
@@ -787,14 +787,14 @@ impl App {
                 return Some(None);
             }
             let mem = self.memory.read().expect("memory lock poisoned");
-            match memory::save_conversation(
+            match persistence::save_conversation(
                 name,
                 &self.workspace_root,
                 &mem,
                 &self.persistence_config,
             ) {
                 Ok(()) => {
-                    let _ = memory::write_current_thread_name(
+                    let _ = persistence::write_current_thread_name(
                         name,
                         &self.workspace_root,
                         &self.persistence_config,
@@ -881,7 +881,7 @@ impl App {
                 // Save current conversation before starting fresh.
                 if let Some(ref title) = self.conversation_title {
                     let mem = self.memory.read().expect("memory lock poisoned");
-                    let _ = memory::save_conversation(
+                    let _ = persistence::save_conversation(
                         title,
                         &self.workspace_root,
                         &mem,
@@ -890,7 +890,7 @@ impl App {
                 }
                 self.conversation_title = None;
                 // Write fallback for the gap between /new and first message.
-                let _ = memory::write_current_thread_name(
+                let _ = persistence::write_current_thread_name(
                     &self.persistence_config.default_thread_name,
                     &self.workspace_root,
                     &self.persistence_config,
@@ -1139,10 +1139,10 @@ impl App {
     ///
     /// Shared by the picker (`Enter`) and the `/resume <name>` slash command.
     fn do_resume(&mut self, name: &str) -> Option<TuiCommand> {
-        match memory::load_conversation(name, &self.workspace_root, &self.persistence_config) {
+        match persistence::load_conversation(name, &self.workspace_root, &self.persistence_config) {
             Ok(loaded) => {
                 *self.memory.write().expect("memory lock poisoned") = loaded;
-                let _ = memory::write_current_thread_name(
+                let _ = persistence::write_current_thread_name(
                     name,
                     &self.workspace_root,
                     &self.persistence_config,
@@ -1169,7 +1169,7 @@ impl App {
 
     /// Opens the thread picker overlay with all saved conversations.
     fn open_thread_picker(&mut self) {
-        match memory::list_threads(&self.workspace_root, &self.persistence_config) {
+        match persistence::list_threads(&self.workspace_root, &self.persistence_config) {
             Ok(threads) if !threads.is_empty() => {
                 self.thread_picker = Some(super::messages::ThreadPicker {
                     threads,

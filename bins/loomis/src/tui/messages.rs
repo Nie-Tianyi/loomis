@@ -269,7 +269,7 @@ pub struct SlashCompletionState {
 #[derive(Debug, Clone)]
 pub struct ThreadPicker {
     /// Available threads, sorted newest-first.
-    pub threads: Vec<memory::ThreadInfo>,
+    pub threads: Vec<persistence::ThreadInfo>,
     /// Currently highlighted index.
     pub selected: usize,
 }
@@ -288,12 +288,12 @@ pub fn truncate_for_display(text: &str, max_len: usize) -> String {
 
 /// Returns `true` if `name` is a valid thread name.
 ///
-/// Delegates to [`memory::sanitize_filename`] for the canonical check, so
+/// Delegates to [`persistence::sanitize_filename`] for the canonical check, so
 /// any name that passes validation will be preserved verbatim by the
 /// persistence layer.  Control characters and filesystem-illegal characters
 /// (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`) are rejected.
 pub fn is_valid_thread_name(name: &str) -> bool {
-    !name.is_empty() && name == memory::sanitize_filename(name)
+    !name.is_empty() && name == persistence::sanitize_filename(name)
 }
 
 #[cfg(test)]

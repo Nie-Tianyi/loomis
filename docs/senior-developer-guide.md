@@ -35,10 +35,12 @@ agent_oxide/
 │   ├── deepseek/           # DeepSeekClient — implements LLMClient
 │   ├── tools/              # Tool trait, ToolRegistry
 │   ├── tools-macros/       # #[tool] proc macro — generates Tool trait impls
-│   ├── memory/             # Memory (Vec<Message> buffer), persistence I/O
+│   ├── memory/             # Memory (Vec<Message> buffer)
+│   ├── util/               # Shared workspace utilities (iso8601_now)
 │   └── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent
 ├── extensions/
 │   ├── hooks/              # MicroCompactHook, MacroCompactHook
+│   ├── persistence/        # Save/load threads, thread naming, PersistenceHook
 │   ├── observability/      # TraceEvent, TraceStore, RunMetrics
 │   ├── sandbox/            # WorkspaceFs, ShellFilter, SandboxHook, etc.
 │   ├── skills/             # SkillDef, SkillRegistry, ActiveSkills
@@ -59,6 +61,8 @@ provider ───────────────────────�
     ├── engine ────────────────── (uses provider + tools + memory)
     │       ↑
     ├── hooks ─────────────────── (uses provider + memory + engine)
+    │       ↑
+    ├── persistence ───────────── (uses provider + memory + engine)
     │       ↑
     ├── subagent ──────────────── (uses provider + tools + engine + memory)
     │       ↑
@@ -81,6 +85,8 @@ provider ───────────────────────�
 | `sandbox` | `SandboxConfig` | Security policy (TOML) | `extensions/sandbox/src/config.rs` |
 | `tools-macros` | `#[tool]` | Proc macro codegen | `core/tools-macros/src/lib.rs` |
 | `memory` | `Memory`, `SharedMemory` | Conversation buffer | `core/memory/src/memory.rs` |
+| `persistence` | `PersistenceConfig` | Thread storage layout | `extensions/persistence/src/persistence.rs` |
+| `persistence` | `PersistenceHook` | Auto-save after each run | `extensions/persistence/src/hook.rs` |
 | `hooks` | `MicroCompactHook` | Tool-output clearing | `extensions/compact/src/compact.rs` |
 | `hooks` | `MacroCompactHook<C>` | LLM summarisation | `extensions/compact/src/compact.rs` |
 | `engine` | `Agent` | ReAct loop runner | `core/engine/src/agent.rs` |

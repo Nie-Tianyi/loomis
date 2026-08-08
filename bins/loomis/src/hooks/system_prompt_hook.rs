@@ -146,7 +146,7 @@ fn build_environment_context(workspace_root: &Path) -> String {
     let os_ver = detect_os_version();
     let shell = detect_shell();
     let cwd = workspace_root.display().to_string();
-    let date = memory::iso8601_now();
+    let date = util::iso8601_now();
     let git_info = detect_git_info(workspace_root);
 
     let mut block = format!(

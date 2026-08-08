@@ -171,7 +171,7 @@ impl AgentHook for SandboxHook {
                     "Shell command blocked by sandbox policy"
                 );
                 self.audit_logger.log(AuditEntry {
-                    timestamp: memory::iso8601_now(),
+                    timestamp: util::iso8601_now(),
                     session_id: session_id.to_string(),
                     tool: "shell".into(),
                     command: command.clone(),
@@ -195,7 +195,7 @@ impl AgentHook for SandboxHook {
                     "Shell command auto-approved"
                 );
                 self.audit_logger.log(AuditEntry {
-                    timestamp: memory::iso8601_now(),
+                    timestamp: util::iso8601_now(),
                     session_id: session_id.to_string(),
                     tool: "shell".into(),
                     command: command.clone(),
@@ -220,7 +220,7 @@ impl AgentHook for SandboxHook {
                             "Shell command approved by user"
                         );
                         self.audit_logger.log(AuditEntry {
-                            timestamp: memory::iso8601_now(),
+                            timestamp: util::iso8601_now(),
                             session_id: session_id.to_string(),
                             tool: "shell".into(),
                             command,
@@ -240,7 +240,7 @@ impl AgentHook for SandboxHook {
                         );
                         self.resource_tracker.cancel(session_id, "shell");
                         self.audit_logger.log(AuditEntry {
-                            timestamp: memory::iso8601_now(),
+                            timestamp: util::iso8601_now(),
                             session_id: session_id.to_string(),
                             tool: "shell".into(),
                             command,
@@ -262,7 +262,7 @@ impl AgentHook for SandboxHook {
         // (Shell operations are already logged inline in before_tool_call.)
         if tool_call.function.name != "shell" {
             self.audit_logger.log(AuditEntry {
-                timestamp: memory::iso8601_now(),
+                timestamp: util::iso8601_now(),
                 session_id: session_id.to_string(),
                 tool: tool_call.function.name.clone(),
                 command: tool_call.function.arguments.clone(),
@@ -284,7 +284,7 @@ impl AgentHook for SandboxHook {
             RunOutcome::Cancelled => "cancelled",
         };
         self.audit_logger.log(AuditEntry {
-            timestamp: memory::iso8601_now(),
+            timestamp: util::iso8601_now(),
             session_id: session_id.to_string(),
             tool: "__run_finish__".into(),
             command: String::new(),
@@ -298,7 +298,7 @@ impl AgentHook for SandboxHook {
         self.resource_tracker
             .record(session_id, &tool_call.function.name);
         self.audit_logger.log(AuditEntry {
-            timestamp: memory::iso8601_now(),
+            timestamp: util::iso8601_now(),
             session_id: session_id.to_string(),
             tool: tool_call.function.name.clone(),
             command: tool_call.function.arguments.clone(),

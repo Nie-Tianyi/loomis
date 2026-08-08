@@ -117,7 +117,7 @@ impl AgentHook for ProfileHook {
             let mut store = self.store.write().expect("profile store lock poisoned");
 
             store.profile.total_sessions += 1;
-            store.profile.updated_at = memory::iso8601_now();
+            store.profile.updated_at = util::iso8601_now();
             store.save();
 
             store.profile.total_sessions - store.profile.last_synthesis_session
@@ -303,7 +303,7 @@ impl ProfileHook {
                     }
 
                     store.profile.last_synthesis_session = store.profile.total_sessions;
-                    store.profile.updated_at = memory::iso8601_now();
+                    store.profile.updated_at = util::iso8601_now();
                     store.save();
 
                     tracing::info!(

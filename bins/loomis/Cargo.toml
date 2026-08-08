@@ -18,7 +18,9 @@ deepseek = { path = "../../core/deepseek" }
 tools = { path = "../../core/tools" }
 memory = { path = "../../core/memory" }
 engine = { path = "../../core/engine" }
+util = { path = "../../core/util" }
 hooks = { path = "../../extensions/compact" }
+persistence = { path = "../../extensions/persistence" }
 subagent = { path = "../../extensions/subagent" }
 observability = { path = "../../extensions/observability" }
 skills = { path = "../../extensions/skills" }
@@ -39,7 +41,7 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 arboard = { workspace = true }
-time = { version = "0.3", features = ["local-offset"] }
+time = { workspace = true }
 
 [dev-dependencies]
 futures-executor = { workspace = true }

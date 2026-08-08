@@ -16,8 +16,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use engine::{AgentEvent, CallOrigin};
-use memory::{PendingHints, PersistenceConfig, SharedMemory};
+use memory::{PendingHints, SharedMemory};
 use observability::TraceStore;
+use persistence::PersistenceConfig;
 use skills::{self, SkillRegistry};
 
 use ratatui::layout::Rect;

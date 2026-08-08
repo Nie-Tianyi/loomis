@@ -2042,8 +2042,9 @@ mod tests {
 
     #[test]
     fn test_cjk_delete_clears_wide_char_trailing_cell() {
-        use memory::{PendingHints, PersistenceConfig};
+        use memory::PendingHints;
         use observability::TraceStore;
+        use persistence::PersistenceConfig;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
         use std::path::PathBuf;

@@ -1,20 +1,16 @@
 [package]
-name = "sandbox"
+name = "persistence"
 version = "0.1.0"
 edition = "2024"
-description = "Sandbox runtime components — command filtering, environment sanitization, resource tracking, audit logging, and configuration"
+description = "Conversation persistence — save/load threads, thread naming, and auto-save hook"
 
 [dependencies]
-engine = { path = "../../core/engine" }
 memory = { path = "../../core/memory" }
 provider = { path = "../../core/provider" }
+engine = { path = "../../core/engine" }
 util = { path = "../../core/util" }
-tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-glob = { workspace = true }
-regex = { workspace = true }
-toml = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

@@ -11,7 +11,9 @@
 use std::path::PathBuf;
 
 use engine::{AgentHook, RunOutcome};
-use memory::{PersistenceConfig, SharedMemory};
+use memory::SharedMemory;
+
+use crate::persistence::{PersistenceConfig, default_thread_name, save_conversation};
 
 /// Saves conversation to disk after every agent run completes.
 pub struct PersistenceHook {
@@ -31,13 +33,13 @@ impl PersistenceHook {
 impl AgentHook for PersistenceHook {
     fn on_run_finish(&self, _session_id: &str, _outcome: &RunOutcome, memory: &SharedMemory) {
         let mem = memory.read().expect("memory lock poisoned");
-        let name = memory::default_thread_name(&self.workspace_root, &self.config);
+        let name = default_thread_name(&self.workspace_root, &self.config);
         let messages = mem.messages.len();
         let path = self
             .workspace_root
             .join(&self.config.threads_dir)
             .join(format!("{name}.json"));
-        match memory::save_conversation(&name, &self.workspace_root, &mem, &self.config) {
+        match save_conversation(&name, &self.workspace_root, &mem, &self.config) {
             Ok(()) => tracing::info!(
                 path = %path.display(),
                 messages = messages,

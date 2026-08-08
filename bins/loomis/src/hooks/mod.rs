@@ -1,6 +1,5 @@
 //! Concrete [`AgentHook`](engine::AgentHook) implementations.
 
-mod persistence_hook;
 mod plan_mode_hook;
 mod profile_hook;
 mod skill_hook;
@@ -11,7 +10,6 @@ mod todo_hook;
 pub use hooks::insert_before_history;
 
 pub use observability::ObservabilityHook;
-pub use persistence_hook::PersistenceHook;
 pub use plan_mode_hook::{PlanModeHook, PlanModeState};
 pub use profile_hook::ProfileHook;
 pub use sandbox::SandboxHook;

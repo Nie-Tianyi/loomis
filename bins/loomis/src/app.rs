@@ -7,8 +7,9 @@ use std::sync::{Arc, RwLock};
 use deepseek::DeepSeekClient;
 use engine::{Agent, EngineContext};
 use hooks;
-use memory::{Memory, PendingHints, PersistenceConfig, SharedMemory};
+use memory::{Memory, PendingHints, SharedMemory};
 use observability::TraceStore;
+use persistence::PersistenceConfig;
 use skills::{self, SkillRegistry};
 use subagent::{self, SubagentConfig};
 use tokio::sync::mpsc;
@@ -17,8 +18,8 @@ use tools::ToolRegistry;
 use sandbox::SandboxConfig;
 
 use crate::hooks::{
-    ObservabilityHook, PersistenceHook, PlanModeHook, PlanModeState, ProfileHook, SandboxHook,
-    SkillHook, SystemPromptHook, TodoListHook,
+    ObservabilityHook, PlanModeHook, PlanModeState, ProfileHook, SandboxHook, SkillHook,
+    SystemPromptHook, TodoListHook,
 };
 use crate::tools::{
     AskUserQuestionTool, CalculatorTool, EditTool, EnterPlanModeTool, ExitPlanModeTool, GlobTool,
@@ -352,7 +353,7 @@ pub fn build_coding_agent(
         ..Default::default()
     };
     let persistence_hook =
-        PersistenceHook::new(workspace_root.to_path_buf(), persistence_config.clone());
+        persistence::PersistenceHook::new(workspace_root.to_path_buf(), persistence_config.clone());
 
     let hooks: Vec<Box<dyn engine::AgentHook>> = vec![
         Box::new(system_prompt_hook), // 0. Seed system prompts on run start

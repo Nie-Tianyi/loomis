@@ -27,6 +27,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use deepseek::DeepSeekClient;
 use engine::{Agent, AgentEvent, CallOrigin};
 use memory::SharedMemory;
+use persistence::PersistenceConfig;
 use provider::{Message, Role};
 
 use super::app::App;
@@ -336,7 +337,7 @@ async fn agent_handler(
     agent_tx: UnboundedSender<AgentEvent>,
     workspace_root: PathBuf,
     response_router: Arc<engine::ResponseRouter>,
-    persistence_config: memory::PersistenceConfig,
+    persistence_config: PersistenceConfig,
 ) {
     let mut current_run: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -432,8 +433,9 @@ async fn agent_handler(
                 // Persist the cleared state.
                 {
                     let mem = memory.read().expect("memory lock poisoned");
-                    let name = memory::default_thread_name(&workspace_root, &persistence_config);
-                    match memory::save_conversation(
+                    let name =
+                        persistence::default_thread_name(&workspace_root, &persistence_config);
+                    match persistence::save_conversation(
                         &name,
                         &workspace_root,
                         &mem,
@@ -533,10 +535,14 @@ async fn agent_handler(
                 // Save conversation before exiting.
                 {
                     let mem = memory.read().expect("memory lock poisoned");
-                    let name = memory::default_thread_name(&workspace_root, &persistence_config);
-                    if let Err(e) =
-                        memory::save_conversation(&name, &workspace_root, &mem, &persistence_config)
-                    {
+                    let name =
+                        persistence::default_thread_name(&workspace_root, &persistence_config);
+                    if let Err(e) = persistence::save_conversation(
+                        &name,
+                        &workspace_root,
+                        &mem,
+                        &persistence_config,
+                    ) {
                         tracing::error!(
                             name = %name,
                             error = %e,

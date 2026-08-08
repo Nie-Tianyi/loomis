@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use provider::Message;
 use provider::Role;
 
-use crate::memory::Memory;
+use memory::Memory;
 
 use std::path::Path;
 use std::{fs, io};
@@ -79,7 +79,7 @@ pub fn save_conversation(
 
     let cf = ConversationFile {
         version: CURRENT_VERSION,
-        saved_at: iso8601_now(),
+        saved_at: util::iso8601_now(),
         messages: memory.to_context_vec(),
     };
 
@@ -269,7 +269,10 @@ pub fn sanitize_filename(name: &str) -> String {
 
     // 6. Fallback if empty after all processing.
     if guarded.is_empty() {
-        format!("conversation-{}", iso8601_now().replace([':', 'T'], "-"))
+        format!(
+            "conversation-{}",
+            util::iso8601_now().replace([':', 'T'], "-")
+        )
     } else {
         guarded
     }
@@ -290,7 +293,7 @@ pub fn thread_name_from_message(first_message: &str) -> String {
         return base;
     }
     // `iso8601_now()` → "YYYY-MM-DDTHH:MM:SSZ"; take just the date portion.
-    let date = &iso8601_now()[..10];
+    let date = &util::iso8601_now()[..10];
     // "_" + "YYYY-MM-DD" = 11 chars.  Keep the total under MAX_THREAD_NAME_CHARS.
     let max_base = MAX_THREAD_NAME_CHARS.saturating_sub(11);
     let end = base.floor_char_boundary(max_base.min(base.len()));
@@ -299,54 +302,6 @@ pub fn thread_name_from_message(first_message: &str) -> String {
 }
 
 // ── Internal Helpers ───────────────────────────────────────────────────────────
-
-/// Returns the current UTC time as an ISO-8601 formatted string (`YYYY-MM-DDTHH:MM:SSZ`).
-///
-/// Hand-rolled to avoid a `chrono` dependency. Correct for dates from 1970 to 2100.
-pub fn iso8601_now() -> String {
-    let d = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let total_secs = d.as_secs();
-    let days = total_secs / 86400;
-    let time_secs = total_secs % 86400;
-
-    let mut year = 1970i64;
-    let mut remaining = days as i64;
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining < days_in_year {
-            break;
-        }
-        remaining -= days_in_year;
-        year += 1;
-    }
-
-    const MONTH_DAYS: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month = 1usize;
-    for &md in &MONTH_DAYS {
-        let dim = if month == 2 && is_leap_year(year) {
-            29
-        } else {
-            md
-        };
-        if remaining < dim {
-            break;
-        }
-        remaining -= dim;
-        month += 1;
-    }
-    let day = remaining + 1;
-    let h = time_secs / 3600;
-    let m = (time_secs % 3600) / 60;
-    let s = time_secs % 60;
-
-    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
-}
-
-const fn is_leap_year(y: i64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
-}
 
 fn format_conversation_md(cf: &ConversationFile, config: &PersistenceConfig) -> String {
     let mut md = String::new();
@@ -455,7 +410,7 @@ mod tests {
 
     /// Current date in YYYY-MM-DD for use in `thread_name_from_message` assertions.
     fn today_date() -> String {
-        iso8601_now()[..10].to_string()
+        util::iso8601_now()[..10].to_string()
     }
 
     #[test]
@@ -567,20 +522,5 @@ mod tests {
     fn test_sanitize_filename_underscores_collapsed() {
         let name = sanitize_filename("a__b");
         assert_eq!(name, "a_b");
-    }
-
-    // ── iso8601_now ─────────────────────────────────────────
-
-    #[test]
-    fn test_iso8601_now_produces_correct_format() {
-        let ts = iso8601_now();
-        // Should look like "2026-07-09T12:34:56Z"
-        assert!(ts.ends_with('Z'), "got {ts}");
-        assert_eq!(ts.len(), 20, "got {ts}");
-        assert!(ts.starts_with("20"), "got {ts}");
-        let parts: Vec<&str> = ts[..19].split('T').collect();
-        assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0].len(), 10);
-        assert_eq!(parts[1].len(), 8);
     }
 }
