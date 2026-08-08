@@ -635,12 +635,18 @@ fn message_to_lines(
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
-                // Description
-                for desc_line in description.lines() {
-                    lines.push(Line::from(vec![
-                        Span::raw("       "),
-                        Span::styled(desc_line, Style::default().fg(theme::ACCENT)),
-                    ]));
+                // Description — rendered as markdown so plan content
+                // (headings, lists, code blocks, tables) displays
+                // formatted instead of as raw markdown strings.
+                let desc_width = area_width.saturating_sub(7); // account for indent
+                let desc_lines = render_markdown(description, desc_width);
+                for mut line in desc_lines {
+                    // Prepend indent to the first span of each rendered line
+                    let mut spans = vec![Span::raw("       ")];
+                    std::mem::swap(&mut line.spans, &mut spans);
+                    spans.extend(std::mem::take(&mut line.spans));
+                    line.spans = spans;
+                    lines.push(line);
                 }
                 // Options — each on its own line, highlighted when selected.
                 if !options.is_empty() {
