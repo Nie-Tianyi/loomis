@@ -391,7 +391,7 @@ pub fn build_coding_agent(
     // ── Engine context (via builder) ─────────────────────────
     let ctx = EngineContext::builder(client, memory.clone(), registry, model.to_string())
         .hooks(hooks)
-        .max_steps(50)
+        .max_steps(999)
         .max_retries(3)
         .streaming(true)
         .pending_hints(pending_hints.clone())
