@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="UI_screenshot.png" alt="Loomis TUI 截图" width="80%">
+  <img src="UIScreenshot.png" alt="Loomis TUI 截图" width="80%">
 </p>
 
 ---
