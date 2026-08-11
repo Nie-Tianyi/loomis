@@ -6,15 +6,15 @@ in this repository.
 ## Build & Test
 
 ```bash
-cargo build                        # debug build (all crates)
+cargo build                        # debug build
 cargo build --release              # release build
-cargo build -p loomis              # build just the binary
-cargo test --all                   # run all tests
-cargo test -p provider             # run provider crate tests
-cargo test -p loomis               # run loomis (binary) tests
-cargo clippy --all                 # lint all crates
+cargo test --all                   # all tests (workspace = the loomis crate)
+cargo clippy --all                 # lint
 cargo run -p loomis                # launch the TUI
 ```
+
+For framework tests (`-p engine`, etc.), cd into the sibling `agent_oxide/`
+repo — see `AGENT_OXIDE.md` there.
 
 Set `DEEPSEEK_API` in `.env` before running — `dotenvy` loads it at startup.
 See `.env.example` for all supported env vars (`BASE_URL`, `DEFAULT_PRO_MODEL`,
@@ -25,8 +25,12 @@ Tests are **inline** (`#[cfg(test)] mod tests { ... }`) co-located with source
 
 ## Architecture
 
-**Rust agent framework** (Rust 2024 edition, Tokio async). Cargo workspace
-named `agent_oxide`.
+**Rust agent application** (Rust 2024 edition, Tokio async). Cargo workspace
+with `members = ["bins/*"]`. The framework (`core/` + `extensions/`, ~15
+crates) lives in the **sibling `agent_oxide/` repo** — the umbrella
+`agent_oxide` crate re-exports all sub-crates, and each sub-crate is
+published independently on crates.io. This repo wires the framework into a
+TUI app via path dependencies on `../../../agent_oxide/...`.
 
 **Rust edition**: Uses Rust 2024 with native async fn in traits (RPITIT).
 Do NOT use `async-trait` crate. Prefer sync traits for dyn-dispatch; keep
@@ -34,54 +38,25 @@ async work in dedicated components.
 
 ### Workspace structure
 
-```
-agent_oxide/
-├── Cargo.toml              # [workspace] — members = ["core/*", "extensions/*", "bins/*"]
-├── core/
-│   ├── provider/           # LLMClient trait + shared types
-│   ├── deepseek/           # DeepSeekClient — implements LLMClient
-│   ├── tools/              # Tool trait, ToolRegistry, WorkspaceFs, ProgressStream
-│   ├── tools-macros/       # #[tool] proc macro
-│   ├── memory/             # Memory buffer, PendingHints
-│   ├── util/               # Shared workspace utilities (iso8601_now)
-│   └── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent, ResponseRouter
-├── extensions/
-│   ├── skills/             # SkillDef, SkillRegistry, ActiveSkills — skill discovery & loading
-│   ├── compact/            # MicroCompactHook + MacroCompactHook
-│   ├── persistence/        # Conversation persistence — save/load threads, PersistenceHook
-│   ├── subagent/           # SubagentTool — spawn child agents as tools
-│   ├── observability/      # TraceEvent, TraceStore, RunMetrics — full-chain tracing
-│   └── sandbox/            # Sandbox runtime — WorkspaceFs, ShellFilter, SandboxHook, etc.
-├── bins/
-│   └── loomis/             # Binary — concrete tools, hooks, sandbox, TUI
-└── docs/
-    ├── beginner-developer-guide.md
-    ├── senior-developer-guide.md
-    └── sandbox-architecture.md
+```text
+loomis/                        # this repo — the application
+├── Cargo.toml                 # [workspace] — members = ["bins/*"]
+└── bins/loomis/               # Binary + lib — TUI, concrete tools, hooks, sandbox wiring
+agent_oxide/                   # sibling repo — the framework (open source)
+├── Cargo.toml                 # [package] umbrella + [workspace] core/* + extensions/*
+├── src/lib.rs                 # umbrella re-exports + prelude
+├── core/                      # provider, deepseek, memory, tools, tools-macros, engine, util
+└── extensions/                # agent-kit, agent-macros, compact(hooks), observability,
+                               # persistence, sandbox, skills, subagent
 ```
 
 ### Dependency graph
 
 ```text
-core/
-    provider (no internal deps)
+bins/loomis ────── (path deps → all agent_oxide core/ + extensions/ crates)
         ↑
-        ├── deepseek ──── (impl LLMClient)
-        ├── tools ─────── (uses provider + tools-macros)
-        ├── memory ────── (uses provider)
-        ↑
-        └── engine ────── (uses provider + tools + memory)
-                ↑
-extensions/
-    skills ────────────── (no internal deps)
-    hooks ─────────────── (uses provider + memory + engine)
-    persistence ───────── (uses provider + engine + memory)
-    observability ─────── (uses provider + engine + memory)
-    sandbox ───────────── (uses engine + memory + provider)
-    subagent ──────────── (uses provider + tools + engine + memory + observability)
-                ↑
-bins/
-    loomis ────────────── (uses all crates from core/ and extensions/)
+agent_oxide/       (framework internals — see AGENT_OXIDE.md for the
+                    core/ → extensions/ dependency graph)
 ```
 
 ## Key patterns
@@ -204,10 +179,11 @@ System messages. Three components work together:
 | `SkillTool` | `bins/loomis` | Tool (`name = "skill"`) — loaded as System message, gives the agent the skill's instructions |
 | `SkillHook` | `bins/loomis` | Maintains `[SKILL: name]` System messages in memory, synced with `ActiveSkills` |
 
-Skill files live in `bins/loomis/skills/` (discovered at startup, listed in
-the system prompt via `{skill_list}`). The `/skill <name>` slash command loads
-a skill manually. `ActiveSkills` (`Arc<RwLock<HashMap<String, String>>`) is
-shared between the TUI, SkillTool, and SkillHook.
+Skill files live in `<workspace>/.loomis/skills/` and `~/.loomis/skills/`
+(discovered at startup, listed in the system prompt via `{skill_list}`). The
+`/skill <name>` slash command loads a skill manually. `ActiveSkills`
+(`Arc<RwLock<HashMap<String, String>>>`) is shared between the TUI, SkillTool,
+and SkillHook.
 
 ### Profile system
 `ProfileHook` builds a user profile across sessions and injects a `[PROFILE]`

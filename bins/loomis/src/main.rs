@@ -101,13 +101,19 @@ async fn main() {
 
     // Load sandbox config (includes [filesystem], [shell], [quotas], [audit]).
     let config_path = cwd.join(".loomis").join("config.toml");
-    let sandbox_config = match SandboxConfig::load(&config_path) {
+    let mut sandbox_config = match SandboxConfig::load(&config_path) {
         Ok(cfg) => cfg,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to load sandbox config, using safe defaults");
             SandboxConfig::default()
         }
     };
+
+    // The generic library default (`.agent/audit.jsonl`) is not the loomis
+    // convention — all app artifacts live under `.loomis/`.
+    if sandbox_config.audit.log_file == sandbox::config::AuditConfig::default().log_file {
+        sandbox_config.audit.log_file = ".loomis/audit.jsonl".into();
+    }
 
     let kit = loomis::build_coding_agent(&api_key, &cwd, &model, &flash_model, &sandbox_config);
 

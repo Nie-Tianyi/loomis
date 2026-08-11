@@ -2,23 +2,33 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> `LOOMIS.md` contains overlapping agent-facing guidance; `docs/` holds long-form
-> developer guides (`beginner-developer-guide.md`, `senior-developer-guide.md`,
-> `sandbox-architecture.md`). Keep this file and `LOOMIS.md` in sync when
-> architecture changes.
+> `LOOMIS.md` contains overlapping agent-facing guidance; the long-form
+> framework developer guides (`beginner-developer-guide.md`,
+> `senior-developer-guide.md`, `sandbox-architecture.md`, `agent-kit-guide.md`)
+> live in the agent_oxide repo under `docs/`. Keep this file and `LOOMIS.md`
+> in sync when architecture changes.
+>
+> **Repo split (2026-08):** the framework libraries (`core/` + `extensions/`)
+> now live in the sibling `agent_oxide/` repo at
+> `c:/Users/Administrator/RustroverProjects/agent_oxide` (open source, crates.io).
+> This repo is the Loomis application only. Path dependencies in
+> `bins/loomis/Cargo.toml` point at `../../../agent_oxide/...`. Library
+> changes happen in the agent_oxide repo; `AGENT_OXIDE.md` there is the
+> library counterpart of this file.
 
 ## Build & Test
 
 ```bash
-cargo build                        # debug build (all crates)
+cargo build                        # debug build
 cargo build --release              # release build
-cargo test --all                   # all tests
-cargo test -p engine               # one crate's tests
-cargo test -p engine <name>        # single test by name substring
+cargo test --all                   # all tests (workspace = the loomis crate)
+cargo test -p loomis <name>        # single test by name substring
 cargo clippy --all                 # lint
 cargo run -p loomis                # launch TUI (debug)
 cargo run -p loomis --release      # launch TUI (release — recommended)
 ```
+
+For framework tests (`-p engine`, etc.), cd into the agent_oxide repo.
 
 Tests are **inline** (`#[cfg(test)] mod tests`) co-located with source — there
 are no `tests/` directories.
@@ -33,40 +43,36 @@ Environment (loaded via `dotenvy` from `.env`, see `.env.example`):
 | `DEFAULT_FLASH_MODEL` | Cheap model for compaction/profile synthesis (default `deepseek-v4-flash`) |
 | `LOOMIS_LOG` | `tracing` EnvFilter (default `info`); e.g. `agent=debug` |
 
-## Architecture
+## Architecture (loomis repo)
 
-**Rust 2024** agent framework, Tokio async. Cargo workspace with
-`members = ["core/*", "extensions/*", "bins/*"]`. Uses native async fn in traits (RPITIT) —
-do NOT use `async-trait`. Prefer sync traits for dyn-dispatch; keep async work
-in dedicated components.
+**Rust 2024** agent application, Tokio async. Cargo workspace with
+`members = ["bins/*"]`. The framework itself (core + extensions, ~15 crates)
+is the **`agent_oxide`** repo at `../agent_oxide/` — see `AGENT_OXIDE.md`
+there for library architecture (ReAct loop, hooks, sandbox, compaction,
+persistence, skills, agent-kit). This repo wires the framework into a TUI
+app. Uses native async fn in traits (RPITIT) — do NOT use `async-trait`.
+Prefer sync traits for dyn-dispatch; keep async work in dedicated components.
 
-### Crates & dependency graph
+### Repo structure
 
+```text
+loomis/                        # this repo — the application
+├── Cargo.toml                 # [workspace] — members = ["bins/*"]
+├── bins/loomis/               # Binary + lib — TUI, concrete tools, hooks, sandbox wiring
+└── docs/                      # App docs (API payload examples; framework guides live in agent_oxide/docs/)
+agent_oxide/                   # sibling repo — the framework (open source)
+├── Cargo.toml                 # [package] umbrella + [workspace] core/* + extensions/*
+├── src/lib.rs                 # Umbrella re-exports + prelude
+├── core/                      # provider, deepseek, memory, tools, tools-macros, engine, util
+├── extensions/                # agent-kit, agent-macros, compact(hooks), observability,
+│                              # persistence, sandbox, skills, subagent
+└── docs/                      # Framework guides (beginner, senior, sandbox-architecture, agent-kit)
 ```
-agent_oxide/
-├── Cargo.toml              # [workspace] — members = ["core/*", "extensions/*", "bins/*"]
-├── core/
-│   ├── provider/           # LLMClient trait + shared types
-│   ├── deepseek/           # DeepSeekClient — implements LLMClient
-│   ├── tools/              # Tool trait, ToolRegistry, WorkspaceFs, ProgressStream
-│   ├── tools-macros/       # #[tool] proc macro
-│   ├── memory/             # Memory buffer, PendingHints
-│   ├── util/               # Shared workspace utilities (iso8601_now)
-│   └── engine/             # Agent (ReAct loop), AgentHook trait, AgentEvent, ResponseRouter
-├── extensions/
-│   ├── skills/             # SkillDef, SkillRegistry, ActiveSkills — skill discovery & loading
-│   ├── hooks/              # MicroCompactHook + MacroCompactHook
-│   ├── persistence/        # Conversation persistence — save/load threads, PersistenceHook
-│   ├── subagent/           # SubagentTool — spawn child agents as tools
-│   ├── observability/      # TraceEvent, TraceStore, RunMetrics — full-chain tracing
-│   └── sandbox/            # Sandbox runtime — WorkspaceFs, ShellFilter, SandboxHook, etc.
-├── bins/
-│   └── loomis/             # Binary — concrete tools, hooks, sandbox, TUI
-└── docs/
-    ├── beginner-developer-guide.md
-    ├── senior-developer-guide.md
-    └── sandbox-architecture.md
-```
+
+Dependency direction: `bins/loomis` → `agent_oxide` crates (via
+`path = "../../../agent_oxide/..."` in `Cargo.toml`). Nothing in
+`agent_oxide` depends on this repo. To change framework code, work in the
+agent_oxide repo and bump versions there.
 
 ### The ReAct loop (engine)
 
@@ -128,9 +134,9 @@ Both run in `on_llm_start()`:
    them via the flash model through `engine::block_on`, inserts the summary
    as a System message.
 
-Key constants in `extensions/compact/src/compact.rs`: `DEFAULT_COMPACT_TOKEN_LIMIT`,
-`DEFAULT_COMPACT_CHAR_LIMIT`, `DEFAULT_KEEP_LAST_N`,
-`DEFAULT_KEEP_RECENT_TOOL_OUTPUTS`.
+Key constants in `agent_oxide/extensions/compact/src/compact.rs`:
+`DEFAULT_COMPACT_TOKEN_LIMIT`, `DEFAULT_COMPACT_CHAR_LIMIT`,
+`DEFAULT_KEEP_LAST_N`, `DEFAULT_KEEP_RECENT_TOOL_OUTPUTS`.
 
 ### Sandbox (5-layer defense)
 
