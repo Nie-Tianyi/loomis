@@ -1,4 +1,4 @@
-//! Observability crate for the Loomis agent framework.
+//! Observability crate for the Agent Oxide framework.
 //!
 //! Provides:
 //!

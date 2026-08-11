@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn test_static_block_renders() {
         let hook = ContextBlockHook::new_with(|h| {
-            h.add_static("project", 10, "You are working on loomis.");
+            h.add_static("project", 10, "You are working on a Rust project.");
         });
         let mem = shared_memory();
         hook.on_llm_start("s", &mem);

@@ -15,7 +15,7 @@ use tools::ToolRegistry;
 /// Configuration for assembling an agent from an agent struct.
 ///
 /// Mirrors the per-method configuration in NVIDIA OO Agents
-/// (`max_iterations`, `max_steps`, ...) plus the loomis-specific knobs.
+/// (`max_iterations`, `max_steps`, ...) plus the Agent Oxide-specific knobs.
 pub struct BuildConfig {
     /// Max ReAct loop iterations (default 50).
     pub max_steps: usize,

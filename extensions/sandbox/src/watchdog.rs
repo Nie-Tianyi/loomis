@@ -2,7 +2,7 @@
 //! timeout.
 //!
 //! Shared between `ShellTool` and user `!command` execution in downstream
-//! crates (e.g. `loomis`).
+//! crates (e.g. your binary).
 
 use std::process::Command;
 use std::sync::Arc;

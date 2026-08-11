@@ -1,4 +1,4 @@
-# agent-kit — NVIDIA OO Agents 范式（映射到 loomis core）
+# agent-kit — NVIDIA OO Agents 范式（映射到 Agent Oxide core）
 
 将 NVIDIA 开源的 OO Agents 编程范式（类文档 = System Prompt、同步方法 = 工具、
 异步方法 = LLM 生成、Pydantic 返回 = 结构化输出、`@strategy`、context blocks）
@@ -124,6 +124,6 @@ pub async fn answer(&self, question: String)
 
 ## 与现有代码共存
 
-不修改 `core/`，不修改 `bins/loomis`。`into_agent()` 产出标准
+不修改 `core/`，不修改下游应用。`into_agent()` 产出标准
 `engine::Agent<C>`，可继续叠加现有 hook（SandboxHook、PersistenceHook 等，
 通过 `BuildConfig::extra_hooks` 注入）。

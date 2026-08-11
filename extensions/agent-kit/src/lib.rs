@@ -1,7 +1,7 @@
-//! # Agent Kit — NVIDIA OO Agents-style ergonomics on top of the loomis core
+//! # Agent Kit — NVIDIA OO Agents-style ergonomics on top of the Agent Oxide core
 //!
 //! This crate maps the NVIDIA OO Agents programming paradigm onto the
-//! existing loomis `core/` API **without modifying core**.
+//! existing Agent Oxide `core/` API **without modifying core**.
 //!
 //! The [`agent-macros`] proc-macro crate generates the code; this crate
 //! provides the runtime support:
@@ -71,5 +71,9 @@ pub use serde_json;
 pub use tools;
 
 /// Default model used by generation methods when no `#[agent(model)]`
-/// field is present — matches the `.env` `DEFAULT_PRO_MODEL` default.
+/// field is present.
+///
+/// This is a library-level default; downstream applications should
+/// override it via `#[agent(model = "...")]` or their own configuration
+/// (e.g. an environment variable).
 pub const DEFAULT_MODEL: &str = "deepseek-v4-pro";

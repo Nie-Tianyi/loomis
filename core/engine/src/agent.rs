@@ -673,7 +673,7 @@ impl<C: LLMClient> Agent<C> {
     /// This method does **not** directly handle cancellation — the caller
     /// (typically a TUI) should wrap the future in a [`tokio::select!`] with
     /// a cancellation channel, then call [`fail_run`] or send `AgentEvent::Cancelled`
-    /// externally.  See the `loomis` binary for the TUI-side cancellation pattern.
+    /// externally.  See the downstream binary for the TUI-side cancellation pattern.
     async fn run_streaming_loop(
         &self,
         user_input: &str,

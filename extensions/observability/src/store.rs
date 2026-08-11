@@ -207,7 +207,7 @@ impl TraceStore {
     ///
     /// Dispatches to the [`tracing`] crate at the appropriate level for the
     /// event variant.  All events use `target: "agent"` for fine-grained
-    /// filtering (e.g. `LOOMIS_LOG=agent=debug`).
+    /// filtering (e.g. `AGENT_LOG=agent=debug`).
     ///
     /// * `INFO`  — major lifecycle events (run start/finish, subagent finish)
     /// * `WARN`  — error conditions (LLM call failed, tool rejected)

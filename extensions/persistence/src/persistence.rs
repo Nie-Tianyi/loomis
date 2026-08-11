@@ -18,7 +18,7 @@ use std::{fs, io};
 /// Configuration for conversation persistence — storage layout and naming.
 ///
 /// The [`Default`] impl provides generic values; applications should override
-/// with their own paths (e.g. `.loomis/threads` for the Loomis binary).
+/// with their own paths (e.g. `.your-app/threads` for the downstream binary).
 #[derive(Debug, Clone)]
 pub struct PersistenceConfig {
     /// Subdirectory under `workspace_root` where thread files are stored.
@@ -354,10 +354,10 @@ mod tests {
 
     fn test_config() -> PersistenceConfig {
         PersistenceConfig {
-            threads_dir: ".loomis/threads".into(),
-            current_thread_file: ".loomis/current".into(),
+            threads_dir: ".agent/threads".into(),
+            current_thread_file: ".agent/current".into(),
             default_thread_name: "autosave".into(),
-            markdown_title: "Loomis Conversation".into(),
+            markdown_title: "Agent Conversation".into(),
         }
     }
 

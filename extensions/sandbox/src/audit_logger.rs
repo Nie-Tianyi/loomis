@@ -1,8 +1,9 @@
 //! Audit trail — records every shell execution attempt.
 //!
-//! Writes newline-delimited JSON to `.loomis/audit.jsonl`.  A small
-//! in-memory ring buffer holds the most recent entries so the TUI can
-//! display them without re-reading the file.
+//! Writes newline-delimited JSON to the configured audit log path
+//! (relative to the workspace root).  A small in-memory ring buffer
+//! holds the most recent entries so the UI can display them without
+//! re-reading the file.
 
 use crate::config::SandboxConfig;
 use std::collections::VecDeque;

@@ -1,5 +1,5 @@
 //! FeedbackAgent — the NVIDIA OO Agents quickstart/01 equivalent, written
-//! in the same style and compiled onto the loomis `core/` API by the
+//! in the same style and compiled onto the Agent Oxide `core/` API by the
 //! `agent-macros` proc macros.
 //!
 //! ```text

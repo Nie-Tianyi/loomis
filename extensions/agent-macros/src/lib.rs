@@ -1,7 +1,7 @@
-//! # Agent Macros — NVIDIA OO Agents-style ergonomics for loomis
+//! # Agent Macros — NVIDIA OO Agents-style ergonomics for Agent Oxide
 //!
 //! Two macros that translate the NVIDIA OO Agents writing style into
-//! calls against the existing loomis `core/` API — **without modifying
+//! calls against the existing Agent Oxide `core/` API — **without modifying
 //! core**:
 //!
 //! - [`#[derive(Agent)]`](derive@Agent) — annotate a struct. The struct's

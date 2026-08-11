@@ -4,7 +4,7 @@
 //! Defines the [`Tool`] trait, [`ToolRegistry`] container, and JSON Schema
 //! generation helpers.
 //!
-//! Concrete tool implementations live in downstream crates (e.g. `loomis`).
+//! Concrete tool implementations live in downstream crates (e.g. your binary).
 
 mod error;
 mod progress;

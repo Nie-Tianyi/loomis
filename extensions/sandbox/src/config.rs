@@ -78,8 +78,9 @@ fn default_cargo_registry() -> Option<String> {
 
 /// Root configuration for the sandbox system.
 ///
-/// Loaded from `.loomis/config.toml`. If the file is missing, a fresh one
-/// is written with safe defaults so the user can inspect and customise it.
+/// The config file path is provided by the caller (see
+/// [`SandboxConfig::load`]). If the file is missing, a fresh one is
+/// written with safe defaults so the user can inspect and customise it.
 /// If any key is absent in an existing file,
 /// [`SandboxConfig::default`] provides fallback values.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -304,7 +305,7 @@ impl Default for AuditConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            log_file: ".loomis/audit.jsonl".into(),
+            log_file: ".agent/audit.jsonl".into(),
         }
     }
 }
