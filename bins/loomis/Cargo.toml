@@ -13,17 +13,17 @@ name = "loomis"
 path = "src/lib.rs"
 
 [dependencies]
-provider = { version = "0.5.0", path = "../../core/provider" }
-deepseek = { version = "0.5.0", path = "../../core/deepseek" }
-tools = { version = "0.5.0", path = "../../core/tools" }
-memory = { version = "0.5.0", path = "../../core/memory" }
-engine = { version = "0.5.0", path = "../../core/engine" }
-util = { version = "0.5.0", path = "../../core/util" }
-hooks = { version = "0.5.0", path = "../../extensions/compact" }
-persistence = { version = "0.5.0", path = "../../extensions/persistence" }
-subagent = { version = "0.5.0", path = "../../extensions/subagent" }
-observability = { version = "0.5.0", path = "../../extensions/observability" }
-skills = { version = "0.5.0", path = "../../extensions/skills" }
+provider = { version = "0.5.0", path = "../../../agent_oxide/core/provider" }
+deepseek = { version = "0.5.0", path = "../../../agent_oxide/core/deepseek" }
+tools = { version = "0.5.0", path = "../../../agent_oxide/core/tools" }
+memory = { version = "0.5.0", path = "../../../agent_oxide/core/memory" }
+engine = { version = "0.5.0", path = "../../../agent_oxide/core/engine" }
+util = { version = "0.5.0", path = "../../../agent_oxide/core/util" }
+hooks = { version = "0.5.0", path = "../../../agent_oxide/extensions/compact" }
+persistence = { version = "0.5.0", path = "../../../agent_oxide/extensions/persistence" }
+subagent = { version = "0.5.0", path = "../../../agent_oxide/extensions/subagent" }
+observability = { version = "0.5.0", path = "../../../agent_oxide/extensions/observability" }
+skills = { version = "0.5.0", path = "../../../agent_oxide/extensions/skills" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -34,7 +34,7 @@ crossterm = { workspace = true }
 unicode-width = { workspace = true }
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
-sandbox = { version = "0.5.0", path = "../../extensions/sandbox" }
+sandbox = { version = "0.5.0", path = "../../../agent_oxide/extensions/sandbox" }
 schemars = { workspace = true }
 glob = { workspace = true }
 tracing = { workspace = true }
