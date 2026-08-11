@@ -1,13 +1,13 @@
 [package]
 name = "skills"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Skill definitions, discovery, and registry for Agent Oxide"
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = "0.9"
+serde_yaml = { workspace = true }
 tracing = { workspace = true }
 glob = { workspace = true }
 

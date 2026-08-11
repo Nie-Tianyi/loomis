@@ -1,11 +1,11 @@
 [package]
 name = "deepseek"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "DeepSeek API client — implements provider::LLMClient"
 
 [dependencies]
-provider = { path = "../provider" }
+provider = { version = "0.5.0", path = "../provider" }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

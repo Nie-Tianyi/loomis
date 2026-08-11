@@ -1,15 +1,15 @@
 [package]
 name = "persistence"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Conversation persistence — save/load threads, thread naming, and auto-save hook"
 
 [dependencies]
-memory = { path = "../../core/memory" }
-provider = { path = "../../core/provider" }
-deepseek = { path = "../../core/deepseek" }
-engine = { path = "../../core/engine" }
-util = { path = "../../core/util" }
+memory = { version = "0.5.0", path = "../../core/memory" }
+provider = { version = "0.5.0", path = "../../core/provider" }
+deepseek = { version = "0.5.0", path = "../../core/deepseek" }
+engine = { version = "0.5.0", path = "../../core/engine" }
+util = { version = "0.5.0", path = "../../core/util" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

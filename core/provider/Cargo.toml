@@ -1,6 +1,6 @@
 [package]
 name = "provider"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "LLM provider abstraction — LLMClient trait and shared types (Message, ToolCall, ToolDef)"
 

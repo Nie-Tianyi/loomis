@@ -1,13 +1,13 @@
 [package]
 name = "hooks"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Common hooks for the Agent Oxide framework — compaction, approval, etc."
 
 [dependencies]
-provider = { path = "../../core/provider" }
-memory = { path = "../../core/memory" }
-engine = { path = "../../core/engine" }
+provider = { version = "0.5.0", path = "../../core/provider" }
+memory = { version = "0.5.0", path = "../../core/memory" }
+engine = { version = "0.5.0", path = "../../core/engine" }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

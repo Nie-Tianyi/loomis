@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-kit"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "agent-macros",
  "deepseek",
@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "agent-macros"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -460,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "deepseek"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "futures-util",
  "provider",
@@ -580,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "engine"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "futures-util",
  "memory",
@@ -931,7 +931,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hooks"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "engine",
  "futures-util",
@@ -1459,7 +1459,7 @@ dependencies = [
 
 [[package]]
 name = "memory"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "provider",
  "tracing",
@@ -1651,7 +1651,7 @@ dependencies = [
 
 [[package]]
 name = "observability"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "engine",
  "memory",
@@ -1744,7 +1744,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "persistence"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "deepseek",
  "engine",
@@ -1908,7 +1908,7 @@ dependencies = [
 
 [[package]]
 name = "provider"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "futures-util",
  "serde",
@@ -2407,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "engine",
  "glob",
@@ -2655,7 +2655,7 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "skills"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "glob",
  "serde",
@@ -2728,7 +2728,7 @@ dependencies = [
 
 [[package]]
 name = "subagent"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "engine",
  "futures-util",
@@ -3131,7 +3131,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tools"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "futures-core",
  "futures-executor",
@@ -3145,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "tools-macros"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3362,7 +3362,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "util"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "time",
 ]

@@ -1,8 +1,8 @@
 [package]
 name = "agent-macros"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
-description = "NVIDIA OO Agents-style proc macros for loomis — #[derive(Agent)] and #[agent_impl]"
+description = "NVIDIA OO Agents-style proc macros — #[derive(Agent)] and #[agent_impl]"
 
 [lib]
 proc-macro = true
