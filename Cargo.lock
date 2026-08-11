@@ -9,6 +9,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-kit"
+version = "0.1.0"
+dependencies = [
+ "agent-macros",
+ "deepseek",
+ "engine",
+ "futures-executor",
+ "futures-util",
+ "memory",
+ "provider",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tools",
+ "tracing",
+]
+
+[[package]]
+name = "agent-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
