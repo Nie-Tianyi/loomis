@@ -97,6 +97,17 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
     // NOTE: the process-wide panic hook (installed in main.rs) restores the
     // terminal and writes the panic to the log — no TUI-specific hook here.
 
+    // Fresh session: reset the current-thread marker so PersistenceHook's
+    // on_run_start treats the first query as a new conversation and
+    // generates a title for it.  (A leftover name from a previous session
+    // must not hijack the new conversation — on_run_finish would otherwise
+    // overwrite the old thread file.)
+    let _ = persistence::write_current_thread_name(
+        &persistence_config.default_thread_name,
+        &workspace_root,
+        &persistence_config,
+    );
+
     // ── App state ────────────────────────────────────────────────────
     let mut app = App::new(
         model,

@@ -224,6 +224,7 @@ pub fn build_coding_agent(
     let client = DeepSeekClient::new(api_key);
     let subagent_client = client.clone(); // clone before client is moved into EngineContext
     let profile_client = client.clone(); // clone for ProfileHook synthesis
+    let title_client = client.clone(); // clone for PersistenceHook title generation
     let compact_client = DeepSeekClient::new(api_key);
 
     // ── Subagent tool (read-only subset, no shell, no write, no task) ──
@@ -343,17 +344,22 @@ pub fn build_coding_agent(
     // in memory before any summarisation or clearing.
     let todo_list_hook = TodoListHook::new(todo_state.clone());
 
-    // PersistenceHook — auto-saves conversation after each agent run.
-    // Must match the TUI's persistence_config so both the hook and user
-    // save/resume operations write to the same directory.
+    // PersistenceHook — auto-saves conversation after each agent run,
+    // and titles it via the flash model on the first query.  Must match
+    // the TUI's persistence_config so both the hook and user save/resume
+    // operations write to the same directory.
     let persistence_config = PersistenceConfig {
         threads_dir: ".loomis/threads".into(),
         current_thread_file: ".loomis/current".into(),
         markdown_title: "Loomis Conversation".into(),
         ..Default::default()
     };
-    let persistence_hook =
-        persistence::PersistenceHook::new(workspace_root.to_path_buf(), persistence_config.clone());
+    let persistence_hook = persistence::PersistenceHook::new(
+        workspace_root.to_path_buf(),
+        persistence_config.clone(),
+        title_client,
+        flash_model.to_string(),
+    );
 
     let hooks: Vec<Box<dyn engine::AgentHook>> = vec![
         Box::new(system_prompt_hook), // 0. Seed system prompts on run start

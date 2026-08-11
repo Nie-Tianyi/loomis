@@ -7,6 +7,7 @@ description = "Conversation persistence — save/load threads, thread naming, an
 [dependencies]
 memory = { path = "../../core/memory" }
 provider = { path = "../../core/provider" }
+deepseek = { path = "../../core/deepseek" }
 engine = { path = "../../core/engine" }
 util = { path = "../../core/util" }
 serde = { workspace = true }

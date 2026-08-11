@@ -268,17 +268,9 @@ impl App {
                     return cmd;
                 }
 
-                // Normal user message — generate auto-save thread name from
-                // the first message of this conversation.
-                if self.conversation_title.is_none() {
-                    let title = persistence::thread_name_from_message(&expanded_input);
-                    let _ = persistence::write_current_thread_name(
-                        &title,
-                        &self.workspace_root,
-                        &self.persistence_config,
-                    );
-                    self.conversation_title = Some(title);
-                }
+                // Conversation titling is owned by PersistenceHook —
+                // it generates an LLM title from this first query on
+                // on_run_start.
 
                 self.messages.push(ChatMessage::User {
                     content: expanded_input.clone(),
@@ -940,17 +932,9 @@ impl App {
                 if rest.is_empty() {
                     Some(None)
                 } else {
-                    // Auto-generate conversation title from the first
-                    // message, mirroring the normal user-message path.
-                    if self.conversation_title.is_none() {
-                        let title = persistence::thread_name_from_message(rest);
-                        let _ = persistence::write_current_thread_name(
-                            &title,
-                            &self.workspace_root,
-                            &self.persistence_config,
-                        );
-                        self.conversation_title = Some(title);
-                    }
+                    // Conversation titling is owned by PersistenceHook —
+                    // it generates an LLM title from this first query on
+                    // on_run_start.
                     // Show the user's message in the chat — without this it
                     // reaches the agent but never appears on screen.
                     self.messages.push(ChatMessage::User {

@@ -1746,6 +1746,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 name = "persistence"
 version = "0.1.0"
 dependencies = [
+ "deepseek",
  "engine",
  "memory",
  "provider",
@@ -2724,10 +2725,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
-
-[[package]]
-name = "study_with_me"
-version = "0.5.0"
 
 [[package]]
 name = "subagent"
