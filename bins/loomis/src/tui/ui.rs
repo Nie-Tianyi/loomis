@@ -859,10 +859,7 @@ fn wrap_to_width(lines: Vec<Line<'_>>, max_width: u16) -> Vec<Line<'_>> {
                         if chunk.is_empty() {
                             break;
                         }
-                        out.push(Line::from(Span::styled(
-                            chunk.to_string(),
-                            span.style,
-                        )));
+                        out.push(Line::from(Span::styled(chunk.to_string(), span.style)));
                         rem = rest;
                     }
                     current_w = 0;
@@ -2230,7 +2227,7 @@ mod tests {
         // AskUserQuestion option: indent span + option text wider than max_w.
         // The option span must be split, not overflow the boundary.
         let lines = vec![Line::from(vec![
-            Span::raw("       "), // 7-char indent
+            Span::raw("       "),                             // 7-char indent
             Span::styled("  ▶ abcdefghij", Style::default()), // 14 chars total
         ])];
         let wrapped = wrap_to_width(lines, 8);

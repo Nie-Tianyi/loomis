@@ -73,9 +73,7 @@ pub struct ContextBlockHook {
 
 impl ContextBlockHook {
     pub fn new() -> Self {
-        Self {
-            blocks: Vec::new(),
-        }
+        Self { blocks: Vec::new() }
     }
 
     pub fn add(&mut self, block: ContextBlock) {
@@ -83,7 +81,12 @@ impl ContextBlockHook {
         self.blocks.sort_by_key(|b| b.priority());
     }
 
-    pub fn add_static(&mut self, key: impl Into<String>, priority: i32, content: impl Into<String>) {
+    pub fn add_static(
+        &mut self,
+        key: impl Into<String>,
+        priority: i32,
+        content: impl Into<String>,
+    ) {
         self.add(ContextBlock::static_block(key, priority, content));
     }
 
@@ -129,10 +132,7 @@ impl AgentHook for ContextBlockHook {
             // Remove-then-reinsert (same pattern as SkillHook/ProfileHook).
             mem.messages.retain(|m| !m.content.starts_with(&marker));
             if let Some(content) = block.render() {
-                let msg = Message::new(
-                    Role::System,
-                    format!("{marker}\n{content}"),
-                );
+                let msg = Message::new(Role::System, format!("{marker}\n{content}"));
                 let idx = mem
                     .messages
                     .iter()
@@ -173,7 +173,10 @@ mod tests {
         let value2 = value.clone();
         let hook = ContextBlockHook::new_with(|h| {
             h.add_dynamic("count", 10, move || {
-                Some(format!("count={}", value2.load(std::sync::atomic::Ordering::Relaxed)))
+                Some(format!(
+                    "count={}",
+                    value2.load(std::sync::atomic::Ordering::Relaxed)
+                ))
             });
         });
         let mem = shared_memory();
@@ -182,7 +185,10 @@ mod tests {
         hook.on_llm_start("s", &mem);
         let msgs = mem.read().unwrap().to_context_vec();
         assert_eq!(msgs.len(), 1, "remove-then-reinsert keeps exactly one");
-        assert!(msgs[0].content.contains("count=42"), "dynamic re-evaluation");
+        assert!(
+            msgs[0].content.contains("count=42"),
+            "dynamic re-evaluation"
+        );
     }
 
     #[test]

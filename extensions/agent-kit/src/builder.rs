@@ -142,11 +142,12 @@ impl<C: LLMClient + 'static> AgentAssembler<C> {
         });
 
         let hooks: Vec<Box<dyn AgentHook>> = self.config.extra_hooks;
-        let mut builder = EngineContext::builder(self.client, memory, Arc::new(self.tools), self.model)
-            .hooks(hooks)
-            .max_steps(self.config.max_steps)
-            .max_retries(self.config.max_retries)
-            .streaming(self.config.streaming);
+        let mut builder =
+            EngineContext::builder(self.client, memory, Arc::new(self.tools), self.model)
+                .hooks(hooks)
+                .max_steps(self.config.max_steps)
+                .max_retries(self.config.max_retries)
+                .streaming(self.config.streaming);
         if let Some(hints) = self.config.pending_hints {
             builder = builder.pending_hints(hints);
         }

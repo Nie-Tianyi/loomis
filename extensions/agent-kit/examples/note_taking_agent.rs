@@ -75,7 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     validate_context(&agent);
 
     // Live: ask — the notes added through the tool must be visible.
-    let answer = agent.answer("我们目前有几条笔记？分别是什么？".to_string()).await?;
+    let answer = agent
+        .answer("我们目前有几条笔记？分别是什么？".to_string())
+        .await?;
     println!("[llm] answer: {answer}");
     assert!(
         answer.contains("milk") || answer.contains("牛奶"),
@@ -91,7 +93,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .answer_count("我们目前有几条笔记？".to_string())
         .await?;
     println!("[llm] answer_count: {count:?}");
-    assert_eq!(count.count, 2, "notes must be visible via the context block");
+    assert_eq!(
+        count.count, 2,
+        "notes must be visible via the context block"
+    );
 
     println!("[ok] live: dynamic context block kept generation methods in sync");
     println!("example finished");
@@ -132,7 +137,10 @@ fn validate_context(agent: &NoteTakingAgent) {
 
 impl NoteTakingAgent {
     /// 数一下当前有多少条笔记，返回数字。
-    async fn answer_count(&self, question: String) -> Result<NoteCount, agent_kit::GenerationError> {
+    async fn answer_count(
+        &self,
+        question: String,
+    ) -> Result<NoteCount, agent_kit::GenerationError> {
         // Manual generation-method body (written by hand to prove the
         // runtime call is all the macro emits) — see the #[agent_impl]
         // expansion in the README for the generated equivalent.

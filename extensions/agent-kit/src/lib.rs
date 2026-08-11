@@ -65,10 +65,10 @@ pub use generation::{GenerationError, Strategy, run_generation};
 pub use engine;
 pub use memory;
 pub use provider;
-pub use tools;
 pub use schemars;
 pub use serde;
 pub use serde_json;
+pub use tools;
 
 /// Default model used by generation methods when no `#[agent(model)]`
 /// field is present — matches the `.env` `DEFAULT_PRO_MODEL` default.

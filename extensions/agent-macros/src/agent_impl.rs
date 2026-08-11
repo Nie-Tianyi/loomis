@@ -33,8 +33,8 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
-    Attribute, Block, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, LitInt, LitStr, Meta,
-    Pat, PathArguments, ReturnType, Type,
+    Attribute, Block, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, LitInt, LitStr, Meta, Pat,
+    PathArguments, ReturnType, Type,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
@@ -61,8 +61,13 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// The execution strategy for a generation method, mirroring
 /// `#[strategy(PredictStrategy())]` / `#[strategy(CodeActStrategy(...))]`.
 enum Strategy {
-    Predict { max_retries: usize },
-    CodeAct { max_iterations: usize, max_retries: usize },
+    Predict {
+        max_retries: usize,
+    },
+    CodeAct {
+        max_iterations: usize,
+        max_retries: usize,
+    },
 }
 
 impl Default for Strategy {
@@ -193,8 +198,7 @@ fn expand_impl(impl_block: ItemImpl) -> syn::Result<TokenStream2> {
     for item in impl_block.items {
         match item {
             ImplItem::Fn(mut method) => {
-                let is_generation =
-                    method.sig.asyncness.is_some() && method.block.stmts.is_empty();
+                let is_generation = method.sig.asyncness.is_some() && method.block.stmts.is_empty();
                 if is_generation {
                     let transformed = transform_generation_method(method)?;
                     output_items.push(transformed);
@@ -399,10 +403,8 @@ fn make_tool_adapter(
     let description = doc_comment(&method.attrs);
     let description_lit = LitStr::new(&description, name.span());
 
-    let args_struct_name =
-        Ident::new(&format!("__AgentArgs_{struct_name}_{name}"), name.span());
-    let tool_struct_name =
-        Ident::new(&format!("__AgentTool_{struct_name}_{name}"), name.span());
+    let args_struct_name = Ident::new(&format!("__AgentArgs_{struct_name}_{name}"), name.span());
+    let tool_struct_name = Ident::new(&format!("__AgentTool_{struct_name}_{name}"), name.span());
 
     // Auto-derived arguments struct — the method signature IS the contract.
     let arg_idents: Vec<&Ident> = args.iter().map(|(i, _)| i).collect();
@@ -496,11 +498,14 @@ fn make_tool_adapter(
     };
 
     method.attrs = strip_helpers(method.attrs);
-    Ok((quote! { #method }, ToolAdapter {
-        adapter,
-        registration,
-        name: tool_name,
-    }))
+    Ok((
+        quote! { #method },
+        ToolAdapter {
+            adapter,
+            registration,
+            name: tool_name,
+        },
+    ))
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -517,8 +522,7 @@ fn collect_args(
             FnArg::Receiver(r) => {
                 // Accept `&self` (with or without a lifetime), reject
                 // `self`, `mut self`, `&mut self`, and typed receivers.
-                let is_shared_ref =
-                    matches!(&r.kind, syn::ReceiverKind::Reference(_, _, None));
+                let is_shared_ref = matches!(&r.kind, syn::ReceiverKind::Reference(_, _, None));
                 if !is_shared_ref {
                     return Err(syn::Error::new_spanned(
                         name,

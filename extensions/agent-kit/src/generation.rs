@@ -239,7 +239,11 @@ fn clone_registry(src: &ToolRegistry) -> ToolRegistry {
 
 /// Assemble the user prompt: optional JSON-Schema instruction, the method
 /// docstring + arguments, and (on retry) the previous parse error.
-fn build_prompt<T: JsonSchema>(method_prompt: &str, attempt: usize, last_error: Option<&str>) -> String {
+fn build_prompt<T: JsonSchema>(
+    method_prompt: &str,
+    attempt: usize,
+    last_error: Option<&str>,
+) -> String {
     let mut prompt = String::new();
 
     let is_structured = std::any::type_name::<T>() != std::any::type_name::<String>();

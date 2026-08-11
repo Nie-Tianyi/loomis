@@ -113,7 +113,10 @@ fn validate_blueprint(agent: &InventoryAgent) {
             .get(name)
             .unwrap_or_else(|| panic!("{name} registered as tool"));
         let schema = tool.parameter_schema();
-        assert!(schema["properties"]["item"].is_object(), "{name} args schema");
+        assert!(
+            schema["properties"]["item"].is_object(),
+            "{name} args schema"
+        );
     }
 
     // Direct Rust calls still work (the original methods are preserved).
@@ -143,10 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // fail: banana unavailable, gold blows the budget. The only way the
     // LLM gets these numbers right is by calling the tools.
     let result = agent
-        .can_fulfill_order(
-            vec!["apple".into(), "banana".into(), "gold".into()],
-            10.0,
-        )
+        .can_fulfill_order(vec!["apple".into(), "banana".into(), "gold".into()], 10.0)
         .await?;
     println!("[llm] can_fulfill_order: {result:?}");
 

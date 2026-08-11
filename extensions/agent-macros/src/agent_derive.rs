@@ -24,9 +24,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{
-    Data, DeriveInput, Field, Fields, Ident, LitStr, Meta, Type, parse_macro_input,
-};
+use syn::{Data, DeriveInput, Field, Fields, Ident, LitStr, Meta, Type, parse_macro_input};
 
 use crate::util::{is_skip, parse_tool_name};
 
@@ -94,7 +92,9 @@ impl FieldAttrs {
                             other => {
                                 return Err(syn::Error::new_spanned(
                                     &ident,
-                                    format!("unknown context mode `{other}` — expected `static` or `dynamic`"),
+                                    format!(
+                                        "unknown context mode `{other}` — expected `static` or `dynamic`"
+                                    ),
                                 ));
                             }
                         }
