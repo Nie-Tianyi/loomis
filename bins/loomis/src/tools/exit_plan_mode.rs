@@ -15,10 +15,10 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use agent_oxide::engine::AgentEvent;
+use agent_oxide::tools::{ProgressStream, ToolError, tool};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::mpsc;
-use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
 use agent_oxide::engine::ResponseRouter;
 use agent_oxide::engine::intervention::{self, InterventionError};

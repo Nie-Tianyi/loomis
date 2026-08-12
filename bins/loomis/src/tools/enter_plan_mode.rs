@@ -11,9 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use agent_oxide::tools::{ProgressStream, ToolError, tool};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
 use crate::hooks::PlanModeState;
 

@@ -284,7 +284,10 @@ mod tests {
             mem.push(Message::new(Role::System, "[SYSPROMPT] static head"));
             mem.push(Message::new(
                 Role::System,
-                format!("{} summary text", agent_oxide::hooks::COMPACT_SUMMARY_MARKER),
+                format!(
+                    "{} summary text",
+                    agent_oxide::hooks::COMPACT_SUMMARY_MARKER
+                ),
             ));
             mem.push(Message::new(Role::User, "hello"));
         }
@@ -296,7 +299,10 @@ mod tests {
         let summary_pos = mem
             .messages
             .iter()
-            .position(|m| m.content.starts_with(agent_oxide::hooks::COMPACT_SUMMARY_MARKER))
+            .position(|m| {
+                m.content
+                    .starts_with(agent_oxide::hooks::COMPACT_SUMMARY_MARKER)
+            })
             .expect("[COMPACT_SUMMARY] message should be preserved");
         let todo_pos = mem
             .messages

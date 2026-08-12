@@ -111,7 +111,9 @@ async fn main() {
 
     // The generic library default (`.agent/audit.jsonl`) is not the loomis
     // convention — all app artifacts live under `.loomis/`.
-    if sandbox_config.audit.log_file == agent_oxide::sandbox::config::AuditConfig::default().log_file {
+    if sandbox_config.audit.log_file
+        == agent_oxide::sandbox::config::AuditConfig::default().log_file
+    {
         sandbox_config.audit.log_file = ".loomis/audit.jsonl".into();
     }
 

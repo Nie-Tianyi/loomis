@@ -2079,8 +2079,9 @@ mod tests {
             let plan_dir = PathBuf::from(".loomis/plan");
             let skill_registry = Arc::new(agent_oxide::skills::SkillRegistry::empty());
             let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
-            let shell_filter =
-                agent_oxide::sandbox::shell_filter::ShellFilter::from_config(&agent_oxide::sandbox::SandboxConfig::default());
+            let shell_filter = agent_oxide::sandbox::shell_filter::ShellFilter::from_config(
+                &agent_oxide::sandbox::SandboxConfig::default(),
+            );
             App::new(
                 "test-model",
                 memory,

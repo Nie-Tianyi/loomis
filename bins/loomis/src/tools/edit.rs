@@ -169,8 +169,8 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::StreamExt;
     use agent_oxide::tools::Tool;
+    use futures_util::StreamExt;
 
     /// Drive a progress stream to completion, collecting all messages.
     /// Returns the final `Done` payload.

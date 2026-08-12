@@ -10,9 +10,9 @@ mod todo_hook;
 pub use agent_oxide::hooks::insert_before_history;
 
 pub use agent_oxide::observability::ObservabilityHook;
+pub use agent_oxide::sandbox::SandboxHook;
 pub use plan_mode_hook::{PlanModeHook, PlanModeState};
 pub use profile_hook::ProfileHook;
-pub use agent_oxide::sandbox::SandboxHook;
 pub use skill_hook::SkillHook;
 pub(crate) use system_prompt_hook::SYSPROMPT_MARKER;
 pub use system_prompt_hook::SystemPromptHook;

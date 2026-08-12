@@ -10,9 +10,9 @@
 
 use std::sync::Arc;
 
+use agent_oxide::skills::{ActiveSkills, SkillRegistry};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use agent_oxide::skills::{ActiveSkills, SkillRegistry};
 
 use agent_oxide::tools::{ProgressStream, ToolError, tool};
 

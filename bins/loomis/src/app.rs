@@ -11,8 +11,8 @@ use agent_oxide::observability::TraceStore;
 use agent_oxide::persistence::PersistenceConfig;
 use agent_oxide::skills::SkillRegistry;
 use agent_oxide::subagent::SubagentConfig;
-use tokio::sync::mpsc;
 use agent_oxide::tools::ToolRegistry;
+use tokio::sync::mpsc;
 
 use agent_oxide::sandbox::SandboxConfig;
 
@@ -153,15 +153,16 @@ pub fn build_coding_agent(
     let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
 
     // ── Workspace filesystem ─────────────────────────────────
-    let workspace = agent_oxide::sandbox::WorkspaceFs::new(workspace_root, &sandbox_config.filesystem)
-        .unwrap_or_else(|e| {
-            tracing::error!(
-                path = %workspace_root.display(),
-                error = %e,
-                "Cannot create workspace",
-            );
-            std::process::exit(1);
-        });
+    let workspace =
+        agent_oxide::sandbox::WorkspaceFs::new(workspace_root, &sandbox_config.filesystem)
+            .unwrap_or_else(|e| {
+                tracing::error!(
+                    path = %workspace_root.display(),
+                    error = %e,
+                    "Cannot create workspace",
+                );
+                std::process::exit(1);
+            });
     let workspace = Arc::new(workspace);
 
     // ── Shared intervention response router ───────────────────
@@ -227,8 +228,10 @@ pub fn build_coding_agent(
     let compact_client = DeepSeekClient::new(api_key);
 
     // ── Subagent tool (read-only subset, no shell, no write, no task) ──
-    let subagent_registry =
-        agent_oxide::subagent::filter_tools(&registry, &["read", "ls", "glob", "grep", "calculator"]);
+    let subagent_registry = agent_oxide::subagent::filter_tools(
+        &registry,
+        &["read", "ls", "glob", "grep", "calculator"],
+    );
     let subagent_registry = Arc::new(subagent_registry);
 
     let subagent_config = SubagentConfig {

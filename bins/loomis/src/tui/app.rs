@@ -700,15 +700,16 @@ impl App {
 mod tests {
     use super::super::messages::TuiCommand;
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use agent_oxide::engine::CallOrigin;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn ts() -> String {
         "00:00:00".into()
     }
 
     fn make_app() -> App {
-        let memory = std::sync::Arc::new(std::sync::RwLock::new(agent_oxide::memory::Memory::new()));
+        let memory =
+            std::sync::Arc::new(std::sync::RwLock::new(agent_oxide::memory::Memory::new()));
         let pending_hints = PendingHints::default();
         let todos = Arc::new(RwLock::new(Vec::<TodoItem>::new()));
         let trace_store = Arc::new(TraceStore::new());
@@ -716,8 +717,9 @@ mod tests {
         let plan_dir = PathBuf::from(".loomis/plan");
         let skill_registry = Arc::new(SkillRegistry::empty());
         let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
-        let shell_filter =
-            agent_oxide::sandbox::shell_filter::ShellFilter::from_config(&agent_oxide::sandbox::SandboxConfig::default());
+        let shell_filter = agent_oxide::sandbox::shell_filter::ShellFilter::from_config(
+            &agent_oxide::sandbox::SandboxConfig::default(),
+        );
         App::new(
             "test-model",
             memory,

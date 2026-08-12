@@ -444,8 +444,10 @@ async fn agent_handler(
                 // Persist the cleared state.
                 {
                     let mem = memory.read().expect("memory lock poisoned");
-                    let name =
-                        agent_oxide::persistence::default_thread_name(&workspace_root, &persistence_config);
+                    let name = agent_oxide::persistence::default_thread_name(
+                        &workspace_root,
+                        &persistence_config,
+                    );
                     match agent_oxide::persistence::save_conversation(
                         &name,
                         &workspace_root,
@@ -546,8 +548,10 @@ async fn agent_handler(
                 // Save conversation before exiting.
                 {
                     let mem = memory.read().expect("memory lock poisoned");
-                    let name =
-                        agent_oxide::persistence::default_thread_name(&workspace_root, &persistence_config);
+                    let name = agent_oxide::persistence::default_thread_name(
+                        &workspace_root,
+                        &persistence_config,
+                    );
                     if let Err(e) = agent_oxide::persistence::save_conversation(
                         &name,
                         &workspace_root,

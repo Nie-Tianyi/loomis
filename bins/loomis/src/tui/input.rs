@@ -1143,7 +1143,11 @@ impl App {
     ///
     /// Shared by the picker (`Enter`) and the `/resume <name>` slash command.
     fn do_resume(&mut self, name: &str) -> Option<TuiCommand> {
-        match agent_oxide::persistence::load_conversation(name, &self.workspace_root, &self.persistence_config) {
+        match agent_oxide::persistence::load_conversation(
+            name,
+            &self.workspace_root,
+            &self.persistence_config,
+        ) {
             Ok(loaded) => {
                 *self.memory.write().expect("memory lock poisoned") = loaded;
                 let _ = agent_oxide::persistence::write_current_thread_name(
@@ -1173,7 +1177,8 @@ impl App {
 
     /// Opens the thread picker overlay with all saved conversations.
     fn open_thread_picker(&mut self) {
-        match agent_oxide::persistence::list_threads(&self.workspace_root, &self.persistence_config) {
+        match agent_oxide::persistence::list_threads(&self.workspace_root, &self.persistence_config)
+        {
             Ok(threads) if !threads.is_empty() => {
                 self.thread_picker = Some(super::messages::ThreadPicker {
                     threads,
