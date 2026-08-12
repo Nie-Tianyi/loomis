@@ -1,5 +1,7 @@
 # 🦀 Loomis
 
+> 本项目依赖开源框架 [agent_oxide](https://github.com/Nie-Tianyi/agent_oxide)（crates.io 发布，`cargo add agent_oxide`）。
+
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-2024%20edition-orange?style=flat-square&logo=rust" alt="Rust 2024">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License">
