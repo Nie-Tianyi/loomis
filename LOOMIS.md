@@ -23,6 +23,10 @@ See `.env.example` for all supported env vars (`BASE_URL`, `DEFAULT_PRO_MODEL`,
 Tests are **inline** (`#[cfg(test)] mod tests { ... }`) co-located with source
 — no separate `tests/` directories.
 
+Commit messages follow the existing conventional style. Do **not** append
+`Co-Authored-By` trailers or other attribution lines — the user owns these
+commits.
+
 ## Architecture
 
 **Rust agent application** (Rust 2024 edition, Tokio async). Cargo workspace

@@ -34,6 +34,12 @@ For framework tests, cd into the agent_oxide repo and run `cargo test`.
 Tests are **inline** (`#[cfg(test)] mod tests`) co-located with source — there
 are no `tests/` directories.
 
+## Git commits
+
+Commit messages follow the existing conventional style (feat/fix/refactor/
+docs/chore). Do **not** append `Co-Authored-By` trailers or any other
+attribution lines — the user owns these commits.
+
 Environment (loaded via `dotenvy` from `.env`, see `.env.example`):
 
 | Var | Purpose |
