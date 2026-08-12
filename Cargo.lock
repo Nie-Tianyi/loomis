@@ -9,6 +9,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-oxide-macros"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ecbe7d2a9ea6ec2042126ae1297d6fb5390c10c55f823fbea7160eb4c98b38c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "agent_oxide"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54634aab6eea4906ad1deef8c24841cebb54820eca858876af61dd50c401b7b4"
+dependencies = [
+ "agent-oxide-macros",
+ "futures-core",
+ "futures-executor",
+ "futures-util",
+ "glob",
+ "regex",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "time",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -431,19 +465,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deepseek"
-version = "0.5.0"
-dependencies = [
- "futures-util",
- "provider",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "deltae"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -548,20 +569,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "engine"
-version = "0.5.0"
-dependencies = [
- "futures-util",
- "memory",
- "provider",
- "serde",
- "serde_json",
- "tokio",
- "tools",
- "tracing",
 ]
 
 [[package]]
@@ -900,18 +907,6 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
-
-[[package]]
-name = "hooks"
-version = "0.5.0"
-dependencies = [
- "engine",
- "memory",
- "provider",
- "serde_json",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "http"
@@ -1340,37 +1335,26 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 name = "loomis"
 version = "0.1.0"
 dependencies = [
+ "agent_oxide",
  "arboard",
  "crossterm",
- "deepseek",
  "dotenvy",
- "engine",
  "futures-executor",
  "futures-util",
  "glob",
- "hooks",
- "memory",
- "observability",
- "persistence",
- "provider",
  "pulldown-cmark",
  "ratatui",
  "regex",
- "sandbox",
  "schemars",
  "serde",
  "serde_json",
- "skills",
- "subagent",
  "tempfile",
  "time",
  "tokio",
- "tools",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
  "unicode-width",
- "util",
 ]
 
 [[package]]
@@ -1426,14 +1410,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "memory"
-version = "0.5.0"
-dependencies = [
- "provider",
- "tracing",
 ]
 
 [[package]]
@@ -1621,16 +1597,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "observability"
-version = "0.5.0"
-dependencies = [
- "engine",
- "memory",
- "provider",
- "tracing",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1712,20 +1678,6 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
-
-[[package]]
-name = "persistence"
-version = "0.5.0"
-dependencies = [
- "deepseek",
- "engine",
- "memory",
- "provider",
- "serde",
- "serde_json",
- "tracing",
- "util",
-]
 
 [[package]]
 name = "pest"
@@ -1874,15 +1826,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "provider"
-version = "0.5.0"
-dependencies = [
- "futures-util",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2376,23 +2319,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sandbox"
-version = "0.5.0"
-dependencies = [
- "engine",
- "glob",
- "memory",
- "provider",
- "regex",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
- "util",
-]
-
-[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2623,17 +2549,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
-name = "skills"
-version = "0.5.0"
-dependencies = [
- "glob",
- "serde",
- "serde_json",
- "serde_yaml",
- "tracing",
-]
-
-[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2692,23 +2607,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "subagent"
-version = "0.5.0"
-dependencies = [
- "engine",
- "futures-util",
- "memory",
- "observability",
- "provider",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tools",
- "tracing",
 ]
 
 [[package]]
@@ -3098,29 +2996,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
-name = "tools"
-version = "0.5.0"
-dependencies = [
- "futures-core",
- "futures-executor",
- "futures-util",
- "provider",
- "schemars",
- "serde_json",
- "tools-macros",
- "tracing",
-]
-
-[[package]]
-name = "tools-macros"
-version = "0.5.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
-
-[[package]]
 name = "tower"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3327,13 +3202,6 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
-
-[[package]]
-name = "util"
-version = "0.5.0"
-dependencies = [
- "time",
-]
 
 [[package]]
 name = "uuid"

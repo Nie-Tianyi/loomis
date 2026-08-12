@@ -8,13 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > live in the agent_oxide repo under `docs/`. Keep this file and `LOOMIS.md`
 > in sync when architecture changes.
 >
-> **Repo split (2026-08):** the framework libraries (`core/` + `extensions/`)
-> now live in the sibling `agent_oxide/` repo at
-> `c:/Users/Administrator/RustroverProjects/agent_oxide` (open source, crates.io).
-> This repo is the Loomis application only. Path dependencies in
-> `bins/loomis/Cargo.toml` point at `../../../agent_oxide/...`. Library
-> changes happen in the agent_oxide repo; `AGENT_OXIDE.md` there is the
-> library counterpart of this file.
+> **Repo split (2026-08):** the framework is the **`agent_oxide`** crate
+> (published on crates.io, single umbrella crate — `cargo add agent_oxide`),
+> developed in the sibling repo at
+> `c:/Users/Administrator/RustroverProjects/agent_oxide` (open source, GitHub).
+> This repo is the Loomis application only. `bins/loomis/Cargo.toml` depends
+> on `agent_oxide = "0.5.1"` from crates.io. Library changes happen in the
+> agent_oxide repo, then get published and the version bumped here;
+> `AGENT_OXIDE.md` there is the library counterpart of this file.
 
 ## Build & Test
 
@@ -28,7 +29,7 @@ cargo run -p loomis                # launch TUI (debug)
 cargo run -p loomis --release      # launch TUI (release — recommended)
 ```
 
-For framework tests (`-p engine`, etc.), cd into the agent_oxide repo.
+For framework tests, cd into the agent_oxide repo and run `cargo test`.
 
 Tests are **inline** (`#[cfg(test)] mod tests`) co-located with source — there
 are no `tests/` directories.
@@ -46,12 +47,14 @@ Environment (loaded via `dotenvy` from `.env`, see `.env.example`):
 ## Architecture (loomis repo)
 
 **Rust 2024** agent application, Tokio async. Cargo workspace with
-`members = ["bins/*"]`. The framework itself (core + extensions, ~15 crates)
-is the **`agent_oxide`** repo at `../agent_oxide/` — see `AGENT_OXIDE.md`
-there for library architecture (ReAct loop, hooks, sandbox, compaction,
-persistence, skills, agent-kit). This repo wires the framework into a TUI
-app. Uses native async fn in traits (RPITIT) — do NOT use `async-trait`.
-Prefer sync traits for dyn-dispatch; keep async work in dedicated components.
+`members = ["bins/*"]`. The framework is the **`agent_oxide`** crate from
+crates.io (single umbrella crate — `agent_oxide = "0.5.1"` in
+`bins/loomis/Cargo.toml`); its source lives in the sibling repo at
+`../agent_oxide/` — see `AGENT_OXIDE.md` there for library architecture
+(ReAct loop, hooks, sandbox, compaction, persistence, skills, agent-kit).
+This repo wires the framework into a TUI app. Uses native async fn in
+traits (RPITIT) — do NOT use `async-trait`. Prefer sync traits for
+dyn-dispatch; keep async work in dedicated components.
 
 ### Repo structure
 
@@ -61,18 +64,19 @@ loomis/                        # this repo — the application
 ├── bins/loomis/               # Binary + lib — TUI, concrete tools, hooks, sandbox wiring
 └── docs/                      # App docs (API payload examples; framework guides live in agent_oxide/docs/)
 agent_oxide/                   # sibling repo — the framework (open source)
-├── Cargo.toml                 # [package] umbrella + [workspace] core/* + extensions/*
-├── src/lib.rs                 # Umbrella re-exports + prelude
-├── core/                      # provider, deepseek, memory, tools, tools-macros, engine, util
-├── extensions/                # agent-kit, agent-macros, compact(hooks), observability,
-│                              # persistence, sandbox, skills, subagent
+├── Cargo.toml                 # [package] agent_oxide + [workspace] agent_oxide-macros
+├── src/                       # Single crate — core/ + extensions/ modules
+│   ├── core/                  # provider, deepseek, memory, tools, engine, util
+│   └── extensions/            # agent_kit, hooks, observability, persistence,
+│                              # sandbox, skills, subagent
+├── agent_oxide-macros/        # Proc macros — #[derive(Agent)], #[agent_impl], #[tool]
 └── docs/                      # Framework guides (beginner, senior, sandbox-architecture, agent-kit)
 ```
 
-Dependency direction: `bins/loomis` → `agent_oxide` crates (via
-`path = "../../../agent_oxide/..."` in `Cargo.toml`). Nothing in
-`agent_oxide` depends on this repo. To change framework code, work in the
-agent_oxide repo and bump versions there.
+Dependency direction: `bins/loomis` → `agent_oxide` crate (from crates.io,
+`agent_oxide = "0.5.1"` in `Cargo.toml`). Nothing in `agent_oxide` depends
+on this repo. To change framework code, work in the agent_oxide repo,
+publish, and bump the version here.
 
 ### The ReAct loop (engine)
 
@@ -96,7 +100,7 @@ Key `AgentEvent` variants: `RunStarted`, `Token`/`ReasoningToken`,
   `ProgressStream` — short tools emit one `Progress::Done`; long-running tools
   (shell) emit `Progress::InProgress` updates then `Done`. Use
   `tokio::sync::mpsc` from a spawned thread for async I/O.
-- **`#[tool]` proc macro** (tools-macros): annotate a struct with
+- **`#[tool]` proc macro** (agent-oxide-macros): annotate a struct with
   `#[tool(name = "...", description = "...", args = ArgsType)]`; the struct
   must define an inherent
   `execute_stream(&self, args: ArgsType) -> Result<ProgressStream, ToolError>`.
@@ -134,7 +138,7 @@ Both run in `on_llm_start()`:
    them via the flash model through `engine::block_on`, inserts the summary
    as a System message.
 
-Key constants in `agent_oxide/extensions/compact/src/compact.rs`:
+Key constants in `agent_oxide/src/extensions/hooks/`:
 `DEFAULT_COMPACT_TOKEN_LIMIT`, `DEFAULT_COMPACT_CHAR_LIMIT`,
 `DEFAULT_KEEP_LAST_N`, `DEFAULT_KEEP_RECENT_TOOL_OUTPUTS`.
 

@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use engine::AgentHook;
-use memory::SharedMemory;
-use provider::{Message, Role, ToolCall};
+use agent_oxide::engine::AgentHook;
+use agent_oxide::memory::SharedMemory;
+use agent_oxide::provider::{Message, Role, ToolCall};
 
 use crate::hooks::insert_before_history;
 
@@ -138,7 +138,7 @@ impl AgentHook for PlanModeHook {
         &self,
         _session_id: &str,
         tool_call: &ToolCall,
-    ) -> Result<(), engine::AgentError> {
+    ) -> Result<(), agent_oxide::engine::AgentError> {
         if !self.plan_mode.active.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -170,7 +170,7 @@ impl AgentHook for PlanModeHook {
                         path = %self.plan_file_path.display(),
                         "Blocked write to non-plan file while in plan mode",
                     );
-                    Err(engine::AgentError::ToolRejected {
+                    Err(agent_oxide::engine::AgentError::ToolRejected {
                         name: name.into(),
                         reason: format!(
                             "Write is only allowed to the plan file in plan mode: {}",
@@ -183,7 +183,7 @@ impl AgentHook for PlanModeHook {
             // Edit — blocked entirely. The LLM should use `write` to the plan file instead.
             "edit" => {
                 tracing::warn!(tool = %name, "Blocked edit tool while in plan mode");
-                Err(engine::AgentError::ToolRejected {
+                Err(agent_oxide::engine::AgentError::ToolRejected {
                     name: name.into(),
                     reason:
                         "Edit is blocked in plan mode. Use write to update the plan file instead."
@@ -194,7 +194,7 @@ impl AgentHook for PlanModeHook {
             // Shell — blocked entirely. No shell commands in plan mode.
             "shell" => {
                 tracing::warn!(tool = %name, "Blocked shell tool while in plan mode");
-                Err(engine::AgentError::ToolRejected {
+                Err(agent_oxide::engine::AgentError::ToolRejected {
                     name: name.into(),
                     reason: "Shell is blocked in plan mode (read-only).".into(),
                 })
@@ -203,7 +203,7 @@ impl AgentHook for PlanModeHook {
             // Unknown / unexpected tools — conservative: block.
             _ => {
                 tracing::warn!(tool = %name, "Blocked unknown tool while in plan mode");
-                Err(engine::AgentError::ToolRejected {
+                Err(agent_oxide::engine::AgentError::ToolRejected {
                     name: name.into(),
                     reason: format!("Tool '{name}' is not allowed in plan mode."),
                 })
@@ -264,8 +264,8 @@ impl AgentHook for PlanModeHook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use memory::Memory;
-    use provider::{Role, ToolCallFunction, ToolCallKind};
+    use agent_oxide::memory::Memory;
+    use agent_oxide::provider::{Role, ToolCallFunction, ToolCallKind};
 
     fn make_state(active: bool) -> Arc<PlanModeState> {
         Arc::new(PlanModeState {

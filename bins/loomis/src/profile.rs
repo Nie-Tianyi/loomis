@@ -158,7 +158,7 @@ impl UserProfile {
     /// A fresh profile with zeroed counters, `en-US`, `Normal` verbosity,
     /// and empty preference/avoidance/convention/expertise vectors.
     pub fn new() -> Self {
-        let now = util::iso8601_now();
+        let now = agent_oxide::util::iso8601_now();
         Self {
             total_sessions: 0,
             tool_stats: HashMap::new(),

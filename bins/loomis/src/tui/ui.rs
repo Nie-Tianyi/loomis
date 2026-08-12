@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use engine::CallOrigin;
+use agent_oxide::engine::CallOrigin;
 use serde_json;
 
 use super::app::App;
@@ -2062,25 +2062,25 @@ mod tests {
 
     #[test]
     fn test_cjk_delete_clears_wide_char_trailing_cell() {
-        use memory::PendingHints;
-        use observability::TraceStore;
-        use persistence::PersistenceConfig;
+        use agent_oxide::memory::PendingHints;
+        use agent_oxide::observability::TraceStore;
+        use agent_oxide::persistence::PersistenceConfig;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
         use std::path::PathBuf;
         use std::sync::{Arc, RwLock};
 
         fn make_app() -> App {
-            let memory = Arc::new(RwLock::new(memory::Memory::new()));
+            let memory = Arc::new(RwLock::new(agent_oxide::memory::Memory::new()));
             let pending_hints = PendingHints::default();
             let todos = Arc::new(RwLock::new(Vec::<crate::tools::TodoItem>::new()));
             let trace_store = Arc::new(TraceStore::new());
             let plan_mode = Arc::new(crate::hooks::PlanModeState::default());
             let plan_dir = PathBuf::from(".loomis/plan");
-            let skill_registry = Arc::new(skills::SkillRegistry::empty());
+            let skill_registry = Arc::new(agent_oxide::skills::SkillRegistry::empty());
             let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
             let shell_filter =
-                sandbox::shell_filter::ShellFilter::from_config(&sandbox::SandboxConfig::default());
+                agent_oxide::sandbox::shell_filter::ShellFilter::from_config(&agent_oxide::sandbox::SandboxConfig::default());
             App::new(
                 "test-model",
                 memory,

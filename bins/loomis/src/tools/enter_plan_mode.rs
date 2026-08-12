@@ -13,7 +13,7 @@ use std::sync::atomic::Ordering;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
-use tools::{ProgressStream, ToolError, tool};
+use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
 use crate::hooks::PlanModeState;
 
@@ -118,7 +118,7 @@ impl EnterPlanModeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tools::Tool;
+    use agent_oxide::tools::Tool;
 
     fn make_plan_file() -> PathBuf {
         let tmp = std::env::temp_dir().join("loomis-enter-plan-test");
@@ -160,7 +160,7 @@ mod tests {
         use futures_util::StreamExt;
         let progress = futures_executor::block_on(stream.next());
         match progress {
-            Some(tools::Progress::Done(output)) => {
+            Some(agent_oxide::tools::Progress::Done(output)) => {
                 assert!(output.contains("activated"));
             }
             other => panic!("expected Done, got {other:?}"),
@@ -179,7 +179,7 @@ mod tests {
         use futures_util::StreamExt;
         let progress = futures_executor::block_on(stream.next());
         match progress {
-            Some(tools::Progress::Done(output)) => {
+            Some(agent_oxide::tools::Progress::Done(output)) => {
                 assert!(output.contains("Already in plan mode"));
             }
             other => panic!("expected Done, got {other:?}"),

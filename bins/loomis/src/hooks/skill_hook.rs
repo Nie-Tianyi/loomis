@@ -1,22 +1,22 @@
 //! Hook that maintains `[SKILL: ...]` System messages in memory.
 //!
-//! Fires in [`on_llm_start`](engine::AgentHook::on_llm_start), which runs
+//! Fires in [`on_llm_start`](agent_oxide::engine::AgentHook::on_llm_start), which runs
 //! **after** all tool results have been written to memory. This avoids the
 //! API message-ordering constraint: an assistant message with `tool_calls`
 //! must be immediately followed by tool-result messages — a System message
 //! injected during tool execution would break that ordering.
 //!
-//! The hook reads the shared [`ActiveSkills`](skills::ActiveSkills) state and
+//! The hook reads the shared [`ActiveSkills`](agent_oxide::skills::ActiveSkills) state and
 //! ensures exactly one `[SKILL: name]` System message exists per active skill,
 //! updating in-place when the set changes.
 //!
 //! Follows the same pattern as [`TodoListHook`](crate::hooks::TodoListHook)
 //! and [`PlanModeHook`](crate::hooks::PlanModeHook).
 
-use engine::AgentHook;
-use memory::SharedMemory;
-use provider::{Message, Role};
-use skills::ActiveSkills;
+use agent_oxide::engine::AgentHook;
+use agent_oxide::memory::SharedMemory;
+use agent_oxide::provider::{Message, Role};
+use agent_oxide::skills::ActiveSkills;
 
 use crate::hooks::insert_before_history;
 
@@ -96,7 +96,7 @@ mod tests {
     use std::sync::{Arc, RwLock};
 
     use super::*;
-    use memory::Memory;
+    use agent_oxide::memory::Memory;
 
     fn make_active_skills(map: HashMap<String, String>) -> ActiveSkills {
         Arc::new(RwLock::new(map))

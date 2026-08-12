@@ -14,14 +14,14 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use engine::AgentEvent;
+use agent_oxide::engine::AgentEvent;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::mpsc;
-use tools::{ProgressStream, ToolError, tool};
+use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
-use engine::ResponseRouter;
-use engine::intervention::{self, InterventionError};
+use agent_oxide::engine::ResponseRouter;
+use agent_oxide::engine::intervention::{self, InterventionError};
 
 use crate::hooks::PlanModeState;
 
@@ -360,7 +360,7 @@ impl ExitPlanModeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tools::Tool;
+    use agent_oxide::tools::Tool;
 
     fn make_plan_file() -> PathBuf {
         let tmp = std::env::temp_dir().join("loomis-exit-plan-test");

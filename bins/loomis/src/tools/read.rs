@@ -8,10 +8,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 #[cfg(test)]
-use sandbox::FilesystemConfig;
-use sandbox::FsError;
-use sandbox::WorkspaceFs;
-use tools::{ProgressStream, ToolError, tool};
+use agent_oxide::sandbox::FilesystemConfig;
+use agent_oxide::sandbox::FsError;
+use agent_oxide::sandbox::WorkspaceFs;
+use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
 /// Arguments for the read tool.
 #[derive(JsonSchema, Deserialize)]
@@ -108,7 +108,7 @@ fn map_fs_err(e: FsError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tools::Tool;
+    use agent_oxide::tools::Tool;
 
     fn setup() -> (tempfile::TempDir, ReadTool) {
         let dir = tempfile::tempdir().unwrap();

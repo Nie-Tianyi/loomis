@@ -7,9 +7,9 @@
 //! TUI every frame for the status bar.
 //!
 //! A companion [`TodoListHook`](crate::hooks::TodoListHook) maintains a
-//! `Role::System` message in [`SharedMemory`](memory::SharedMemory) so the
+//! `Role::System` message in [`SharedMemory`](agent_oxide::memory::SharedMemory) so the
 //! LLM sees its plan in context and the list survives compaction.  The hook
-//! fires in [`on_llm_start`](engine::AgentHook::on_llm_start), AFTER all
+//! fires in [`on_llm_start`](agent_oxide::engine::AgentHook::on_llm_start), AFTER all
 //! tool results have been written — avoiding the API ordering constraint
 //! that tool results must immediately follow assistant `tool_calls`.
 
@@ -18,7 +18,7 @@ use std::sync::{Arc, RwLock};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use tools::{ProgressStream, ToolError, tool};
+use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
 /// Marker prefix that identifies the todo-list System message in memory.
 pub const TODO_MARKER: &str = "[TODO]";
@@ -210,7 +210,7 @@ impl TodoTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tools::Tool;
+    use agent_oxide::tools::Tool;
 
     fn make_state() -> Arc<RwLock<Vec<TodoItem>>> {
         Arc::new(RwLock::new(Vec::new()))

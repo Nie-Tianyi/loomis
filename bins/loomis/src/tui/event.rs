@@ -24,11 +24,11 @@ use ratatui::backend::CrosstermBackend;
 
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-use deepseek::DeepSeekClient;
-use engine::{Agent, AgentEvent, CallOrigin};
-use memory::SharedMemory;
-use persistence::PersistenceConfig;
-use provider::{Message, Role};
+use agent_oxide::deepseek::DeepSeekClient;
+use agent_oxide::engine::{Agent, AgentEvent, CallOrigin};
+use agent_oxide::memory::SharedMemory;
+use agent_oxide::persistence::PersistenceConfig;
+use agent_oxide::provider::{Message, Role};
 
 use super::app::App;
 use super::messages::TuiCommand;
@@ -102,7 +102,7 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
     // generates a title for it.  (A leftover name from a previous session
     // must not hijack the new conversation — on_run_finish would otherwise
     // overwrite the old thread file.)
-    let _ = persistence::write_current_thread_name(
+    let _ = agent_oxide::persistence::write_current_thread_name(
         &persistence_config.default_thread_name,
         &workspace_root,
         &persistence_config,
@@ -347,7 +347,7 @@ async fn agent_handler(
     mut cmd_rx: UnboundedReceiver<TuiCommand>,
     agent_tx: UnboundedSender<AgentEvent>,
     workspace_root: PathBuf,
-    response_router: Arc<engine::ResponseRouter>,
+    response_router: Arc<agent_oxide::engine::ResponseRouter>,
     persistence_config: PersistenceConfig,
 ) {
     let mut current_run: Option<tokio::task::JoinHandle<()>> = None;
@@ -390,7 +390,7 @@ async fn agent_handler(
                         // swallow it silently. Log it and tell the TUI so the
                         // user isn't left in a stuck "streaming" state.
                         Err(payload) => {
-                            let msg = engine::panic_message(payload.as_ref());
+                            let msg = agent_oxide::engine::panic_message(payload.as_ref());
                             tracing::error!(panic = %msg, "Agent task panicked");
                             let _ = tx.send(AgentEvent::RunFailed {
                                 error: format!("Agent task panicked: {msg}"),
@@ -435,7 +435,7 @@ async fn agent_handler(
                     .filter(|m| m.role == Role::System && m.content.starts_with(SYSPROMPT_MARKER))
                     .collect();
                 let preserved = system_msgs.len();
-                *mem = memory::Memory::new();
+                *mem = agent_oxide::memory::Memory::new();
                 for msg in system_msgs {
                     mem.push(msg);
                 }
@@ -445,8 +445,8 @@ async fn agent_handler(
                 {
                     let mem = memory.read().expect("memory lock poisoned");
                     let name =
-                        persistence::default_thread_name(&workspace_root, &persistence_config);
-                    match persistence::save_conversation(
+                        agent_oxide::persistence::default_thread_name(&workspace_root, &persistence_config);
+                    match agent_oxide::persistence::save_conversation(
                         &name,
                         &workspace_root,
                         &mem,
@@ -547,8 +547,8 @@ async fn agent_handler(
                 {
                     let mem = memory.read().expect("memory lock poisoned");
                     let name =
-                        persistence::default_thread_name(&workspace_root, &persistence_config);
-                    if let Err(e) = persistence::save_conversation(
+                        agent_oxide::persistence::default_thread_name(&workspace_root, &persistence_config);
+                    if let Err(e) = agent_oxide::persistence::save_conversation(
                         &name,
                         &workspace_root,
                         &mem,

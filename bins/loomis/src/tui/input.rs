@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use provider::{Message, Role};
+use agent_oxide::provider::{Message, Role};
 
 use super::app::App;
 use super::keyboard::{
@@ -20,7 +20,7 @@ use super::messages::{
 };
 use super::paste::normalize_newlines;
 use crate::hooks::insert_before_history;
-use sandbox::shell_filter::CommandVerdict;
+use agent_oxide::sandbox::shell_filter::CommandVerdict;
 
 // ── Paste Handling ───────────────────────────────────────────────────────────────
 
@@ -779,14 +779,14 @@ impl App {
                 return Some(None);
             }
             let mem = self.memory.read().expect("memory lock poisoned");
-            match persistence::save_conversation(
+            match agent_oxide::persistence::save_conversation(
                 name,
                 &self.workspace_root,
                 &mem,
                 &self.persistence_config,
             ) {
                 Ok(()) => {
-                    let _ = persistence::write_current_thread_name(
+                    let _ = agent_oxide::persistence::write_current_thread_name(
                         name,
                         &self.workspace_root,
                         &self.persistence_config,
@@ -873,7 +873,7 @@ impl App {
                 // Save current conversation before starting fresh.
                 if let Some(ref title) = self.conversation_title {
                     let mem = self.memory.read().expect("memory lock poisoned");
-                    let _ = persistence::save_conversation(
+                    let _ = agent_oxide::persistence::save_conversation(
                         title,
                         &self.workspace_root,
                         &mem,
@@ -882,7 +882,7 @@ impl App {
                 }
                 self.conversation_title = None;
                 // Write fallback for the gap between /new and first message.
-                let _ = persistence::write_current_thread_name(
+                let _ = agent_oxide::persistence::write_current_thread_name(
                     &self.persistence_config.default_thread_name,
                     &self.workspace_root,
                     &self.persistence_config,
@@ -1143,10 +1143,10 @@ impl App {
     ///
     /// Shared by the picker (`Enter`) and the `/resume <name>` slash command.
     fn do_resume(&mut self, name: &str) -> Option<TuiCommand> {
-        match persistence::load_conversation(name, &self.workspace_root, &self.persistence_config) {
+        match agent_oxide::persistence::load_conversation(name, &self.workspace_root, &self.persistence_config) {
             Ok(loaded) => {
                 *self.memory.write().expect("memory lock poisoned") = loaded;
-                let _ = persistence::write_current_thread_name(
+                let _ = agent_oxide::persistence::write_current_thread_name(
                     name,
                     &self.workspace_root,
                     &self.persistence_config,
@@ -1173,7 +1173,7 @@ impl App {
 
     /// Opens the thread picker overlay with all saved conversations.
     fn open_thread_picker(&mut self) {
-        match persistence::list_threads(&self.workspace_root, &self.persistence_config) {
+        match agent_oxide::persistence::list_threads(&self.workspace_root, &self.persistence_config) {
             Ok(threads) if !threads.is_empty() => {
                 self.thread_picker = Some(super::messages::ThreadPicker {
                     threads,
@@ -1504,7 +1504,7 @@ impl App {
     ) -> Option<TuiCommand> {
         self.intervene_selection = None;
         self.intervene_text_mode = false;
-        let response = engine::InterventionResponse {
+        let response = agent_oxide::engine::InterventionResponse {
             chosen,
             custom_text,
         };

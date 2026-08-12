@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
-use skills::{ActiveSkills, SkillRegistry};
+use agent_oxide::skills::{ActiveSkills, SkillRegistry};
 
-use tools::{ProgressStream, ToolError, tool};
+use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
 /// Arguments for the `skill` tool.
 #[derive(JsonSchema, Deserialize)]
@@ -98,8 +98,8 @@ mod tests {
     use std::sync::RwLock;
 
     use super::*;
-    use skills::SkillRegistry;
-    use tools::Tool;
+    use agent_oxide::skills::SkillRegistry;
+    use agent_oxide::tools::Tool;
 
     #[test]
     fn test_name() {

@@ -15,11 +15,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use engine::{AgentEvent, CallOrigin};
-use memory::{PendingHints, SharedMemory};
-use observability::TraceStore;
-use persistence::PersistenceConfig;
-use skills::{self, SkillRegistry};
+use agent_oxide::engine::{AgentEvent, CallOrigin};
+use agent_oxide::memory::{PendingHints, SharedMemory};
+use agent_oxide::observability::TraceStore;
+use agent_oxide::persistence::PersistenceConfig;
+use agent_oxide::skills::SkillRegistry;
 
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
@@ -158,12 +158,12 @@ pub struct App {
     /// Discovered skills — read-only after startup, used by `/skill` command.
     pub skill_registry: Arc<SkillRegistry>,
     /// Currently active skills — written by `/skill` and [`SkillTool`].
-    pub active_skills: skills::ActiveSkills,
+    pub active_skills: agent_oxide::skills::ActiveSkills,
 
     // ── Sandbox ──
     /// Shell-command policy for user `!command` invocations — the same
     /// rules the [`SandboxHook`] applies to LLM-initiated shell calls.
-    pub shell_filter: sandbox::shell_filter::ShellFilter,
+    pub shell_filter: agent_oxide::sandbox::shell_filter::ShellFilter,
     /// A `!command` awaiting y/n confirmation (policy: RequiresApproval).
     pub pending_shell_confirm: Option<String>,
 
@@ -188,8 +188,8 @@ impl App {
         plan_mode: Arc<PlanModeState>,
         plan_dir: PathBuf,
         skill_registry: Arc<SkillRegistry>,
-        active_skills: skills::ActiveSkills,
-        shell_filter: sandbox::shell_filter::ShellFilter,
+        active_skills: agent_oxide::skills::ActiveSkills,
+        shell_filter: agent_oxide::sandbox::shell_filter::ShellFilter,
     ) -> Self {
         let model = model.into();
         Self {
@@ -701,14 +701,14 @@ mod tests {
     use super::super::messages::TuiCommand;
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use engine::CallOrigin;
+    use agent_oxide::engine::CallOrigin;
 
     fn ts() -> String {
         "00:00:00".into()
     }
 
     fn make_app() -> App {
-        let memory = std::sync::Arc::new(std::sync::RwLock::new(memory::Memory::new()));
+        let memory = std::sync::Arc::new(std::sync::RwLock::new(agent_oxide::memory::Memory::new()));
         let pending_hints = PendingHints::default();
         let todos = Arc::new(RwLock::new(Vec::<TodoItem>::new()));
         let trace_store = Arc::new(TraceStore::new());
@@ -717,7 +717,7 @@ mod tests {
         let skill_registry = Arc::new(SkillRegistry::empty());
         let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
         let shell_filter =
-            sandbox::shell_filter::ShellFilter::from_config(&sandbox::SandboxConfig::default());
+            agent_oxide::sandbox::shell_filter::ShellFilter::from_config(&agent_oxide::sandbox::SandboxConfig::default());
         App::new(
             "test-model",
             memory,

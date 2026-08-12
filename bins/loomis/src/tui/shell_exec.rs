@@ -1,17 +1,17 @@
 //! Shell command execution for `!command` (user-initiated) invocations.
 //!
 //! Spawns a child process in the workspace root, captures stdout/stderr,
-//! enforces a 30-second timeout via [`Watchdog`](sandbox::watchdog::Watchdog),
+//! enforces a 30-second timeout via [`Watchdog`](agent_oxide::sandbox::watchdog::Watchdog),
 //! and decodes output respecting the system ANSI code page on Windows via
-//! [`decode_stdout`](sandbox::encoding::decode_stdout).
+//! [`decode_stdout`](agent_oxide::sandbox::encoding::decode_stdout).
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use sandbox::encoding::{self, MAX_OUTPUT_BYTES};
-use sandbox::env_sanitizer;
-use sandbox::watchdog::Watchdog;
+use agent_oxide::sandbox::encoding::{self, MAX_OUTPUT_BYTES};
+use agent_oxide::sandbox::env_sanitizer;
+use agent_oxide::sandbox::watchdog::Watchdog;
 
 /// Executes a shell command in the workspace root, capturing stdout and stderr.
 ///

@@ -27,16 +27,16 @@
 //! recent user/assistant messages from conversation memory, sends them
 //! to the flash model with a structured prompt, and merges the parsed
 //! results into the profile.  The LLM call uses
-//! [`engine::block_on`] — this blocks the agent loop
+//! [`agent_oxide::engine::block_on`] — this blocks the agent loop
 //! (a dedicated tokio task) but not the TUI (the main thread).
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use deepseek::DeepSeekClient;
-use engine::{AgentHook, RunOutcome};
-use memory::SharedMemory;
-use provider::{CompletionRequest, LLMClient, Message, Role, ToolCall};
+use agent_oxide::deepseek::DeepSeekClient;
+use agent_oxide::engine::{AgentHook, RunOutcome};
+use agent_oxide::memory::SharedMemory;
+use agent_oxide::provider::{CompletionRequest, LLMClient, Message, Role, ToolCall};
 
 use crate::hooks::insert_before_history;
 use crate::profile::{
@@ -117,7 +117,7 @@ impl AgentHook for ProfileHook {
             let mut store = self.store.write().expect("profile store lock poisoned");
 
             store.profile.total_sessions += 1;
-            store.profile.updated_at = util::iso8601_now();
+            store.profile.updated_at = agent_oxide::util::iso8601_now();
             store.save();
 
             store.profile.total_sessions - store.profile.last_synthesis_session
@@ -138,7 +138,7 @@ impl AgentHook for ProfileHook {
         &self,
         _session_id: &str,
         tool_call: &ToolCall,
-    ) -> Result<(), engine::AgentError> {
+    ) -> Result<(), agent_oxide::engine::AgentError> {
         let mut store = self.store.write().expect("profile store lock poisoned");
 
         let stats = store
@@ -212,7 +212,7 @@ impl ProfileHook {
     ///
     /// Collects recent conversation context, sends a structured
     /// prompt to the flash model, and merges the returned signals
-    /// into the profile.  Uses [`engine::block_on`] — a bare
+    /// into the profile.  Uses [`agent_oxide::engine::block_on`] — a bare
     /// `Handle::block_on` would panic because the agent loop (and
     /// therefore this hook) runs on a tokio worker thread.
     fn run_synthesis(&self, memory: &SharedMemory) {
@@ -255,8 +255,8 @@ impl ProfileHook {
         // Block the agent loop, not the UI — same pattern as MacroCompactHook.
         // A bare `Handle::block_on` would panic here: hooks run on a tokio
         // worker thread, and blocking a worker is only legal after
-        // `block_in_place` (handled inside `engine::block_on`).
-        let result = engine::block_on(self.client.generate(request));
+        // `block_in_place` (handled inside `agent_oxide::engine::block_on`).
+        let result = agent_oxide::engine::block_on(self.client.generate(request));
 
         match result {
             Ok(resp) => {
@@ -303,7 +303,7 @@ impl ProfileHook {
                     }
 
                     store.profile.last_synthesis_session = store.profile.total_sessions;
-                    store.profile.updated_at = util::iso8601_now();
+                    store.profile.updated_at = agent_oxide::util::iso8601_now();
                     store.save();
 
                     tracing::info!(
@@ -450,7 +450,7 @@ fn extract_json_object(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use memory::Memory;
+    use agent_oxide::memory::Memory;
 
     use super::*;
     use crate::profile::Verbosity;
@@ -479,8 +479,8 @@ mod tests {
         ToolCall {
             index: 0,
             id: format!("call_{name}"),
-            kind: provider::ToolCallKind::Function,
-            function: provider::ToolCallFunction {
+            kind: agent_oxide::provider::ToolCallKind::Function,
+            function: agent_oxide::provider::ToolCallFunction {
                 name: name.to_string(),
                 arguments: "{}".to_string(),
             },

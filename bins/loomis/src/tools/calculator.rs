@@ -31,7 +31,7 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use tools::{ProgressStream, ToolError, tool};
+use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
 // ── CalculatorTool ────────────────────────────────────────────────────────────
 
@@ -399,7 +399,7 @@ type ExprEvaluator = Parser;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tools::{Tool, ToolError};
+    use agent_oxide::tools::{Tool, ToolError};
 
     // ── Helpers ───────────────────────────────────────────
 

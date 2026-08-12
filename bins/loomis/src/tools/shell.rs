@@ -5,9 +5,9 @@
 //!
 //! ## Safety
 //!
-//! Commands are validated through [`ShellFilter`](sandbox::shell_filter::ShellFilter)
+//! Commands are validated through [`ShellFilter`](agent_oxide::sandbox::shell_filter::ShellFilter)
 //! before execution.  The environment is sanitised via
-//! [`sanitize`](sandbox::env_sanitizer::sanitize) so that secrets
+//! [`sanitize`](agent_oxide::sandbox::env_sanitizer::sanitize) so that secrets
 //! and dangerous variables (`LD_PRELOAD`, …) are not leaked to child
 //! processes.  A watchdog thread enforces the timeout and kills the
 //! **entire process tree** (not just the immediate child) on timeout.
@@ -27,14 +27,14 @@ use std::time::{Duration, Instant};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use tools::{ProgressStream, ToolError, tool};
+use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
-use sandbox::SandboxConfig;
+use agent_oxide::sandbox::SandboxConfig;
 
-use sandbox::encoding::{self, MAX_OUTPUT_BYTES};
-use sandbox::env_sanitizer;
-use sandbox::shell_filter::ShellFilter;
-use sandbox::watchdog::Watchdog;
+use agent_oxide::sandbox::encoding::{self, MAX_OUTPUT_BYTES};
+use agent_oxide::sandbox::env_sanitizer;
+use agent_oxide::sandbox::shell_filter::ShellFilter;
+use agent_oxide::sandbox::watchdog::Watchdog;
 
 /// Arguments for shell command execution.
 #[derive(JsonSchema, Deserialize)]
@@ -119,7 +119,7 @@ impl ShellTool {
         let command_preview: String = command.chars().take(300).collect();
 
         // ── Command validation ────────────────────────────────────────
-        use sandbox::shell_filter::CommandVerdict;
+        use agent_oxide::sandbox::shell_filter::CommandVerdict;
         if let CommandVerdict::Blocked { reason } = self.filter.classify(&command) {
             tracing::warn!(
                 command = %command_preview,
@@ -290,7 +290,7 @@ impl ShellTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tools::Tool;
+    use agent_oxide::tools::Tool;
 
     fn make_tool() -> ShellTool {
         ShellTool::new(std::env::current_dir().unwrap(), &SandboxConfig::default())

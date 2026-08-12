@@ -3,7 +3,7 @@
 //! # How it works
 //!
 //! The tool pauses the agent and shows an interactive prompt in the TUI
-//! via the existing [`InterventionRequired`](engine::AgentEvent::InterventionRequired)
+//! via the existing [`InterventionRequired`](agent_oxide::engine::AgentEvent::InterventionRequired)
 //! mechanism.  The user navigates options (or types free-form text) and
 //! their response is returned as the tool output.
 //!
@@ -20,14 +20,14 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use engine::AgentEvent;
+use agent_oxide::engine::AgentEvent;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::mpsc;
-use tools::{ProgressStream, ToolError, tool};
+use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
-use engine::ResponseRouter;
-use engine::intervention::{self, InterventionError};
+use agent_oxide::engine::ResponseRouter;
+use agent_oxide::engine::intervention::{self, InterventionError};
 
 // ── Args ────────────────────────────────────────────────────────────────────
 
@@ -210,7 +210,7 @@ impl AskUserQuestionTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tools::Tool;
+    use agent_oxide::tools::Tool;
 
     #[test]
     fn test_name() {

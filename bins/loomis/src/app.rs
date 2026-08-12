@@ -4,18 +4,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use deepseek::DeepSeekClient;
-use engine::{Agent, EngineContext};
-use hooks;
-use memory::{Memory, PendingHints, SharedMemory};
-use observability::TraceStore;
-use persistence::PersistenceConfig;
-use skills::{self, SkillRegistry};
-use subagent::{self, SubagentConfig};
+use agent_oxide::deepseek::DeepSeekClient;
+use agent_oxide::engine::{Agent, EngineContext};
+use agent_oxide::memory::{Memory, PendingHints, SharedMemory};
+use agent_oxide::observability::TraceStore;
+use agent_oxide::persistence::PersistenceConfig;
+use agent_oxide::skills::SkillRegistry;
+use agent_oxide::subagent::SubagentConfig;
 use tokio::sync::mpsc;
-use tools::ToolRegistry;
+use agent_oxide::tools::ToolRegistry;
 
-use sandbox::SandboxConfig;
+use agent_oxide::sandbox::SandboxConfig;
 
 use crate::hooks::{
     ObservabilityHook, PlanModeHook, PlanModeState, ProfileHook, SandboxHook, SkillHook,
@@ -25,16 +24,16 @@ use crate::tools::{
     AskUserQuestionTool, CalculatorTool, EditTool, EnterPlanModeTool, ExitPlanModeTool, GlobTool,
     GrepTool, LsTool, ReadTool, ShellTool, SkillTool, TodoItem, TodoTool, WriteTool,
 };
-use engine::ResponseRouter;
-use sandbox::audit_logger::AuditLogger;
-use sandbox::resource_tracker::ResourceTracker;
-use sandbox::shell_filter::ShellFilter;
+use agent_oxide::engine::ResponseRouter;
+use agent_oxide::sandbox::audit_logger::AuditLogger;
+use agent_oxide::sandbox::resource_tracker::ResourceTracker;
+use agent_oxide::sandbox::shell_filter::ShellFilter;
 
 // ── AgentEvent & InterventionResponse (re-exported from engine) ─────────────────
 
 /// Re-export the engine's event type for channel construction.
-pub use engine::AgentEvent;
-pub use engine::InterventionResponse;
+pub use agent_oxide::engine::AgentEvent;
+pub use agent_oxide::engine::InterventionResponse;
 
 /// Product of [`build_coding_agent`] — everything needed to launch the TUI.
 pub struct AgentKit {
@@ -65,11 +64,11 @@ pub struct AgentKit {
     /// Discovered skills — read-only after startup.
     pub skill_registry: Arc<SkillRegistry>,
     /// Currently active skills — written by [`SkillTool`], read by [`SkillHook`].
-    pub active_skills: skills::ActiveSkills,
+    pub active_skills: agent_oxide::skills::ActiveSkills,
     /// Shell-command policy — the same instance backing [`SandboxHook`],
     /// reused by the TUI to classify user `!command` invocations
     /// (Nielsen #5: error prevention).
-    pub shell_filter: sandbox::shell_filter::ShellFilter,
+    pub shell_filter: agent_oxide::sandbox::shell_filter::ShellFilter,
 }
 
 /// Seed default skills into `.loomis/skills/` if no `.md` files exist there.
@@ -154,7 +153,7 @@ pub fn build_coding_agent(
     let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
 
     // ── Workspace filesystem ─────────────────────────────────
-    let workspace = sandbox::WorkspaceFs::new(workspace_root, &sandbox_config.filesystem)
+    let workspace = agent_oxide::sandbox::WorkspaceFs::new(workspace_root, &sandbox_config.filesystem)
         .unwrap_or_else(|e| {
             tracing::error!(
                 path = %workspace_root.display(),
@@ -194,7 +193,7 @@ pub fn build_coding_agent(
         dirs_fallback().join(".loomis").join("skills"),
     ];
     let skill_registry = Arc::new(SkillRegistry::discover(&skill_search_paths));
-    let active_skills: skills::ActiveSkills = Arc::new(RwLock::new(HashMap::new()));
+    let active_skills: agent_oxide::skills::ActiveSkills = Arc::new(RwLock::new(HashMap::new()));
 
     // ── Tool registry ────────────────────────────────────────
     let mut registry = ToolRegistry::new();
@@ -229,14 +228,14 @@ pub fn build_coding_agent(
 
     // ── Subagent tool (read-only subset, no shell, no write, no task) ──
     let subagent_registry =
-        subagent::filter_tools(&registry, &["read", "ls", "glob", "grep", "calculator"]);
+        agent_oxide::subagent::filter_tools(&registry, &["read", "ls", "glob", "grep", "calculator"]);
     let subagent_registry = Arc::new(subagent_registry);
 
     let subagent_config = SubagentConfig {
         model: flash_model.to_string(),
         ..Default::default()
     };
-    let subagent_tool = subagent::SubagentTool::new(
+    let subagent_tool = agent_oxide::subagent::SubagentTool::new(
         subagent_client,
         subagent_config,
         subagent_registry,
@@ -305,20 +304,20 @@ pub fn build_coding_agent(
     approval_hook.set_agent_tx(agent_tx.clone());
 
     // MicroCompactHook — clears old tool output content
-    let micro_compact = hooks::MicroCompactHook::new(
-        hooks::DEFAULT_KEEP_RECENT_TOOL_OUTPUTS,
-        hooks::DEFAULT_COMPACT_ELIGIBLE_TOOLS
+    let micro_compact = agent_oxide::hooks::MicroCompactHook::new(
+        agent_oxide::hooks::DEFAULT_KEEP_RECENT_TOOL_OUTPUTS,
+        agent_oxide::hooks::DEFAULT_COMPACT_ELIGIBLE_TOOLS
             .iter()
             .map(|s| s.to_string())
             .collect(),
     );
 
     // MacroCompactHook — LLM summarisation when over budget.
-    // Blocks the agent task via engine::block_on (separate thread from TUI).
-    let macro_compact = hooks::MacroCompactHook::new(
+    // Blocks the agent task via agent_oxide::engine::block_on (separate thread from TUI).
+    let macro_compact = agent_oxide::hooks::MacroCompactHook::new(
         flash_model.to_string(),
-        hooks::DEFAULT_COMPACT_TOKEN_LIMIT,
-        hooks::DEFAULT_KEEP_LAST_N,
+        agent_oxide::hooks::DEFAULT_COMPACT_TOKEN_LIMIT,
+        agent_oxide::hooks::DEFAULT_KEEP_LAST_N,
         compact_client,
     );
 
@@ -354,14 +353,14 @@ pub fn build_coding_agent(
         markdown_title: "Loomis Conversation".into(),
         ..Default::default()
     };
-    let persistence_hook = persistence::PersistenceHook::new(
+    let persistence_hook = agent_oxide::persistence::PersistenceHook::new(
         workspace_root.to_path_buf(),
         persistence_config.clone(),
         title_client,
         flash_model.to_string(),
     );
 
-    let hooks: Vec<Box<dyn engine::AgentHook>> = vec![
+    let hooks: Vec<Box<dyn agent_oxide::engine::AgentHook>> = vec![
         Box::new(system_prompt_hook), // 0. Seed system prompts on run start
         Box::new(observability_hook), // 1. Full-chain trace event collection
         Box::new(persistence_hook),   // 2. Save conversation after each run
@@ -449,7 +448,7 @@ fn dirs_fallback() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skills::SkillRegistry;
+    use agent_oxide::skills::SkillRegistry;
 
     #[test]
     fn test_seeds_when_no_skills_exist() {

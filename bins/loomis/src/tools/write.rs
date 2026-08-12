@@ -11,12 +11,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use sandbox::FsError;
-use sandbox::WorkspaceFs;
-use tools::{Progress, ProgressStream, ToolError, tool};
+use agent_oxide::sandbox::FsError;
+use agent_oxide::sandbox::WorkspaceFs;
+use agent_oxide::tools::{Progress, ProgressStream, ToolError, tool};
 
 #[cfg(test)]
-use sandbox::FilesystemConfig;
+use agent_oxide::sandbox::FilesystemConfig;
 
 /// Arguments for the write tool.
 #[derive(JsonSchema, Deserialize)]
@@ -122,7 +122,7 @@ fn map_fs_err(e: FsError) -> ToolError {
 mod tests {
     use super::*;
     use futures_util::StreamExt;
-    use tools::Tool;
+    use agent_oxide::tools::Tool;
 
     /// Drive a progress stream to completion, collecting all messages.
     /// Returns the final `Done` payload.

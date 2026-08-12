@@ -1,6 +1,6 @@
 //! Hook that maintains a `[TODO]` System message in memory.
 //!
-//! Fires in [`on_llm_start`](engine::AgentHook::on_llm_start), which runs
+//! Fires in [`on_llm_start`](agent_oxide::engine::AgentHook::on_llm_start), which runs
 //! **after** all tool results have been written to memory.  This avoids the
 //! API message-ordering constraint: an assistant message with `tool_calls`
 //! must be immediately followed by tool-result messages — a System message
@@ -18,9 +18,9 @@
 
 use std::sync::{Arc, RwLock};
 
-use engine::AgentHook;
-use memory::SharedMemory;
-use provider::{Message, Role};
+use agent_oxide::engine::AgentHook;
+use agent_oxide::memory::SharedMemory;
+use agent_oxide::provider::{Message, Role};
 
 use crate::hooks::insert_before_history;
 use crate::tools::{TODO_MARKER, TodoItem};
@@ -94,7 +94,7 @@ impl AgentHook for TodoListHook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use memory::Memory;
+    use agent_oxide::memory::Memory;
 
     fn make_state(items: Vec<TodoItem>) -> Arc<RwLock<Vec<TodoItem>>> {
         Arc::new(RwLock::new(items))
@@ -284,7 +284,7 @@ mod tests {
             mem.push(Message::new(Role::System, "[SYSPROMPT] static head"));
             mem.push(Message::new(
                 Role::System,
-                format!("{} summary text", hooks::COMPACT_SUMMARY_MARKER),
+                format!("{} summary text", agent_oxide::hooks::COMPACT_SUMMARY_MARKER),
             ));
             mem.push(Message::new(Role::User, "hello"));
         }
@@ -296,7 +296,7 @@ mod tests {
         let summary_pos = mem
             .messages
             .iter()
-            .position(|m| m.content.starts_with(hooks::COMPACT_SUMMARY_MARKER))
+            .position(|m| m.content.starts_with(agent_oxide::hooks::COMPACT_SUMMARY_MARKER))
             .expect("[COMPACT_SUMMARY] message should be preserved");
         let todo_pos = mem
             .messages

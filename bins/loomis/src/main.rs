@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use sandbox::SandboxConfig;
+use agent_oxide::sandbox::SandboxConfig;
 use tracing_appender::non_blocking::WorkerGuard;
 
 const DEFAULT_MODEL: &str = "deepseek-v4-pro";
@@ -22,7 +22,7 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         // 1. Write to the log first — the tracing worker is still alive here.
         let location = info.location().map(|l| format!("{l}")).unwrap_or_default();
-        let msg = engine::panic_message(info.payload());
+        let msg = agent_oxide::engine::panic_message(info.payload());
         tracing::error!(
             panic.location = %location,
             panic.message = %msg,
@@ -111,7 +111,7 @@ async fn main() {
 
     // The generic library default (`.agent/audit.jsonl`) is not the loomis
     // convention — all app artifacts live under `.loomis/`.
-    if sandbox_config.audit.log_file == sandbox::config::AuditConfig::default().log_file {
+    if sandbox_config.audit.log_file == agent_oxide::sandbox::config::AuditConfig::default().log_file {
         sandbox_config.audit.log_file = ".loomis/audit.jsonl".into();
     }
 

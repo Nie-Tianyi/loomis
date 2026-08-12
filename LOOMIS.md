@@ -13,8 +13,8 @@ cargo clippy --all                 # lint
 cargo run -p loomis                # launch the TUI
 ```
 
-For framework tests (`-p engine`, etc.), cd into the sibling `agent_oxide/`
-repo — see `AGENT_OXIDE.md` there.
+For framework tests, cd into the sibling `agent_oxide/` repo and run
+`cargo test` — see `AGENT_OXIDE.md` there.
 
 Set `DEEPSEEK_API` in `.env` before running — `dotenvy` loads it at startup.
 See `.env.example` for all supported env vars (`BASE_URL`, `DEFAULT_PRO_MODEL`,
@@ -26,11 +26,10 @@ Tests are **inline** (`#[cfg(test)] mod tests { ... }`) co-located with source
 ## Architecture
 
 **Rust agent application** (Rust 2024 edition, Tokio async). Cargo workspace
-with `members = ["bins/*"]`. The framework (`core/` + `extensions/`, ~15
-crates) lives in the **sibling `agent_oxide/` repo** — the umbrella
-`agent_oxide` crate re-exports all sub-crates, and each sub-crate is
-published independently on crates.io. This repo wires the framework into a
-TUI app via path dependencies on `../../../agent_oxide/...`.
+with `members = ["bins/*"]`. The framework is the **`agent_oxide`** crate
+from crates.io — a single umbrella crate (`agent_oxide = "0.5.1"` in
+`bins/loomis/Cargo.toml`) whose source lives in the sibling
+`agent_oxide/` repo. This repo wires the framework into a TUI app.
 
 **Rust edition**: Uses Rust 2024 with native async fn in traits (RPITIT).
 Do NOT use `async-trait` crate. Prefer sync traits for dyn-dispatch; keep
@@ -43,20 +42,22 @@ loomis/                        # this repo — the application
 ├── Cargo.toml                 # [workspace] — members = ["bins/*"]
 └── bins/loomis/               # Binary + lib — TUI, concrete tools, hooks, sandbox wiring
 agent_oxide/                   # sibling repo — the framework (open source)
-├── Cargo.toml                 # [package] umbrella + [workspace] core/* + extensions/*
-├── src/lib.rs                 # umbrella re-exports + prelude
-├── core/                      # provider, deepseek, memory, tools, tools-macros, engine, util
-└── extensions/                # agent-kit, agent-macros, compact(hooks), observability,
-                               # persistence, sandbox, skills, subagent
+├── Cargo.toml                 # [package] agent_oxide + [workspace] agent_oxide-macros
+├── src/                       # Single crate — core/ + extensions/ modules
+│   ├── core/                  # provider, deepseek, memory, tools, engine, util
+│   └── extensions/            # agent_kit, hooks, observability, persistence,
+│                              # sandbox, skills, subagent
+├── agent_oxide-macros/        # Proc macros — #[derive(Agent)], #[agent_impl], #[tool]
+└── docs/                      # Framework guides (beginner, senior, sandbox-architecture, agent-kit)
 ```
 
 ### Dependency graph
 
 ```text
-bins/loomis ────── (path deps → all agent_oxide core/ + extensions/ crates)
+bins/loomis ────── agent_oxide = "0.5.1" (crates.io — single umbrella crate)
         ↑
 agent_oxide/       (framework internals — see AGENT_OXIDE.md for the
-                    core/ → extensions/ dependency graph)
+                    core/ → extensions/ module layout)
 ```
 
 ## Key patterns

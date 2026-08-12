@@ -12,10 +12,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use engine::AgentHook;
-use memory::SharedMemory;
-use provider::{Message, Role};
-use skills::SkillRegistry;
+use agent_oxide::engine::AgentHook;
+use agent_oxide::memory::SharedMemory;
+use agent_oxide::provider::{Message, Role};
+use agent_oxide::skills::SkillRegistry;
 
 /// Marker prefix that identifies core system prompt messages.
 ///
@@ -146,7 +146,7 @@ fn build_environment_context(workspace_root: &Path) -> String {
     let os_ver = detect_os_version();
     let shell = detect_shell();
     let cwd = workspace_root.display().to_string();
-    let date = util::iso8601_now();
+    let date = agent_oxide::util::iso8601_now();
     let git_info = detect_git_info(workspace_root);
 
     let mut block = format!(
@@ -310,7 +310,7 @@ fn try_load_project_rules(workspace_root: &Path) -> Option<String> {
 mod tests {
     use std::sync::{Arc, RwLock};
 
-    use memory::Memory;
+    use agent_oxide::memory::Memory;
 
     use super::*;
 

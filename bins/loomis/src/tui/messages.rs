@@ -3,7 +3,7 @@
 //! Pure type definitions with no dependency on the `App` state machine.
 //! Separated from [`super::app`] so the file doesn't grow to 1500 lines.
 
-use engine::{CallOrigin, InterventionResponse};
+use agent_oxide::engine::{CallOrigin, InterventionResponse};
 use std::time::SystemTime;
 
 // ── ChatMessage ──────────────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ pub enum ChatMessage {
         state: ToolCallState,
         origin: CallOrigin,
         /// Accumulated progress messages while tool is Running.
-        /// Each [`ToolProgress`](engine::AgentEvent::ToolProgress) event
+        /// Each [`ToolProgress`](agent_oxide::engine::AgentEvent::ToolProgress) event
         /// appends a new line; all are rendered indented under the header.
         progress_lines: Vec<String>,
         timestamp: String,
@@ -269,7 +269,7 @@ pub struct SlashCompletionState {
 #[derive(Debug, Clone)]
 pub struct ThreadPicker {
     /// Available threads, sorted newest-first.
-    pub threads: Vec<persistence::ThreadInfo>,
+    pub threads: Vec<agent_oxide::persistence::ThreadInfo>,
     /// Currently highlighted index.
     pub selected: usize,
 }
@@ -288,12 +288,12 @@ pub fn truncate_for_display(text: &str, max_len: usize) -> String {
 
 /// Returns `true` if `name` is a valid thread name.
 ///
-/// Delegates to [`persistence::sanitize_filename`] for the canonical check, so
+/// Delegates to [`agent_oxide::persistence::sanitize_filename`] for the canonical check, so
 /// any name that passes validation will be preserved verbatim by the
 /// persistence layer.  Control characters and filesystem-illegal characters
 /// (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`) are rejected.
 pub fn is_valid_thread_name(name: &str) -> bool {
-    !name.is_empty() && name == persistence::sanitize_filename(name)
+    !name.is_empty() && name == agent_oxide::persistence::sanitize_filename(name)
 }
 
 #[cfg(test)]
