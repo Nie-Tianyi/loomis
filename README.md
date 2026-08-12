@@ -203,59 +203,6 @@ cargo clippy --all         # 代码检查
 
 ---
 
-## 给开发者
-
-Loomis 的引擎层是模块化的——9 个独立的 Rust crate 可以被其他 Agent 项目直接复用。
-
-### 🎯 Agent Kit：NVIDIA OO Agents 范式
-
-Loomis 内置了对 NVIDIA 最近开源的 **OO Agents 编程范式**的支持（`agent-kit` + `agent-macros`，`core/` 零改动）：
-
-- 📝 **struct 文档注释 = System Prompt** — 注释即系统提示词，不再手拼 prompt
-- 🛠️ **同步方法 = 工具** — 方法签名就是工具契约，自动注册给 LLM，零样板代码
-- ✨ **async 方法 + 空 body = 生成方法** — 由 LLM 实现；返回类型实现 `Deserialize + JsonSchema` 时自动结构化输出、校验失败自动重试
-- ⚙️ **`#[strategy(code_act, max_iterations = 10)]`** — 一行配置执行策略（单次预测或完整 ReAct 循环）
-
-```rust
-/// 你是一个库存管理 Agent。回答订单问题时，必须先调用工具查询真实数据。
-#[derive(Clone, Agent)]
-struct InventoryAgent {
-    #[agent(client)]
-    client: DeepSeekClient,
-    inventory: HashMap<String, Item>,
-}
-
-#[agent_impl]
-impl InventoryAgent {
-    /// 获取指定物品的当前库存数量。
-    fn get_stock(&self, item: String) -> i32 { /* ... */ }
-
-    /// 检查订单是否可以在预算内完成。
-    #[strategy(code_act, max_iterations = 15)]
-    async fn can_fulfill_order(&self, items: Vec<String>, budget: f64) -> OrderResult {}
-}
-```
-
-定义即注册——LLM 会自动发现并调用你的同步方法。更多用法与完整示例见
-[Agent Kit 使用指南](docs/agent-kit-guide.md)。
-
-如果你想：
-- **实现自己的工具** — 比如接入数据库、网页搜索
-- **换成其他 LLM 供应商** — OpenAI、Anthropic、本地模型
-- **加入自定义的运行时钩子** — 日志、监控、自定义安全策略
-- **深入理解架构原理** — ReAct 循环、流式管道、双层压缩、沙箱纵深防御
-
-请移步开发者指南：
-
-| 文档 | 适合 |
-|------|------|
-| [**Beginner Developer Guide**](docs/beginner-developer-guide.md) | 第一次写 Agent？跟着教程 10 分钟上手，用 copy-paste 的代码构建你的第一个工具 |
-| [**Agent Kit Guide**](docs/agent-kit-guide.md) | 用 NVIDIA OO Agents 范式写 Agent——`#[derive(Agent)]` + `#[agent_impl]` 的完整用法 |
-| [**Senior Developer Guide**](docs/senior-developer-guide.md) | 深入架构、Trait 实现、Hook 生命周期、沙箱内部、子 Agent 系统——完整参考手册 |
-| [**Sandbox Architecture**](docs/sandbox-architecture.md) | 五层纵深沙箱的设计细节和安全模型 |
-
----
-
 ## 许可证
 
 MIT © 2026
