@@ -697,7 +697,7 @@ mod tests {
     /// every `App` built against it.
     fn test_workspace() -> &'static PathBuf {
         static WORKSPACE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-        WORKSPACE.get_or_init(|| tempfile::tempdir().expect("test tempdir").into_path())
+        WORKSPACE.get_or_init(|| tempfile::tempdir().expect("test tempdir").keep())
     }
 
     fn make_app() -> App {
