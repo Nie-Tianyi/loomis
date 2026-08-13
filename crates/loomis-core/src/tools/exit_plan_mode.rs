@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_oxide::engine::AgentEvent;
@@ -159,39 +159,36 @@ pub(crate) struct ExitPlanModeArgs {}
     args = ExitPlanModeArgs
 )]
 pub struct ExitPlanModeTool {
-    /// Shared plan-mode toggle between tool, hook, and TUI.
+    /// Shared plan-mode toggle between tool, hook, and frontend.
     plan_mode: Arc<PlanModeState>,
     /// Absolute path to the plan file — read and presented to the user.
     plan_file_path: PathBuf,
     /// Directory where approved plans are archived (`.loomis/plan/`).
     plan_dir: PathBuf,
     /// Sender for agent events — used to emit InterventionRequired.
-    agent_tx: OnceLock<mpsc::UnboundedSender<AgentEvent>>,
+    agent_tx: mpsc::UnboundedSender<AgentEvent>,
     /// Shared router for receiving the user's response.
     response_router: Arc<ResponseRouter>,
 }
 
 impl ExitPlanModeTool {
-    /// Creates a new tool that shares the given plan-mode state and response router.
+    /// Creates a new tool that shares the given plan-mode state, response
+    /// router, and the agent-event channel (needed to emit
+    /// `InterventionRequired`).
     pub fn new(
         plan_mode: Arc<PlanModeState>,
         plan_file_path: PathBuf,
         plan_dir: PathBuf,
         response_router: Arc<ResponseRouter>,
+        agent_tx: mpsc::UnboundedSender<AgentEvent>,
     ) -> Self {
         Self {
             plan_mode,
             plan_file_path,
             plan_dir,
-            agent_tx: OnceLock::new(),
+            agent_tx,
             response_router,
         }
-    }
-
-    /// Called by `build_coding_agent` after the agent-event channel is
-    /// created.  Must be set before the tool can be used.
-    pub fn set_agent_tx(&self, tx: mpsc::UnboundedSender<AgentEvent>) {
-        let _ = self.agent_tx.set(tx);
     }
 
     fn execute_stream(&self, _args: ExitPlanModeArgs) -> Result<ProgressStream, ToolError> {
@@ -202,11 +199,6 @@ impl ExitPlanModeTool {
                 "Not in plan mode. Use enter_plan_mode or /plan first to enter plan mode.".into(),
             ));
         }
-
-        let agent_tx = self
-            .agent_tx
-            .get()
-            .ok_or_else(|| ToolError::Execution("Agent event channel not configured".into()))?;
 
         // Read the plan file content (cloned so we can use it after the display copy).
         let plan_content = std::fs::read_to_string(&self.plan_file_path)
@@ -231,7 +223,7 @@ impl ExitPlanModeTool {
         // Delegate the common request/response plumbing to the shared helper.
         let response = intervention::request_intervention(
             &self.response_router,
-            agent_tx,
+            &self.agent_tx,
             "Approve Plan?".into(),
             description,
             vec!["Approve".into(), "Suggest changes…".into(), "Cancel".into()],
@@ -378,56 +370,48 @@ mod tests {
         Arc::new(ResponseRouter::new())
     }
 
+    /// A live event channel — the tool now requires the sender at
+    /// construction (no more back-door `set_agent_tx`).
+    fn make_agent_tx() -> mpsc::UnboundedSender<AgentEvent> {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        tx
+    }
+
+    fn make_tool() -> ExitPlanModeTool {
+        ExitPlanModeTool::new(
+            Arc::new(PlanModeState::default()),
+            make_plan_file(),
+            make_plan_dir(),
+            make_router(),
+            make_agent_tx(),
+        )
+    }
+
     #[test]
     fn test_name() {
-        let plan_file = make_plan_file();
-        let plan_dir = make_plan_dir();
-        let tool = ExitPlanModeTool::new(
-            Arc::new(PlanModeState::default()),
-            plan_file,
-            plan_dir,
-            make_router(),
-        );
-        assert_eq!(tool.name(), "exit_plan_mode");
+        assert_eq!(make_tool().name(), "exit_plan_mode");
     }
 
     #[test]
     fn test_description() {
-        let plan_file = make_plan_file();
-        let plan_dir = make_plan_dir();
-        let tool = ExitPlanModeTool::new(
-            Arc::new(PlanModeState::default()),
-            plan_file,
-            plan_dir,
-            make_router(),
-        );
-        assert!(tool.description().contains("plan mode"));
+        assert!(make_tool().description().contains("plan mode"));
     }
 
     #[test]
     fn test_parameters_schema() {
-        let plan_file = make_plan_file();
-        let plan_dir = make_plan_dir();
-        let tool = ExitPlanModeTool::new(
-            Arc::new(PlanModeState::default()),
-            plan_file,
-            plan_dir,
-            make_router(),
-        );
-        let params = tool.parameter_schema();
+        let params = make_tool().parameter_schema();
         assert_eq!(params["type"], "object");
         assert_eq!(params["additionalProperties"], false);
     }
 
     #[test]
     fn test_error_when_not_in_plan_mode() {
-        let plan_file = make_plan_file();
-        let plan_dir = make_plan_dir();
         let tool = ExitPlanModeTool::new(
             Arc::new(PlanModeState::default()), // active defaults to false
-            plan_file,
-            plan_dir,
+            make_plan_file(),
+            make_plan_dir(),
             make_router(),
+            make_agent_tx(),
         );
 
         let err = Tool::execute_stream(&tool, "{}").unwrap_err();
@@ -438,51 +422,14 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_tx_not_set_is_handled_gracefully() {
-        // This test verifies that when agent_tx is not set, the tool
-        // doesn't panic when trying to send. However, since there's no
-        // sender, no InterventionRequired event will be emitted, and
-        // the blocking recv will eventually timeout (300s).
-        //
-        // We can't practically test the full blocking path in a unit
-        // test, but we verify that the tool constructs correctly and
-        // the guard clause works.
-        let plan_file = make_plan_file();
-        let plan_dir = make_plan_dir();
-        let state = Arc::new(PlanModeState::default());
-        state.active.store(true, Ordering::SeqCst);
-        let tool = ExitPlanModeTool::new(state, plan_file, plan_dir, make_router());
-        // agent_tx is NOT set
-        assert!(tool.agent_tx.get().is_none());
-        // The tool should still be functional — just can't send events.
-        // We don't call execute_stream here to avoid the 300s timeout.
-    }
-
-    #[test]
     fn test_invalid_json_rejected() {
-        let plan_file = make_plan_file();
-        let plan_dir = make_plan_dir();
-        let tool = ExitPlanModeTool::new(
-            Arc::new(PlanModeState::default()),
-            plan_file,
-            plan_dir,
-            make_router(),
-        );
-        let err = Tool::execute_stream(&tool, "garbage").unwrap_err();
+        let err = Tool::execute_stream(&make_tool(), "garbage").unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
     #[test]
     fn test_extra_field_rejected() {
-        let plan_file = make_plan_file();
-        let plan_dir = make_plan_dir();
-        let tool = ExitPlanModeTool::new(
-            Arc::new(PlanModeState::default()),
-            plan_file,
-            plan_dir,
-            make_router(),
-        );
-        let err = Tool::execute_stream(&tool, r#"{"extra": true}"#).unwrap_err();
+        let err = Tool::execute_stream(&make_tool(), r#"{"extra": true}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 }

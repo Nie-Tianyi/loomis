@@ -13,8 +13,8 @@
 //! [`KeyModifiers::SUPER`].
 //!
 //! All checks are `cfg!(target_os = "macos")` compile-time constants — zero
-//! runtime cost, consistent with the `#[cfg(target_os)]` pattern used in
-//! [`super::shell_exec`].
+//! runtime cost, consistent with the `#[cfg(target_os)]` pattern used
+//! throughout the TUI.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

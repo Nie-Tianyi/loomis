@@ -20,6 +20,7 @@ use crate::hooks::{
     ObservabilityHook, PlanModeHook, PlanModeState, ProfileHook, SandboxHook, SkillHook,
     SystemPromptHook, TodoListHook,
 };
+use crate::runtime::BuildError;
 use crate::tools::{
     AskUserQuestionTool, CalculatorTool, EditTool, EnterPlanModeTool, ExitPlanModeTool, GlobTool,
     GrepTool, LsTool, ReadTool, ShellTool, SkillTool, TodoItem, TodoTool, WriteTool,
@@ -29,19 +30,15 @@ use agent_oxide::sandbox::audit_logger::AuditLogger;
 use agent_oxide::sandbox::resource_tracker::ResourceTracker;
 use agent_oxide::sandbox::shell_filter::ShellFilter;
 
-// ── AgentEvent & InterventionResponse (re-exported from engine) ─────────────────
+use agent_oxide::engine::AgentEvent;
 
-/// Re-export the engine's event type for channel construction.
-pub use agent_oxide::engine::AgentEvent;
-pub use agent_oxide::engine::InterventionResponse;
-
-/// Product of [`build_coding_agent`] — everything needed to launch the TUI.
-pub struct AgentKit {
+/// Product of [`assemble`] — everything the runtime driver needs.
+pub(crate) struct AgentKit {
     pub agent: Agent<DeepSeekClient>,
     pub memory: SharedMemory,
     pub tool_names: Vec<String>,
     pub model: String,
-    /// Receiving half of the agent-event channel — consumed by the TUI event loop.
+    /// Receiving half of the agent-event channel — consumed by the frontend event loop.
     pub agent_rx: mpsc::UnboundedReceiver<AgentEvent>,
     /// Clone of the sending half — for the agent handler background task.
     pub agent_tx: mpsc::UnboundedSender<AgentEvent>,
@@ -53,11 +50,11 @@ pub struct AgentKit {
     pub pending_hints: PendingHints,
     /// Persistence config — directory layout and naming for thread storage.
     pub persistence_config: PersistenceConfig,
-    /// Shared todo list state — written by [`TodoTool`], read by the TUI status bar.
+    /// Shared todo list state — written by [`TodoTool`], read by frontend status bars.
     pub todos: Arc<RwLock<Vec<TodoItem>>>,
-    /// Shared trace store — written by [`ObservabilityHook`], read by the TUI.
+    /// Shared trace store — written by [`ObservabilityHook`], read by frontends.
     pub trace_store: Arc<TraceStore>,
-    /// Shared plan-mode toggle between TUI and [`PlanModeHook`].
+    /// Shared plan-mode toggle between frontend and [`PlanModeHook`].
     pub plan_mode: Arc<PlanModeState>,
     /// Directory where approved plans are archived (`.loomis/plan/`).
     pub plan_dir: PathBuf,
@@ -66,7 +63,8 @@ pub struct AgentKit {
     /// Currently active skills — written by [`SkillTool`], read by [`SkillHook`].
     pub active_skills: agent_oxide::skills::ActiveSkills,
     /// Shell-command policy — the same instance backing [`SandboxHook`],
-    /// reused by the TUI to classify user `!command` invocations
+    /// exposed via [`Runtime::classify_shell`](crate::runtime::Runtime::classify_shell)
+    /// so frontends can classify user `!command` invocations
     /// (Nielsen #5: error prevention).
     pub shell_filter: agent_oxide::sandbox::shell_filter::ShellFilter,
 }
@@ -127,7 +125,24 @@ fn seed_default_skills(workspace_root: &Path) {
     }
 }
 
-/// Build a fully-wired coding agent with all channels, tools, and hooks.
+/// The `/init` prompt — project-rules initialisation instructions.
+///
+/// Embedded via `include_str!` at compile time. Owned by the core so
+/// frontends never need to read the core resource directory.
+pub(crate) fn init_prompt(extra: Option<&str>) -> String {
+    let init_prompt = include_str!("../prompts/init.md");
+    match extra {
+        Some(rest) => {
+            format!("{init_prompt}\n\n### Additional instruction from the user\n\n{rest}")
+        }
+        None => init_prompt.to_string(),
+    }
+}
+
+/// Assemble a fully-wired agent with all channels, tools, and hooks.
+///
+/// Crate-internal — frontends obtain the result via [`Runtime::build`]
+/// (crate::runtime::Runtime::build).
 ///
 /// # Assembly order
 ///
@@ -141,28 +156,33 @@ fn seed_default_skills(workspace_root: &Path) {
 /// 7. Engine context     — wire everything into Agent + EngineContext
 /// ```
 ///
-/// The returned [`AgentKit`] carries all shared state the TUI needs.
-pub fn build_coding_agent(
+/// The returned [`AgentKit`] carries all shared state the runtime driver needs.
+pub(crate) fn assemble(
     api_key: &str,
     workspace_root: &Path,
     model: &str,
     flash_model: &str,
     sandbox_config: &SandboxConfig,
-) -> AgentKit {
+    persistence_config: &PersistenceConfig,
+) -> Result<AgentKit, BuildError> {
+    // Own the config here so `clone()` below dereferences to the value
+    // type (a `&T.clone()` would clone the reference).
+    let persistence_config = persistence_config.clone();
+
     // ── Channels ──────────────────────────────────────────────
     let (agent_tx, agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
 
     // ── Workspace filesystem ─────────────────────────────────
     let workspace =
         agent_oxide::sandbox::WorkspaceFs::new(workspace_root, &sandbox_config.filesystem)
-            .unwrap_or_else(|e| {
+            .map_err(|e| {
                 tracing::error!(
                     path = %workspace_root.display(),
                     error = %e,
                     "Cannot create workspace",
                 );
-                std::process::exit(1);
-            });
+                BuildError::Workspace(e)
+            })?;
     let workspace = Arc::new(workspace);
 
     // ── Shared intervention response router ───────────────────
@@ -199,7 +219,7 @@ pub fn build_coding_agent(
     // ── Tool registry ────────────────────────────────────────
     let mut registry = ToolRegistry::new();
 
-    // Shared todo-list state — the TodoTool writes it, the TUI reads it.
+    // Shared todo-list state — the TodoTool writes it, frontends read it.
     let todo_state = Arc::new(RwLock::new(Vec::<TodoItem>::new()));
 
     registry.register(Arc::new(CalculatorTool));
@@ -248,8 +268,7 @@ pub fn build_coding_agent(
     registry.register(Arc::new(subagent_tool));
 
     // AskUserQuestionTool — lets the LLM ask the user questions.
-    let ask_tool = AskUserQuestionTool::new(response_router.clone());
-    ask_tool.set_agent_tx(agent_tx.clone());
+    let ask_tool = AskUserQuestionTool::new(response_router.clone(), agent_tx.clone());
     registry.register(Arc::new(ask_tool));
 
     // TodoTool — lets the LLM manage a structured task list (plan).
@@ -267,8 +286,8 @@ pub fn build_coding_agent(
         plan_file_path.clone(),
         plan_dir.clone(),
         response_router.clone(),
+        agent_tx.clone(),
     );
-    exit_plan_tool.set_agent_tx(agent_tx.clone());
     registry.register(Arc::new(exit_plan_tool));
 
     // SkillTool — lets the LLM load named skill instructions.
@@ -316,7 +335,7 @@ pub fn build_coding_agent(
     );
 
     // MacroCompactHook — LLM summarisation when over budget.
-    // Blocks the agent task via agent_oxide::engine::block_on (separate thread from TUI).
+    // Blocks the agent task via agent_oxide::engine::block_on (separate thread from the frontend).
     let macro_compact = agent_oxide::hooks::MacroCompactHook::new(
         flash_model.to_string(),
         agent_oxide::hooks::DEFAULT_COMPACT_TOKEN_LIMIT,
@@ -347,15 +366,9 @@ pub fn build_coding_agent(
     let todo_list_hook = TodoListHook::new(todo_state.clone());
 
     // PersistenceHook — auto-saves conversation after each agent run,
-    // and titles it via the flash model on the first query.  Must match
-    // the TUI's persistence_config so both the hook and user save/resume
+    // and titles it via the flash model on the first query.  Shares the
+    // caller-provided persistence config so the hook and user save/resume
     // operations write to the same directory.
-    let persistence_config = PersistenceConfig {
-        threads_dir: ".loomis/threads".into(),
-        current_thread_file: ".loomis/current".into(),
-        markdown_title: "Loomis Conversation".into(),
-        ..Default::default()
-    };
     let persistence_hook = agent_oxide::persistence::PersistenceHook::new(
         workspace_root.to_path_buf(),
         persistence_config.clone(),
@@ -407,7 +420,7 @@ pub fn build_coding_agent(
 
     let agent = Agent::new(ctx);
 
-    AgentKit {
+    Ok(AgentKit {
         agent,
         memory,
         tool_names,
@@ -416,7 +429,7 @@ pub fn build_coding_agent(
         agent_tx,
         response_router,
         pending_hints,
-        persistence_config,
+        persistence_config: persistence_config.clone(),
         todos: todo_state,
         trace_store,
         plan_mode,
@@ -424,7 +437,7 @@ pub fn build_coding_agent(
         skill_registry,
         active_skills,
         shell_filter,
-    }
+    })
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────────

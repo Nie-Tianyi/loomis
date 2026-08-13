@@ -55,7 +55,7 @@ pub(crate) struct EnterPlanModeArgs {}
     args = EnterPlanModeArgs
 )]
 pub struct EnterPlanModeTool {
-    /// Shared plan-mode toggle between tool, hook, and TUI.
+    /// Shared plan-mode toggle between tool, hook, and frontend.
     plan_mode: Arc<PlanModeState>,
     /// Absolute path to the plan file (only writable file in plan mode).
     plan_file_path: PathBuf,

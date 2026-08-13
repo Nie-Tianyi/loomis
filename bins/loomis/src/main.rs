@@ -4,11 +4,10 @@
 
 use std::path::{Path, PathBuf};
 
-use agent_oxide::sandbox::SandboxConfig;
+use loomis_core::{panic_message, CoreConfig, DEFAULT_FLASH_MODEL, DEFAULT_MODEL, Runtime};
 use tracing_appender::non_blocking::WorkerGuard;
 
-const DEFAULT_MODEL: &str = "deepseek-v4-pro";
-const DEFAULT_FLASH_MODEL: &str = "deepseek-v4-flash";
+mod tui;
 
 /// Install a process-wide panic hook that writes the panic to the tracing
 /// log **and** restores the terminal before the default hook prints it.
@@ -22,7 +21,7 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         // 1. Write to the log first — the tracing worker is still alive here.
         let location = info.location().map(|l| format!("{l}")).unwrap_or_default();
-        let msg = agent_oxide::engine::panic_message(info.payload());
+        let msg = panic_message(info.payload());
         tracing::error!(
             panic.location = %location,
             panic.message = %msg,
@@ -99,25 +98,17 @@ async fn main() {
     let flash_model =
         std::env::var("FLASH_MODEL").unwrap_or_else(|_| DEFAULT_FLASH_MODEL.to_string());
 
-    // Load sandbox config (includes [filesystem], [shell], [quotas], [audit]).
-    let config_path = cwd.join(".loomis").join("config.toml");
-    let mut sandbox_config = match SandboxConfig::load(&config_path) {
-        Ok(cfg) => cfg,
+    // Assemble the agent runtime. Sandbox config is loaded from
+    // `.loomis/config.toml` inside the core (with safe defaults on failure);
+    // the audit path override lives there too.
+    let runtime = match Runtime::build(CoreConfig::new(&api_key, &cwd).model(&model).flash_model(&flash_model)) {
+        Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, "Failed to load sandbox config, using safe defaults");
-            SandboxConfig::default()
+            tracing::error!(error = %e, "Failed to build agent runtime");
+            eprintln!("error: {e}");
+            std::process::exit(1);
         }
     };
-
-    // The generic library default (`.agent/audit.jsonl`) is not the loomis
-    // convention — all app artifacts live under `.loomis/`.
-    if sandbox_config.audit.log_file
-        == agent_oxide::sandbox::config::AuditConfig::default().log_file
-    {
-        sandbox_config.audit.log_file = ".loomis/audit.jsonl".into();
-    }
-
-    let kit = loomis::build_coding_agent(&api_key, &cwd, &model, &flash_model, &sandbox_config);
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -127,8 +118,8 @@ async fn main() {
         "Loomis initialized",
     );
 
-    let model = kit.model.clone();
-    match loomis::tui::run(kit, cwd, &model) {
+    let model = runtime.ui().model.clone();
+    match tui::run(runtime, cwd, &model) {
         Ok(()) => {}
         Err(e) => {
             tracing::error!(error = %e, "TUI error");

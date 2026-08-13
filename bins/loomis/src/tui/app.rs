@@ -7,7 +7,7 @@
 //!
 //! | Module | Purpose |
 //! |--------|---------|
-//! | [`super::messages`] | `ChatMessage`, `TuiCommand`, `ThreadPicker` types |
+//! | [`super::messages`] | `ChatMessage`, `ThreadPicker`, `ToolCallState` types |
 //! | [`super::input`] | `handle_key()`, slash commands, shell confirmation |
 //! | `app` (here) | `App` struct + event application + tests |
 
@@ -15,19 +15,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use agent_oxide::engine::{AgentEvent, CallOrigin};
-use agent_oxide::memory::{PendingHints, SharedMemory};
-use agent_oxide::observability::TraceStore;
-use agent_oxide::persistence::PersistenceConfig;
-use agent_oxide::skills::SkillRegistry;
+use loomis_core::{
+    AgentEvent, CallOrigin, PlanModeState, Runtime, SharedMemory, SkillRegistry, TodoItem,
+    TraceStore, UiState,
+};
 
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
 use super::messages::{ChatMessage, SelectionState, ToolCallState};
 use super::paste::PasteStore;
-use crate::hooks::PlanModeState;
-use crate::tools::TodoItem;
 
 // ── App ──────────────────────────────────────────────────────────────────────────
 
@@ -78,9 +75,6 @@ pub struct App {
     pub todos: Arc<RwLock<Vec<TodoItem>>>,
     /// Workspace root directory for `!` shell commands.
     pub workspace_root: PathBuf,
-    /// Queue for user hints injected during active agent runs.
-    /// Drained by the agent loop before each LLM call.
-    pub pending_hints: PendingHints,
 
     // ── Input history ──
     pub history: Vec<String>,
@@ -141,9 +135,6 @@ pub struct App {
     /// highlighted on screen.
     pub rendered_chat_lines: Vec<String>,
 
-    // ── Persistence ──
-    pub persistence_config: PersistenceConfig,
-
     // ── Observability ──
     /// Shared trace store — written by [`ObservabilityHook`], read by TUI status bar.
     pub trace_store: Arc<TraceStore>,
@@ -151,19 +142,15 @@ pub struct App {
     // ── Plan mode ──
     /// Shared plan-mode toggle between TUI and [`PlanModeHook`].
     pub plan_mode: Arc<PlanModeState>,
-    /// Directory where approved plans are archived (`.loomis/plan/`).
-    pub plan_dir: PathBuf,
 
     // ── Skills ──
     /// Discovered skills — read-only after startup, used by `/skill` command.
     pub skill_registry: Arc<SkillRegistry>,
-    /// Currently active skills — written by `/skill` and [`SkillTool`].
-    pub active_skills: agent_oxide::skills::ActiveSkills,
 
-    // ── Sandbox ──
-    /// Shell-command policy for user `!command` invocations — the same
-    /// rules the [`SandboxHook`] applies to LLM-initiated shell calls.
-    pub shell_filter: agent_oxide::sandbox::shell_filter::ShellFilter,
+    // ── Runtime ──
+    /// Handle to the agent runtime — slash commands and `!command`
+    /// classification delegate to its façade methods.
+    pub runtime: Runtime,
     /// A `!command` awaiting y/n confirmation (policy: RequiresApproval).
     pub pending_shell_confirm: Option<String>,
 
@@ -175,23 +162,26 @@ pub struct App {
 
 impl App {
     /// Creates a fresh app with a welcome system message.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// Takes the runtime's per-frame [`UiState`] (cheap Arc clones) and
+    /// destructures it into the flat fields below; `model` is passed
+    /// separately because the status bar owns its display copy.
     pub fn new(
         model: impl Into<String>,
-        memory: SharedMemory,
-        tool_names: Vec<String>,
-        todos: Arc<RwLock<Vec<TodoItem>>>,
         workspace_root: PathBuf,
-        pending_hints: PendingHints,
-        persistence_config: PersistenceConfig,
-        trace_store: Arc<TraceStore>,
-        plan_mode: Arc<PlanModeState>,
-        plan_dir: PathBuf,
-        skill_registry: Arc<SkillRegistry>,
-        active_skills: agent_oxide::skills::ActiveSkills,
-        shell_filter: agent_oxide::sandbox::shell_filter::ShellFilter,
+        state: UiState,
+        runtime: Runtime,
     ) -> Self {
         let model = model.into();
+        let UiState {
+            memory,
+            tool_names,
+            todos,
+            trace_store,
+            plan_mode,
+            skill_registry,
+            ..
+        } = state;
         Self {
             messages: vec![ChatMessage::Welcome {
                 model: model.clone(),
@@ -213,7 +203,6 @@ impl App {
             tool_names,
             todos,
             workspace_root,
-            pending_hints,
             history: Vec::new(),
             history_index: None,
             draft_input: String::new(),
@@ -232,13 +221,10 @@ impl App {
             total_rendered_lines: 0,
             visible_chat_height: 0,
             rendered_chat_lines: Vec::new(),
-            persistence_config,
             trace_store,
             plan_mode,
-            plan_dir,
             skill_registry,
-            active_skills,
-            shell_filter,
+            runtime,
             pending_shell_confirm: None,
             last_submitted_input: None,
         }
@@ -698,43 +684,27 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::messages::TuiCommand;
     use super::*;
-    use agent_oxide::engine::CallOrigin;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use loomis_core::RuntimeCommand;
 
     fn ts() -> String {
         "00:00:00".into()
     }
 
+    /// Shared per-process test workspace. A real `Runtime` writes `.loomis/`
+    /// artifacts (thread marker, saved threads) into it, so it must outlive
+    /// every `App` built against it.
+    fn test_workspace() -> &'static PathBuf {
+        static WORKSPACE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        WORKSPACE.get_or_init(|| tempfile::tempdir().expect("test tempdir").into_path())
+    }
+
     fn make_app() -> App {
-        let memory =
-            std::sync::Arc::new(std::sync::RwLock::new(agent_oxide::memory::Memory::new()));
-        let pending_hints = PendingHints::default();
-        let todos = Arc::new(RwLock::new(Vec::<TodoItem>::new()));
-        let trace_store = Arc::new(TraceStore::new());
-        let plan_mode = Arc::new(PlanModeState::default());
-        let plan_dir = PathBuf::from(".loomis/plan");
-        let skill_registry = Arc::new(SkillRegistry::empty());
-        let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
-        let shell_filter = agent_oxide::sandbox::shell_filter::ShellFilter::from_config(
-            &agent_oxide::sandbox::SandboxConfig::default(),
-        );
-        App::new(
-            "test-model",
-            memory,
-            vec!["echo".into(), "ls".into()],
-            todos,
-            PathBuf::from("."),
-            pending_hints,
-            PersistenceConfig::default(),
-            trace_store,
-            plan_mode,
-            plan_dir,
-            skill_registry,
-            active_skills,
-            shell_filter,
-        )
+        let runtime = Runtime::build(loomis_core::CoreConfig::new("test-key", test_workspace()))
+            .expect("runtime builds in tests");
+        let ui = runtime.ui();
+        App::new("test-model", test_workspace().clone(), ui, runtime)
     }
 
     // ── apply_event ─────────────────────────────────────────────
@@ -904,7 +874,7 @@ mod tests {
         app.input_cursor = 5;
 
         let result = submit_via_enter(&mut app);
-        assert!(matches!(result, Some(TuiCommand::Exit)));
+        assert!(matches!(result, Some(RuntimeCommand::Shutdown)));
         assert!(app.should_quit);
     }
 
@@ -919,7 +889,7 @@ mod tests {
         app.input_cursor = 4;
 
         let result = submit_via_enter(&mut app);
-        assert!(matches!(result, Some(TuiCommand::ClearConversation)));
+        assert!(matches!(result, Some(RuntimeCommand::ClearConversation)));
         // Local messages cleared, replaced with system confirmation
         assert_eq!(app.messages.len(), 1);
         match &app.messages[0] {
@@ -963,7 +933,7 @@ mod tests {
                 .load(std::sync::atomic::Ordering::SeqCst)
         );
         match result {
-            Some(TuiCommand::RunAgent(msg)) => assert_eq!(msg, "帮我出份计划"),
+            Some(RuntimeCommand::RunAgent(msg)) => assert_eq!(msg, "帮我出份计划"),
             other => panic!("expected RunAgent, got {other:?}"),
         }
     }
@@ -998,7 +968,7 @@ mod tests {
 
         let result = submit_via_enter(&mut app);
         match result {
-            Some(TuiCommand::RunAgent(prompt)) => {
+            Some(RuntimeCommand::RunAgent(prompt)) => {
                 assert!(prompt.contains("INIT MODE"));
                 assert!(prompt.contains("记得带上日志"));
             }
@@ -1013,7 +983,7 @@ mod tests {
         app.input_cursor = 5;
 
         let result = submit_via_enter(&mut app);
-        assert!(matches!(result, Some(TuiCommand::RunAgent(msg)) if msg == "hello"));
+        assert!(matches!(result, Some(RuntimeCommand::RunAgent(msg)) if msg == "hello"));
         assert!(app.streaming);
         // Input cleared
         assert!(app.input.is_empty());
@@ -1032,7 +1002,7 @@ mod tests {
         app.streaming = true;
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         let result = app.handle_key(key);
-        assert!(matches!(result, Some(TuiCommand::CancelGeneration)));
+        assert!(matches!(result, Some(RuntimeCommand::CancelGeneration)));
         assert!(!app.streaming);
     }
 
@@ -1057,7 +1027,7 @@ mod tests {
         let mut app = make_app();
         let key = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
         let result = app.handle_key(key);
-        assert!(matches!(result, Some(TuiCommand::Exit)));
+        assert!(matches!(result, Some(RuntimeCommand::Shutdown)));
         assert!(app.should_quit);
     }
 
@@ -1067,7 +1037,7 @@ mod tests {
         app.streaming = true;
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         let result = app.handle_key(key);
-        assert!(matches!(result, Some(TuiCommand::CancelGeneration)));
+        assert!(matches!(result, Some(RuntimeCommand::CancelGeneration)));
         assert!(!app.streaming);
     }
 
@@ -1163,7 +1133,7 @@ mod tests {
         let mut app = make_app();
         type_str(&mut app, "/exi");
         let result = app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(matches!(result, Some(TuiCommand::Exit)));
+        assert!(matches!(result, Some(RuntimeCommand::Shutdown)));
         assert!(app.should_quit);
     }
 
@@ -1251,7 +1221,7 @@ mod tests {
         app.input = "!echo hello".into();
         app.input_cursor = app.input.len();
         let result = submit_via_enter(&mut app);
-        assert!(matches!(result, Some(TuiCommand::RunShell(cmd)) if cmd == "echo hello"));
+        assert!(matches!(result, Some(RuntimeCommand::RunShell(cmd)) if cmd == "echo hello"));
         assert!(app.pending_shell_confirm.is_none());
     }
 
@@ -1290,7 +1260,7 @@ mod tests {
         app.pending_shell_confirm = Some("curl https://example.com".into());
         let result = app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         assert!(
-            matches!(result, Some(TuiCommand::RunShell(cmd)) if cmd == "curl https://example.com")
+            matches!(result, Some(RuntimeCommand::RunShell(cmd)) if cmd == "curl https://example.com")
         );
         assert!(app.pending_shell_confirm.is_none());
     }
@@ -1327,14 +1297,14 @@ mod tests {
         app.input = "hello agent".into();
         app.input_cursor = app.input.len();
         let result = submit_via_enter(&mut app);
-        assert!(matches!(result, Some(TuiCommand::RunAgent(_))));
+        assert!(matches!(result, Some(RuntimeCommand::RunAgent(_))));
         assert_eq!(app.last_submitted_input.as_deref(), Some("hello agent"));
 
         // Simulate the run ending (failed), then retry.
         app.streaming = false;
         let msg_count_before = app.messages.len();
         let result = app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
-        assert!(matches!(result, Some(TuiCommand::RunAgent(m)) if m == "hello agent"));
+        assert!(matches!(result, Some(RuntimeCommand::RunAgent(m)) if m == "hello agent"));
         assert!(app.streaming);
         assert_eq!(app.messages.len(), msg_count_before + 1); // user msg re-shown
     }
@@ -1472,7 +1442,7 @@ mod tests {
 
         let result = submit_via_enter(&mut app);
         assert!(
-            matches!(result, Some(TuiCommand::RunShell(ref cmd)) if cmd == "echo hello"),
+            matches!(result, Some(RuntimeCommand::RunShell(ref cmd)) if cmd == "echo hello"),
             "expected RunShell(\"echo hello\"), got {result:?}"
         );
         assert!(!app.streaming);
@@ -1546,7 +1516,7 @@ mod tests {
 
         let result = submit_via_enter(&mut app);
         // !! should be treated as a normal message, triggering RunAgent
-        assert!(matches!(result, Some(TuiCommand::RunAgent(_))));
+        assert!(matches!(result, Some(RuntimeCommand::RunAgent(_))));
     }
 
     #[test]
@@ -1782,7 +1752,7 @@ mod tests {
 
         let result = submit_via_enter(&mut app);
         match result {
-            Some(TuiCommand::RunAgent(content)) => {
+            Some(RuntimeCommand::RunAgent(content)) => {
                 assert_eq!(content, "review: line one\nline two");
             }
             other => panic!("expected RunAgent, got {other:?}"),
@@ -1803,10 +1773,8 @@ mod tests {
 
         let result = submit_via_enter(&mut app);
         assert!(result.is_none(), "streaming inject returns no command");
-        let pending = app
-            .pending_hints
-            .lock()
-            .expect("pending hints lock poisoned");
+        let pending = app.runtime.ui().pending_hints;
+        let pending = pending.lock().expect("pending hints lock poisoned");
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].content, "hint line 1\nhint line 2");
     }
@@ -1821,7 +1789,7 @@ mod tests {
 
         let result = submit_via_enter(&mut app);
         match result {
-            Some(TuiCommand::RunAgent(content)) => {
+            Some(RuntimeCommand::RunAgent(content)) => {
                 assert_eq!(content, "what does [Pasted text #1 +2 lines] mean?");
             }
             other => panic!("expected RunAgent, got {other:?}"),
@@ -1844,7 +1812,7 @@ mod tests {
     // ── Test Helpers ────────────────────────────────────────────
 
     /// Simulates Enter: calls handle_key with Enter, returns the command.
-    fn submit_via_enter(app: &mut App) -> Option<TuiCommand> {
+    fn submit_via_enter(app: &mut App) -> Option<RuntimeCommand> {
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         app.handle_key(key)
     }

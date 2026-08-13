@@ -1,40 +1,31 @@
 //! # Event Loop
 //!
-//! Bridges the synchronous ratatui render loop with the async tokio agent.
-//! The main thread runs the TUI (render + input), while a background tokio
-//! task manages the agent lifecycle (spawn, cancel, clear).
+//! Bridges the synchronous ratatui render loop with the async agent driver
+//! in loomis-core. The main thread runs the TUI (render + input) and sends
+//! [`RuntimeCommand`]s to the driver task, which manages the agent
+//! lifecycle (spawn, cancel, clear).
 //!
 //! ## Channel topology
 //!
 //! ```text
-//! TUI thread                          Agent task (tokio::spawn)
-//! ─────────                          ────────────────────────
-//! cmd_tx ───────── TuiCommand ──────→ cmd_rx
-//! agent_rx ←────── AgentEvent ─────── agent_tx (Agent loop + SandboxHook + user cmds)
+//! TUI thread                            Driver task (loomis-core, tokio::spawn)
+//! ─────────                            ────────────────────────
+//! Runtime::send ── RuntimeCommand ───→ cmd_rx
+//! agent_rx ←────── AgentEvent ──────── agent_tx (Agent loop + SandboxHook + user cmds)
 //! ```
 
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use futures_util::FutureExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::UnboundedReceiver;
 
-use agent_oxide::deepseek::DeepSeekClient;
-use agent_oxide::engine::{Agent, AgentEvent, CallOrigin};
-use agent_oxide::memory::SharedMemory;
-use agent_oxide::persistence::PersistenceConfig;
-use agent_oxide::provider::{Message, Role};
+use loomis_core::{AgentEvent, Runtime, RuntimeCommand};
 
 use super::app::App;
-use super::messages::TuiCommand;
-use super::shell_exec::execute_shell_command;
-use crate::app::AgentKit;
-use crate::hooks::SYSPROMPT_MARKER;
 
 // ── Entry Point ──────────────────────────────────────────────────────────────────
 
@@ -43,40 +34,9 @@ use crate::hooks::SYSPROMPT_MARKER;
 /// This function is **synchronous** — it blocks the calling thread until
 /// the user types `/exit` or presses Ctrl+C/D. The caller must already be
 /// inside a tokio runtime (e.g. via `#[tokio::main]`).
-pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()> {
-    // ── Destructure the kit ─────────────────────────────────────
-    let AgentKit {
-        agent,
-        memory,
-        tool_names,
-        model: _kit_model,
-        agent_rx,
-        agent_tx,
-        response_router,
-        pending_hints,
-        persistence_config,
-        todos,
-        trace_store,
-        plan_mode,
-        plan_dir,
-        skill_registry,
-        active_skills,
-        shell_filter,
-    } = kit;
-
-    // ── Create command channel ────────────────────────────────────
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<TuiCommand>();
-
-    // ── Spawn agent handler ─────────────────────────────────────────
-    tokio::spawn(agent_handler(
-        Arc::new(agent),
-        memory.clone(),
-        cmd_rx,
-        agent_tx,
-        workspace_root.clone(),
-        response_router,
-        persistence_config.clone(),
-    ));
+pub fn run(runtime: Runtime, workspace_root: PathBuf, model: &str) -> io::Result<()> {
+    // ── Start the agent driver task ────────────────────────────────
+    let agent_rx = runtime.spawn();
 
     // ── Terminal setup ───────────────────────────────────────────────
     crossterm::terminal::enable_raw_mode()?;
@@ -96,40 +56,18 @@ pub fn run(kit: AgentKit, workspace_root: PathBuf, model: &str) -> io::Result<()
 
     // NOTE: the process-wide panic hook (installed in main.rs) restores the
     // terminal and writes the panic to the log — no TUI-specific hook here.
-
-    // Fresh session: reset the current-thread marker so PersistenceHook's
-    // on_run_start treats the first query as a new conversation and
-    // generates a title for it.  (A leftover name from a previous session
-    // must not hijack the new conversation — on_run_finish would otherwise
-    // overwrite the old thread file.)
-    let _ = agent_oxide::persistence::write_current_thread_name(
-        &persistence_config.default_thread_name,
-        &workspace_root,
-        &persistence_config,
-    );
+    // The fresh-session thread-marker reset happens in `Runtime::build`.
 
     // ── App state ────────────────────────────────────────────────────
-    let mut app = App::new(
-        model,
-        memory,
-        tool_names,
-        todos,
-        workspace_root,
-        pending_hints,
-        persistence_config,
-        trace_store,
-        plan_mode,
-        plan_dir,
-        skill_registry,
-        active_skills,
-        shell_filter,
-    );
+    // Cheap per-frame read handles from the runtime (all Arc clones).
+    let ui = runtime.ui();
+    let mut app = App::new(model, workspace_root, ui, runtime.clone());
 
     // ── Event loop ───────────────────────────────────────────────────
-    let result = run_event_loop(&mut terminal, &mut app, agent_rx, &cmd_tx);
+    let result = run_event_loop(&mut terminal, &mut app, agent_rx, &runtime);
 
     // ── Cleanup ──────────────────────────────────────────────────────
-    let _ = cmd_tx.send(TuiCommand::Exit);
+    runtime.shutdown();
     terminal.show_cursor()?;
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(
@@ -149,7 +87,7 @@ fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     agent_rx: UnboundedReceiver<AgentEvent>,
-    cmd_tx: &UnboundedSender<TuiCommand>,
+    runtime: &Runtime,
 ) -> io::Result<()> {
     let mut agent_rx = agent_rx;
     let mut pending_events: Vec<AgentEvent> = Vec::new();
@@ -208,12 +146,10 @@ fn run_event_loop(
                     let Some(cmd) = dispatch_terminal_event(app, event) else {
                         continue;
                     };
-                    if matches!(cmd, TuiCommand::Exit) {
+                    if matches!(cmd, RuntimeCommand::Shutdown) {
                         return Ok(());
                     }
-                    if cmd_tx.send(cmd).is_err() {
-                        tracing::error!("Failed to send TuiCommand to agent handler");
-                    }
+                    runtime.send(cmd);
                 }
             }
         }
@@ -239,7 +175,7 @@ fn run_event_loop(
 
 /// Routes one terminal event to its handler, returning a command for the
 /// agent task when the event triggers one.
-fn dispatch_terminal_event(app: &mut App, event: Event) -> Option<TuiCommand> {
+fn dispatch_terminal_event(app: &mut App, event: Event) -> Option<RuntimeCommand> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
             app.handle_key(key)
@@ -329,253 +265,7 @@ fn paste_batch_to_text(event_batch: &[Event]) -> String {
     pasted_text
 }
 
-// ── Agent Handler ────────────────────────────────────────────────────────────────
-
-/// Background task that processes [`TuiCommand`]s and manages the agent lifecycle.
-///
-/// The agent is wrapped in an `Arc` so it can be shared into spawned tasks.
-/// When a [`TuiCommand::RunAgent`] arrives, we push the user message to memory
-/// and spawn a new tokio task that calls `Agent::run_with_events()`. The events
-/// flow back to the TUI through `agent_tx`.
-///
-/// Cancellation is handled via `JoinHandle::abort()`. Since the agent's
-/// own `run_streaming_loop` periodically `.await`s (network I/O), abort
-/// takes effect quickly.
-async fn agent_handler(
-    agent: Arc<Agent<DeepSeekClient>>,
-    memory: SharedMemory,
-    mut cmd_rx: UnboundedReceiver<TuiCommand>,
-    agent_tx: UnboundedSender<AgentEvent>,
-    workspace_root: PathBuf,
-    response_router: Arc<agent_oxide::engine::ResponseRouter>,
-    persistence_config: PersistenceConfig,
-) {
-    let mut current_run: Option<tokio::task::JoinHandle<()>> = None;
-
-    while let Some(cmd) = cmd_rx.recv().await {
-        match cmd {
-            TuiCommand::RunAgent(input) => {
-                tracing::debug!(
-                    input_len = input.chars().count(),
-                    "RunAgent command received; spawning agent task",
-                );
-
-                // If a previous run is still active, cancel it.
-                if let Some(h) = current_run.take() {
-                    h.abort();
-                }
-
-                // Spawn the agent in a background task.
-                // (`run_with_events` pushes the user message to memory internally)
-                // Auto-save is handled by PersistenceHook::on_run_finish.
-                let tx = agent_tx.clone();
-                let agent = Arc::clone(&agent);
-
-                let handle = tokio::spawn(async move {
-                    let result =
-                        std::panic::AssertUnwindSafe(agent.run_with_events(&input, tx.clone()))
-                            .catch_unwind()
-                            .await;
-                    match result {
-                        // Normal completion — PersistenceHook already saved the
-                        // conversation in on_run_finish, and the agent loop
-                        // already emitted RunCompleted/RunFailed + Done events.
-                        Ok(Ok(_)) => {
-                            tracing::debug!("Agent task finished normally");
-                        }
-                        Ok(Err(e)) => {
-                            tracing::error!(error = %e, "Agent run failed");
-                        }
-                        // Panic inside the agent loop: tokio would otherwise
-                        // swallow it silently. Log it and tell the TUI so the
-                        // user isn't left in a stuck "streaming" state.
-                        Err(payload) => {
-                            let msg = agent_oxide::engine::panic_message(payload.as_ref());
-                            tracing::error!(panic = %msg, "Agent task panicked");
-                            let _ = tx.send(AgentEvent::RunFailed {
-                                error: format!("Agent task panicked: {msg}"),
-                            });
-                            let _ = tx.send(AgentEvent::Done);
-                        }
-                    }
-                });
-
-                current_run = Some(handle);
-            }
-
-            TuiCommand::CancelGeneration => {
-                tracing::debug!("CancelGeneration command received");
-                if let Some(h) = current_run.take() {
-                    h.abort();
-                    // The agent task is killed immediately — no hooks can run.
-                    // Emit cancellation events so the TUI shows proper feedback.
-                    let _ = agent_tx.send(AgentEvent::Cancelled);
-                    let _ = agent_tx.send(AgentEvent::Done);
-                }
-            }
-
-            TuiCommand::ClearConversation => {
-                tracing::debug!("ClearConversation command received");
-                // Cancel any active generation.
-                if let Some(h) = current_run.take() {
-                    h.abort();
-                }
-
-                // Drain memory — preserve only the core system prompts
-                // (identified by the [SYSPROMPT] marker).  Everything else
-                // is regenerated on the next run: injector hooks
-                // (SkillHook, ProfileHook, TodoListHook, PlanModeHook)
-                // rebuild their marker messages from canonical state on
-                // the first `on_llm_start`, and compaction summaries are
-                // stale once the conversation is cleared.
-                let mut mem = memory.write().expect("memory lock poisoned");
-                let system_msgs: Vec<Message> = mem
-                    .to_context_vec()
-                    .into_iter()
-                    .filter(|m| m.role == Role::System && m.content.starts_with(SYSPROMPT_MARKER))
-                    .collect();
-                let preserved = system_msgs.len();
-                *mem = agent_oxide::memory::Memory::new();
-                for msg in system_msgs {
-                    mem.push(msg);
-                }
-                drop(mem); // release write lock before read-lock for save
-
-                // Persist the cleared state.
-                {
-                    let mem = memory.read().expect("memory lock poisoned");
-                    let name = agent_oxide::persistence::default_thread_name(
-                        &workspace_root,
-                        &persistence_config,
-                    );
-                    match agent_oxide::persistence::save_conversation(
-                        &name,
-                        &workspace_root,
-                        &mem,
-                        &persistence_config,
-                    ) {
-                        Ok(()) => {
-                            tracing::debug!(preserved = preserved, "Cleared conversation persisted",)
-                        }
-                        Err(e) => tracing::error!(
-                            name = %name,
-                            error = %e,
-                            "Failed to persist cleared conversation",
-                        ),
-                    }
-                }
-            }
-
-            TuiCommand::InterventionResponse {
-                request_id,
-                response,
-            } => {
-                tracing::debug!(
-                    request_id = %request_id.chars().take(12).collect::<String>(),
-                    "InterventionResponse command received",
-                );
-                // Route the response to the correct requester
-                // (SandboxHook, AskUserQuestionTool, …) via the
-                // shared router.  The router removes the sender
-                // from its map and delivers the response.
-                response_router.route(&request_id, response);
-            }
-
-            TuiCommand::RunShell(command) => {
-                tracing::debug!(
-                    cmd = %command.chars().take(200).collect::<String>(),
-                    "RunShell command received",
-                );
-                // Execute the shell command asynchronously — do NOT block
-                // the agent handler or the TUI thread. The command runs
-                // in a blocking thread; when it completes, output is
-                // pushed to memory and sent to the TUI for display.
-                //
-                // Use unified ToolCall / ToolSuccessful events with User origin
-                // instead of the old ShellRunning / ShellOutput events.
-                let shell_id = format!(
-                    "shell-{:x}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0)
-                );
-
-                // Notify TUI that the command is starting.
-                let _ = agent_tx.send(AgentEvent::ToolCall {
-                    id: shell_id.clone(),
-                    name: "shell".into(),
-                    arguments: command.clone(),
-                    origin: CallOrigin::User,
-                });
-
-                let tx = agent_tx.clone();
-                let mem = memory.clone();
-                let ws = workspace_root.clone();
-                let cmd_for_blocking = command.clone();
-                let sid = shell_id.clone();
-
-                tokio::spawn(async move {
-                    let output = tokio::task::spawn_blocking(move || {
-                        execute_shell_command(&cmd_for_blocking, &ws)
-                    })
-                    .await
-                    .unwrap_or_else(|e| format!("Task panicked: {e}"));
-
-                    // Push into shared memory so the LLM sees it
-                    {
-                        let mut mem = mem.write().expect("memory lock poisoned");
-                        mem.push(Message::new(
-                            Role::User,
-                            format!(
-                                "User ran shell command: `{}`\n\nOutput:\n{}",
-                                command, output
-                            ),
-                        ));
-                    }
-
-                    // Send result to TUI for display
-                    let _ = tx.send(AgentEvent::ToolSuccessful {
-                        id: sid,
-                        name: "shell".into(),
-                        output,
-                    });
-                });
-            }
-
-            TuiCommand::Exit => {
-                tracing::debug!("Exit command received; saving conversation");
-                // Save conversation before exiting.
-                {
-                    let mem = memory.read().expect("memory lock poisoned");
-                    let name = agent_oxide::persistence::default_thread_name(
-                        &workspace_root,
-                        &persistence_config,
-                    );
-                    if let Err(e) = agent_oxide::persistence::save_conversation(
-                        &name,
-                        &workspace_root,
-                        &mem,
-                        &persistence_config,
-                    ) {
-                        tracing::error!(
-                            name = %name,
-                            error = %e,
-                            "Failed to save conversation on exit",
-                        );
-                    }
-                }
-
-                if let Some(h) = current_run.take() {
-                    h.abort();
-                }
-                break;
-            }
-        }
-    }
-}
-
-// ── Tests ────────────────────────────────────────────────────────────────────────
+// ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

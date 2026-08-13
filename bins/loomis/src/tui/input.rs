@@ -3,11 +3,9 @@
 //! All input processing that was previously in the monolithic [`super::app`].
 //! These are [`super::app::App`] methods split into their own file for readability.
 
-use std::sync::atomic::Ordering;
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use agent_oxide::provider::{Message, Role};
+use loomis_core::{ApproveOutcome, CommandVerdict, InterventionResponse, Role, RuntimeCommand};
 
 use super::app::App;
 use super::keyboard::{
@@ -15,12 +13,9 @@ use super::keyboard::{
     is_copy_shortcut, is_paste_shortcut, paste_shortcut_label,
 };
 use super::messages::{
-    ChatMessage, SLASH_COMMANDS, SlashCompletionState, TuiCommand, is_valid_thread_name,
-    truncate_for_display,
+    ChatMessage, SLASH_COMMANDS, SlashCompletionState, is_valid_thread_name, truncate_for_display,
 };
 use super::paste::normalize_newlines;
-use crate::hooks::insert_before_history;
-use agent_oxide::sandbox::shell_filter::CommandVerdict;
 
 // ── Paste Handling ───────────────────────────────────────────────────────────────
 
@@ -94,12 +89,12 @@ impl App {
 // ── Keyboard Handling ────────────────────────────────────────────────────────────
 
 impl App {
-    /// Processes a single key event. Returns `Some(TuiCommand)` when the
+    /// Processes a single key event. Returns `Some(RuntimeCommand)` when the
     /// key sequence triggers an action that needs the agent thread.
     ///
     /// Slash commands (`/stats`, `/tools`) are handled inline because they
     /// only need shared state already available on the TUI side.
-    pub fn handle_key(&mut self, key: KeyEvent) -> Option<TuiCommand> {
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<RuntimeCommand> {
         // ── Thread picker intercepts most keys ───────────────────
         if self.thread_picker.is_some() {
             return self.handle_thread_picker_key(key);
@@ -198,15 +193,12 @@ impl App {
                 // ── Inject mode: agent is running ──────────────────
                 if self.streaming {
                     {
-                        // Queue hint in pending_hints instead of pushing
-                        // directly to memory — avoids inserting a user
-                        // message between an assistant tool_calls message
-                        // and its tool results (API contract violation).
-                        let mut pending = self
-                            .pending_hints
-                            .lock()
-                            .expect("pending hints lock poisoned");
-                        pending.push(Message::new(Role::User, expanded_input.clone()));
+                        // Queue the hint through the runtime instead of
+                        // pushing directly to memory — avoids inserting a
+                        // user message between an assistant tool_calls
+                        // message and its tool results (API contract
+                        // violation).
+                        self.runtime.inject_hint(expanded_input.clone());
                     }
                     self.messages.push(ChatMessage::User {
                         content: expanded_input,
@@ -237,9 +229,9 @@ impl App {
                     }
                     // Classify with the same sandbox policy the SandboxHook
                     // applies to LLM-initiated shell calls (Nielsen #5).
-                    match self.shell_filter.classify(&command) {
+                    match self.runtime.classify_shell(&command) {
                         CommandVerdict::AutoApproved => {
-                            return Some(TuiCommand::RunShell(command));
+                            return Some(RuntimeCommand::RunShell(command));
                         }
                         CommandVerdict::Blocked { reason } => {
                             self.messages.push(ChatMessage::Error {
@@ -285,13 +277,13 @@ impl App {
                 // Remember for Ctrl+R retry after a failure.
                 self.last_submitted_input = Some(expanded_input.clone());
 
-                Some(TuiCommand::RunAgent(expanded_input))
+                Some(RuntimeCommand::RunAgent(expanded_input))
             }
 
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.input.is_empty() && !self.streaming {
                     self.should_quit = true;
-                    return Some(TuiCommand::Exit);
+                    return Some(RuntimeCommand::Shutdown);
                 }
                 // Otherwise: delete forward
                 self.delete_at_cursor();
@@ -313,7 +305,7 @@ impl App {
                 self.auto_scroll = true;
                 self.scroll_offset = 0;
                 self.streaming = true;
-                Some(TuiCommand::RunAgent(last))
+                Some(RuntimeCommand::RunAgent(last))
             }
 
             KeyCode::Esc => {
@@ -324,7 +316,7 @@ impl App {
                 }
                 if self.streaming {
                     self.streaming = false;
-                    return Some(TuiCommand::CancelGeneration);
+                    return Some(RuntimeCommand::CancelGeneration);
                 }
                 None
             }
@@ -565,7 +557,7 @@ impl App {
     ///    (`Ctrl+C` on every platform).
     /// 3. **Hint** — idle; point at the real exit bindings instead of
     ///    quitting (Nielsen #4: consistency).
-    fn handle_copy_or_cancel(&mut self, key: &KeyEvent) -> Option<TuiCommand> {
+    fn handle_copy_or_cancel(&mut self, key: &KeyEvent) -> Option<RuntimeCommand> {
         // Copy the selection to the system clipboard and clear the
         // highlight. On macOS this fires for Cmd+C only — Ctrl+C never
         // copies there, it stays the pure interrupt key. (Terminals that
@@ -584,7 +576,7 @@ impl App {
         if is_cancel_shortcut(key) {
             if self.streaming {
                 self.streaming = false;
-                return Some(TuiCommand::CancelGeneration);
+                return Some(RuntimeCommand::CancelGeneration);
             }
             // Idle: Ctrl+C does NOT quit — the key means copy/cancel
             // everywhere (Nielsen #4). Point at the real exit bindings;
@@ -613,7 +605,7 @@ impl App {
     ///
     /// `y`/`Enter` executes, `n`/`Esc` cancels; everything else is
     /// swallowed so the confirmation can't be bypassed accidentally.
-    fn handle_shell_confirm_key(&mut self, key: KeyEvent) -> Option<TuiCommand> {
+    fn handle_shell_confirm_key(&mut self, key: KeyEvent) -> Option<RuntimeCommand> {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                 let cmd = self
@@ -621,7 +613,7 @@ impl App {
                     .take()
                     .expect("pending_shell_confirm checked before dispatch");
                 self.auto_scroll = true;
-                Some(TuiCommand::RunShell(cmd))
+                Some(RuntimeCommand::RunShell(cmd))
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 let cmd = self
@@ -681,7 +673,7 @@ impl App {
     /// Navigation keys are consumed by the popup; printable characters and
     /// Backspace edit the filter and re-filter; Esc dismisses without
     /// touching the input; Tab/Right accepts; Enter accepts and submits.
-    fn handle_slash_completion_key(&mut self, key: KeyEvent) -> Option<TuiCommand> {
+    fn handle_slash_completion_key(&mut self, key: KeyEvent) -> Option<RuntimeCommand> {
         match key.code {
             KeyCode::Esc => {
                 // Dismiss the popup only — the typed text stays. Further
@@ -758,8 +750,8 @@ impl App {
     }
 
     /// Handles slash commands that don't need the agent. Returns
-    /// `Some(TuiCommand)` when the command needs agent-thread action.
-    fn handle_slash_command(&mut self, input: &str) -> Option<Option<TuiCommand>> {
+    /// `Some(RuntimeCommand)` when the command needs agent-thread action.
+    fn handle_slash_command(&mut self, input: &str) -> Option<Option<RuntimeCommand>> {
         // Split the command name from any trailing text so "/plan <text>"
         // and "/init <text>" are recognized as commands instead of silently
         // becoming chat messages (Nielsen #5: error prevention).
@@ -778,19 +770,8 @@ impl App {
                 });
                 return Some(None);
             }
-            let mem = self.memory.read().expect("memory lock poisoned");
-            match agent_oxide::persistence::save_conversation(
-                name,
-                &self.workspace_root,
-                &mem,
-                &self.persistence_config,
-            ) {
+            match self.runtime.save_thread(name) {
                 Ok(()) => {
-                    let _ = agent_oxide::persistence::write_current_thread_name(
-                        name,
-                        &self.workspace_root,
-                        &self.persistence_config,
-                    );
                     self.messages.push(ChatMessage::System {
                         content: format!("Saved conversation as \"{name}\"."),
                         timestamp: ChatMessage::now_timestamp(),
@@ -798,7 +779,7 @@ impl App {
                 }
                 Err(e) => {
                     self.messages.push(ChatMessage::Error {
-                        content: format!("Failed to save: {e}"),
+                        content: e, // already "Failed to save: …"
                         timestamp: ChatMessage::now_timestamp(),
                     });
                 }
@@ -831,30 +812,19 @@ impl App {
                 return Some(None);
             }
 
-            match self.skill_registry.by_name(name) {
-                Some(skill) => {
-                    // Add to active skills for the hook to maintain.
-                    if let Ok(mut active) = self.active_skills.write() {
-                        active.insert(skill.name.clone(), skill.content.clone());
-                    }
-                    // Inject directly into memory for immediate effect.
-                    // Use insert_before_history so the message lands at the
-                    // tail of the System block (SkillHook will clean it up
-                    // and re-insert on the next on_llm_start).
-                    let msg = format!("[SKILL: {}]\n\n{}", skill.name, skill.content);
-                    {
-                        let mut mem = self.memory.write().expect("memory lock poisoned");
-                        insert_before_history(&mut mem.messages, Message::new(Role::System, msg));
-                    }
+            // Activation (ActiveSkills write + memory injection) happens in
+            // the runtime — the TUI only reports the outcome.
+            match self.runtime.load_skill(name) {
+                Ok(description) => {
                     self.messages.push(ChatMessage::System {
-                        content: format!("Loaded skill \"{}\" — {}", skill.name, skill.description),
+                        content: format!("Loaded skill \"{name}\" — {description}"),
                         timestamp: ChatMessage::now_timestamp(),
                     });
                 }
-                None => {
+                Err(e) => {
                     let available = self.skill_registry.names().join(", ");
                     self.messages.push(ChatMessage::Error {
-                        content: format!("Unknown skill \"{name}\". Available: [{available}]"),
+                        content: format!("{e}. Available: [{available}]"),
                         timestamp: ChatMessage::now_timestamp(),
                     });
                 }
@@ -866,43 +836,34 @@ impl App {
         match cmd {
             "/exit" => {
                 self.should_quit = true;
-                Some(Some(TuiCommand::Exit))
+                Some(Some(RuntimeCommand::Shutdown))
             }
 
             "/new" => {
                 // Save current conversation before starting fresh.
                 if let Some(ref title) = self.conversation_title {
-                    let mem = self.memory.read().expect("memory lock poisoned");
-                    let _ = agent_oxide::persistence::save_conversation(
-                        title,
-                        &self.workspace_root,
-                        &mem,
-                        &self.persistence_config,
-                    );
+                    let _ = self.runtime.save_thread(title);
                 }
                 self.conversation_title = None;
-                // Write fallback for the gap between /new and first message.
-                let _ = agent_oxide::persistence::write_current_thread_name(
-                    &self.persistence_config.default_thread_name,
-                    &self.workspace_root,
-                    &self.persistence_config,
-                );
+                // The driver's ClearConversation handler resets the
+                // current-thread marker for the gap between /new and the
+                // first message of the new conversation.
 
                 self.messages.clear();
                 self.messages.push(ChatMessage::System {
                     content: "New conversation started (system prompt preserved).".into(),
                     timestamp: ChatMessage::now_timestamp(),
                 });
-                Some(Some(TuiCommand::ClearConversation))
+                Some(Some(RuntimeCommand::ClearConversation))
             }
 
             "/plan" => {
                 // "/plan <text>" means "enter plan mode and make this plan" —
                 // the text is forwarded to the agent; a bare "/plan" keeps
                 // its documented toggle behaviour.
-                let was_active = self.plan_mode.active.load(Ordering::SeqCst);
+                let was_active = self.runtime.plan_mode_active();
                 let new_state = if rest.is_empty() { !was_active } else { true };
-                self.plan_mode.active.store(new_state, Ordering::SeqCst);
+                self.runtime.set_plan_mode(new_state);
 
                 let plan_path = self.workspace_root.join(".loomis").join("plan.md");
                 let content = if new_state && !was_active {
@@ -944,46 +905,41 @@ impl App {
                     self.scroll_offset = 0;
                     self.streaming = true;
                     self.last_submitted_input = Some(rest.to_string());
-                    Some(Some(TuiCommand::RunAgent(rest.to_string())))
+                    Some(Some(RuntimeCommand::RunAgent(rest.to_string())))
                 }
             }
 
             "/approve" => {
-                if self.plan_mode.active.load(Ordering::SeqCst) {
-                    // Archive the plan before deactivating.
-                    let plan_path = self.workspace_root.join(".loomis").join("plan.md");
-                    let plan_dir = self.plan_dir.clone();
-                    let archive_msg = match std::fs::read_to_string(&plan_path) {
-                        Ok(content) if !content.trim().is_empty() => {
-                            // Use the archive_plan helper.
-                            match crate::tools::archive_plan(&content, &plan_dir) {
-                                Ok(archived_path) => {
-                                    format!("Plan archived to: {}", archived_path.display())
-                                }
-                                Err(e) => format!("Warning: failed to archive plan: {e}"),
-                            }
-                        }
-                        _ => String::new(),
-                    };
-
-                    self.plan_mode.active.store(false, Ordering::SeqCst);
-                    let content = if archive_msg.is_empty() {
-                        "Plan approved! Plan mode deactivated. You can now execute the plan.".into()
-                    } else {
-                        format!(
-                            "Plan approved! Plan mode deactivated. {archive_msg}. \
-                             You can now execute the plan."
-                        )
-                    };
-                    self.messages.push(ChatMessage::System {
-                        content,
-                        timestamp: ChatMessage::now_timestamp(),
-                    });
-                } else {
-                    self.messages.push(ChatMessage::System {
-                        content: "Not in plan mode. Use /plan first to enter plan mode.".into(),
-                        timestamp: ChatMessage::now_timestamp(),
-                    });
+                // Archiving and the mode flip happen in the runtime; the TUI
+                // only renders the outcome.
+                match self.runtime.approve_plan() {
+                    ApproveOutcome::NotInPlanMode => {
+                        self.messages.push(ChatMessage::System {
+                            content: "Not in plan mode. Use /plan first to enter plan mode."
+                                .into(),
+                            timestamp: ChatMessage::now_timestamp(),
+                        });
+                    }
+                    ApproveOutcome::Approved { archive } => {
+                        let archive_msg = match archive {
+                            Ok(Some(path)) => format!("Plan archived to: {}", path.display()),
+                            Ok(None) => String::new(),
+                            Err(e) => e, // already "Warning: failed to archive plan: …"
+                        };
+                        let content = if archive_msg.is_empty() {
+                            "Plan approved! Plan mode deactivated. You can now execute the plan."
+                                .into()
+                        } else {
+                            format!(
+                                "Plan approved! Plan mode deactivated. {archive_msg}. \
+                                 You can now execute the plan."
+                            )
+                        };
+                        self.messages.push(ChatMessage::System {
+                            content,
+                            timestamp: ChatMessage::now_timestamp(),
+                        });
+                    }
                 }
                 Some(None)
             }
@@ -994,12 +950,8 @@ impl App {
             }
 
             "/stats" => {
-                let mem = self.memory.read().expect("memory lock poisoned");
-                let content = format!(
-                    "Messages: {}  |  Characters: {}",
-                    mem.len(),
-                    mem.total_chars(),
-                );
+                let (len, chars) = self.runtime.memory_stats();
+                let content = format!("Messages: {len}  |  Characters: {chars}");
                 self.messages.push(ChatMessage::System {
                     content,
                     timestamp: ChatMessage::now_timestamp(),
@@ -1026,14 +978,12 @@ impl App {
             }
 
             "/init" => {
-                let init_prompt = include_str!("../../prompts/init.md");
                 // Trailing text is appended as an additional instruction —
                 // "/init 记得带上日志" tells the agent what to focus on.
-                let prompt = if rest.is_empty() {
-                    init_prompt.to_string()
-                } else {
-                    format!("{init_prompt}\n\n### Additional instruction from the user\n\n{rest}")
-                };
+                // The base prompt is owned by loomis-core (it embeds init.md).
+                let prompt = self
+                    .runtime
+                    .init_prompt(if rest.is_empty() { None } else { Some(rest) });
                 self.messages.push(ChatMessage::System {
                     content: "Initializing project documentation…\n\
                               I'll explore the codebase, ask a few questions, \
@@ -1041,7 +991,7 @@ impl App {
                         .into(),
                     timestamp: ChatMessage::now_timestamp(),
                 });
-                Some(Some(TuiCommand::RunAgent(prompt)))
+                Some(Some(RuntimeCommand::RunAgent(prompt)))
             }
 
             "/help" => {
@@ -1108,7 +1058,7 @@ impl App {
     ///
     /// Only `Esc`, `Enter`, `Up`, and `Down` are processed; all other keys
     /// are swallowed to prevent input from leaking into the chat.
-    fn handle_thread_picker_key(&mut self, key: KeyEvent) -> Option<TuiCommand> {
+    fn handle_thread_picker_key(&mut self, key: KeyEvent) -> Option<RuntimeCommand> {
         let Some(picker) = &mut self.thread_picker else {
             return None;
         };
@@ -1142,19 +1092,11 @@ impl App {
     /// Loads a named thread and replaces the current conversation.
     ///
     /// Shared by the picker (`Enter`) and the `/resume <name>` slash command.
-    fn do_resume(&mut self, name: &str) -> Option<TuiCommand> {
-        match agent_oxide::persistence::load_conversation(
-            name,
-            &self.workspace_root,
-            &self.persistence_config,
-        ) {
-            Ok(loaded) => {
-                *self.memory.write().expect("memory lock poisoned") = loaded;
-                let _ = agent_oxide::persistence::write_current_thread_name(
-                    name,
-                    &self.workspace_root,
-                    &self.persistence_config,
-                );
+    fn do_resume(&mut self, name: &str) -> Option<RuntimeCommand> {
+        // The memory overwrite + current-thread marker happen in the
+        // runtime; the TUI rebuilds its display from the loaded memory.
+        match self.runtime.resume_thread(name) {
+            Ok(()) => {
                 self.conversation_title = Some(name.to_string());
                 self.rebuild_messages_from_memory();
                 self.messages.insert(
@@ -1167,7 +1109,7 @@ impl App {
             }
             Err(e) => {
                 self.messages.push(ChatMessage::Error {
-                    content: format!("Failed to resume \"{name}\": {e}"),
+                    content: e, // already "Failed to resume "…": …"
                     timestamp: ChatMessage::now_timestamp(),
                 });
             }
@@ -1177,8 +1119,7 @@ impl App {
 
     /// Opens the thread picker overlay with all saved conversations.
     fn open_thread_picker(&mut self) {
-        match agent_oxide::persistence::list_threads(&self.workspace_root, &self.persistence_config)
-        {
+        match self.runtime.list_threads() {
             Ok(threads) if !threads.is_empty() => {
                 self.thread_picker = Some(super::messages::ThreadPicker {
                     threads,
@@ -1193,7 +1134,7 @@ impl App {
             }
             Err(e) => {
                 self.messages.push(ChatMessage::Error {
-                    content: format!("Error listing threads: {e}"),
+                    content: e, // already "Error listing threads: …"
                     timestamp: ChatMessage::now_timestamp(),
                 });
             }
@@ -1320,7 +1261,7 @@ impl App {
     ///   highlight, Enter to select, Esc to cancel, first-char to jump.
     /// - **Text input** (`intervene_text_mode == true`): typing custom
     ///   text for the "…"-suffixed option. Enter submits, Esc goes back.
-    fn handle_intervene_key(&mut self, key: KeyEvent) -> Option<TuiCommand> {
+    fn handle_intervene_key(&mut self, key: KeyEvent) -> Option<RuntimeCommand> {
         // ── Text-input sub-mode ──────────────────────────────────
         if self.intervene_text_mode {
             return self.handle_intervene_text_key(key);
@@ -1408,7 +1349,7 @@ impl App {
 
     /// Handles keys while the user is typing custom text for an
     /// "Other…" option.
-    fn handle_intervene_text_key(&mut self, key: KeyEvent) -> Option<TuiCommand> {
+    fn handle_intervene_text_key(&mut self, key: KeyEvent) -> Option<RuntimeCommand> {
         match key.code {
             KeyCode::Enter => {
                 // Submit the custom text and restore the original input.
@@ -1501,15 +1442,15 @@ impl App {
     }
 
     /// Marks the last unresponded intervention as completed and returns
-    /// the [`TuiCommand::InterventionResponse`].
+    /// the [`RuntimeCommand::InterventionResponse`].
     fn complete_intervene(
         &mut self,
         chosen: Option<usize>,
         custom_text: Option<String>,
-    ) -> Option<TuiCommand> {
+    ) -> Option<RuntimeCommand> {
         self.intervene_selection = None;
         self.intervene_text_mode = false;
-        let response = agent_oxide::engine::InterventionResponse {
+        let response = InterventionResponse {
             chosen,
             custom_text,
         };
@@ -1526,7 +1467,7 @@ impl App {
                 *responded = true;
                 *chosen = response.chosen;
                 *custom_text = response.custom_text.clone();
-                return Some(TuiCommand::InterventionResponse {
+                return Some(RuntimeCommand::InterventionResponse {
                     request_id: request_id.clone(),
                     response,
                 });

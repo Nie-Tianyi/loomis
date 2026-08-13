@@ -1,0 +1,18 @@
+[package]
+name = "loomis-core"
+version.workspace = true
+edition.workspace = true
+description = "Loomis agent core — DeepSeek agent, tools, hooks, sandbox wiring, runtime driver. UI-agnostic."
+
+[dependencies]
+agent_oxide = "0.5.1"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+futures-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+futures-executor = { workspace = true }
+tempfile = { workspace = true }

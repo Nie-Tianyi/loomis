@@ -1335,18 +1335,12 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 name = "loomis"
 version = "0.1.0"
 dependencies = [
- "agent_oxide",
  "arboard",
  "crossterm",
  "dotenvy",
- "futures-executor",
- "futures-util",
- "glob",
+ "loomis-core",
  "pulldown-cmark",
  "ratatui",
- "regex",
- "schemars",
- "serde",
  "serde_json",
  "tempfile",
  "time",
@@ -1355,6 +1349,21 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "unicode-width",
+]
+
+[[package]]
+name = "loomis-core"
+version = "0.5.0"
+dependencies = [
+ "agent_oxide",
+ "futures-executor",
+ "futures-util",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

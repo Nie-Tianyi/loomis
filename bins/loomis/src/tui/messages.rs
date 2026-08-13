@@ -3,7 +3,7 @@
 //! Pure type definitions with no dependency on the `App` state machine.
 //! Separated from [`super::app`] so the file doesn't grow to 1500 lines.
 
-use agent_oxide::engine::{CallOrigin, InterventionResponse};
+use loomis_core::{CallOrigin, ThreadInfo};
 use std::time::SystemTime;
 
 // ── ChatMessage ──────────────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ pub enum ChatMessage {
         state: ToolCallState,
         origin: CallOrigin,
         /// Accumulated progress messages while tool is Running.
-        /// Each [`ToolProgress`](agent_oxide::engine::AgentEvent::ToolProgress) event
+        /// Each [`ToolProgress`](loomis_core::AgentEvent::ToolProgress) event
         /// appends a new line; all are rendered indented under the header.
         progress_lines: Vec<String>,
         timestamp: String,
@@ -147,28 +147,6 @@ impl SelectionState {
     }
 }
 
-// ── TuiCommand ───────────────────────────────────────────────────────────────────
-
-/// Commands sent from the TUI thread to the agent background task.
-#[derive(Debug, Clone)]
-pub enum TuiCommand {
-    /// User submitted a message — push to memory and run the agent loop.
-    RunAgent(String),
-    /// User typed !command — execute shell command asynchronously.
-    RunShell(String),
-    /// Cancel the currently-running generation.
-    CancelGeneration,
-    /// Reset conversation, preserving system prompt.
-    ClearConversation,
-    /// User responded to an intervention prompt.
-    InterventionResponse {
-        request_id: String,
-        response: InterventionResponse,
-    },
-    /// Signal the agent thread to exit.
-    Exit,
-}
-
 // ── Slash Completion ─────────────────────────────────────────────────────────────
 
 /// Static metadata for one slash command — drives the completion popup
@@ -269,7 +247,7 @@ pub struct SlashCompletionState {
 #[derive(Debug, Clone)]
 pub struct ThreadPicker {
     /// Available threads, sorted newest-first.
-    pub threads: Vec<agent_oxide::persistence::ThreadInfo>,
+    pub threads: Vec<ThreadInfo>,
     /// Currently highlighted index.
     pub selected: usize,
 }
@@ -288,12 +266,12 @@ pub fn truncate_for_display(text: &str, max_len: usize) -> String {
 
 /// Returns `true` if `name` is a valid thread name.
 ///
-/// Delegates to [`agent_oxide::persistence::sanitize_filename`] for the canonical check, so
-/// any name that passes validation will be preserved verbatim by the
+/// Delegates to [`loomis_core::is_valid_thread_name`] — the canonical check
+/// — so any name that passes validation will be preserved verbatim by the
 /// persistence layer.  Control characters and filesystem-illegal characters
 /// (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`) are rejected.
 pub fn is_valid_thread_name(name: &str) -> bool {
-    !name.is_empty() && name == agent_oxide::persistence::sanitize_filename(name)
+    loomis_core::is_valid_thread_name(name)
 }
 
 #[cfg(test)]

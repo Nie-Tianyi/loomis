@@ -2,7 +2,7 @@
 //!
 //! # How it works
 //!
-//! The tool pauses the agent and shows an interactive prompt in the TUI
+//! The tool pauses the agent and shows an interactive prompt in the frontend
 //! via the existing [`InterventionRequired`](agent_oxide::engine::AgentEvent::InterventionRequired)
 //! mechanism.  The user navigates options (or types free-form text) and
 //! their response is returned as the tool output.
@@ -17,7 +17,7 @@
 //! | Options | Fixed (Approve/Deny/Other) | LLM-defined |
 //! | Timeout | 2 minutes | 5 minutes |
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_oxide::engine::AgentEvent;
@@ -102,35 +102,28 @@ pub(crate) struct AskUserQuestionArgs {
 )]
 pub struct AskUserQuestionTool {
     /// Sender for agent events — used to emit InterventionRequired.
-    agent_tx: OnceLock<mpsc::UnboundedSender<AgentEvent>>,
+    agent_tx: mpsc::UnboundedSender<AgentEvent>,
     /// Shared router for receiving the user's response.
     response_router: Arc<ResponseRouter>,
 }
 
 impl AskUserQuestionTool {
-    /// Creates a new tool that shares the given response router.
-    pub fn new(response_router: Arc<ResponseRouter>) -> Self {
+    /// Creates a new tool that shares the given response router and the
+    /// agent-event channel (needed to emit `InterventionRequired`).
+    pub fn new(
+        response_router: Arc<ResponseRouter>,
+        agent_tx: mpsc::UnboundedSender<AgentEvent>,
+    ) -> Self {
         Self {
-            agent_tx: OnceLock::new(),
+            agent_tx,
             response_router,
         }
-    }
-
-    /// Called by `build_coding_agent` after the agent-event channel is
-    /// created.  Must be set before the tool can be used.
-    pub fn set_agent_tx(&self, tx: mpsc::UnboundedSender<AgentEvent>) {
-        let _ = self.agent_tx.set(tx);
     }
 
     /// Core logic — blocks the agent task until the user responds.
     fn execute_stream(&self, args: AskUserQuestionArgs) -> Result<ProgressStream, ToolError> {
         let question_preview: String = args.question.chars().take(300).collect();
         tracing::debug!(question = %question_preview, "Asking user question");
-
-        let agent_tx = self
-            .agent_tx
-            .get()
-            .ok_or_else(|| ToolError::Execution("Agent event channel not configured".into()))?;
 
         // Default to a single free-text option if none provided.
         let options: Vec<String> = args
@@ -142,7 +135,7 @@ impl AskUserQuestionTool {
         // Delegate the common request/response plumbing to the shared helper.
         let response = intervention::request_intervention(
             &self.response_router,
-            agent_tx,
+            &self.agent_tx,
             args.question,
             args.description.unwrap_or_default(),
             options.clone(),
@@ -212,26 +205,30 @@ mod tests {
     use super::*;
     use agent_oxide::tools::Tool;
 
+    /// A live event channel — the tool now requires the sender at
+    /// construction (no more back-door `set_agent_tx`).
+    fn make_agent_tx() -> mpsc::UnboundedSender<AgentEvent> {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        tx
+    }
+
+    fn make_tool() -> AskUserQuestionTool {
+        AskUserQuestionTool::new(Arc::new(ResponseRouter::new()), make_agent_tx())
+    }
+
     #[test]
     fn test_name() {
-        let router = Arc::new(ResponseRouter::new());
-        assert_eq!(AskUserQuestionTool::new(router).name(), "ask_user_question");
+        assert_eq!(make_tool().name(), "ask_user_question");
     }
 
     #[test]
     fn test_description() {
-        let router = Arc::new(ResponseRouter::new());
-        assert!(
-            AskUserQuestionTool::new(router)
-                .description()
-                .contains("Ask the user")
-        );
+        assert!(make_tool().description().contains("Ask the user"));
     }
 
     #[test]
     fn test_parameters_schema() {
-        let router = Arc::new(ResponseRouter::new());
-        let params = AskUserQuestionTool::new(router).parameter_schema();
+        let params = make_tool().parameter_schema();
         assert_eq!(params["type"], "object");
         assert!(
             params["required"]
@@ -244,24 +241,21 @@ mod tests {
 
     #[test]
     fn test_invalid_json() {
-        let router = Arc::new(ResponseRouter::new());
-        let tool = AskUserQuestionTool::new(router);
+        let tool = make_tool();
         let err = Tool::execute_stream(&tool, "garbage").unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
     #[test]
     fn test_missing_question_field() {
-        let router = Arc::new(ResponseRouter::new());
-        let tool = AskUserQuestionTool::new(router);
+        let tool = make_tool();
         let err = Tool::execute_stream(&tool, r#"{"wrong": "field"}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));
     }
 
     #[test]
     fn test_extra_field_rejected() {
-        let router = Arc::new(ResponseRouter::new());
-        let tool = AskUserQuestionTool::new(router);
+        let tool = make_tool();
         let err =
             Tool::execute_stream(&tool, r#"{"question": "hello", "extra": true}"#).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)));

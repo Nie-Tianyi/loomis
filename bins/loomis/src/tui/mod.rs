@@ -13,23 +13,26 @@
 //!               │                ├─ drain agent events via try_recv
 //!               │                └─ render frame via ratatui
 //!               │
-//!               └── tokio::spawn(agent_handler)
+//!               └── loomis_core::Runtime (driver task, tokio::spawn)
 //!                      │
-//!                      └── loop { recv(cmd_rx) → run agent / cancel / clear }
+//!                      └── loop { recv(RuntimeCommand) → run agent / cancel / clear }
 //! ```
+//!
+//! The agent itself — tools, hooks, driver, event stream — lives in
+//! [`loomis_core`], reached only through the [`Runtime`](loomis_core::Runtime)
+//! façade. This module is pure presentation.
 //!
 //! ## Modules
 //!
 //! | Module | Purpose |
 //! |--------|---------|
 //! | [`app`] | `App` state machine + event application |
-//! | [`messages`] | `ChatMessage`, `TuiCommand`, `ThreadPicker` type definitions |
+//! | [`messages`] | `ChatMessage`, `ThreadPicker`, `ToolCallState` types |
 //! | [`input`] | Keyboard handling, slash commands, shell confirmation |
 //! | [`keyboard`] | Platform-aware shortcut helpers (Cmd vs Ctrl) |
 //! | [`paste`] | Pasted-content model: placeholders + expansion |
 //! | [`ui`] | ratatui rendering: chat area, input area, status bar |
-//! | [`event`] | Event loop, terminal lifecycle, agent background task |
-//! | [`shell_exec`] | User `!command` shell execution + Windows encoding |
+//! | [`event`] | Event loop, terminal lifecycle, runtime wiring |
 //! | [`welcome`] | Startup banner: ASCII logo + mascot 小织 |
 
 mod app;
@@ -39,11 +42,8 @@ mod keyboard;
 mod markdown;
 mod messages;
 mod paste;
-mod shell_exec;
 mod theme;
 mod ui;
 mod welcome;
 
-pub use app::App;
 pub use event::run;
-pub use messages::{ChatMessage, ThreadPicker, ToolCallState, TuiCommand};

@@ -12,8 +12,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use agent_oxide::engine::CallOrigin;
-use serde_json;
+use loomis_core::CallOrigin;
 
 use super::app::App;
 use super::keyboard::{cancel_shortcut_label, copy_shortcut_label};
@@ -1587,11 +1586,6 @@ impl App {
             .collect();
     }
 
-    /// Returns the total number of visual lines across all messages.
-    pub fn total_lines(&self) -> usize {
-        self.line_counts.iter().sum()
-    }
-
     /// Keeps the input-area scroll offset so the cursor row stays inside
     /// the visible window: scrolls up when the cursor passes the top,
     /// scrolls down when it passes the bottom. No-op while the input fits.
@@ -2062,41 +2056,19 @@ mod tests {
 
     #[test]
     fn test_cjk_delete_clears_wide_char_trailing_cell() {
-        use agent_oxide::memory::PendingHints;
-        use agent_oxide::observability::TraceStore;
-        use agent_oxide::persistence::PersistenceConfig;
+        use loomis_core::Runtime;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
-        use std::path::PathBuf;
-        use std::sync::{Arc, RwLock};
 
         fn make_app() -> App {
-            let memory = Arc::new(RwLock::new(agent_oxide::memory::Memory::new()));
-            let pending_hints = PendingHints::default();
-            let todos = Arc::new(RwLock::new(Vec::<crate::tools::TodoItem>::new()));
-            let trace_store = Arc::new(TraceStore::new());
-            let plan_mode = Arc::new(crate::hooks::PlanModeState::default());
-            let plan_dir = PathBuf::from(".loomis/plan");
-            let skill_registry = Arc::new(agent_oxide::skills::SkillRegistry::empty());
-            let active_skills = Arc::new(RwLock::new(std::collections::HashMap::new()));
-            let shell_filter = agent_oxide::sandbox::shell_filter::ShellFilter::from_config(
-                &agent_oxide::sandbox::SandboxConfig::default(),
-            );
-            App::new(
-                "test-model",
-                memory,
-                vec!["echo".into(), "ls".into()],
-                todos,
-                PathBuf::from("."),
-                pending_hints,
-                PersistenceConfig::default(),
-                trace_store,
-                plan_mode,
-                plan_dir,
-                skill_registry,
-                active_skills,
-                shell_filter,
-            )
+            let dir = tempfile::tempdir().expect("test tempdir");
+            let runtime = Runtime::build(loomis_core::CoreConfig::new("test-key", dir.path()))
+                .expect("runtime builds in tests");
+            let ui = runtime.ui();
+            let app = App::new("test-model", dir.path().to_path_buf(), ui, runtime);
+            // `dir` lives until the end of the test — the App only renders
+            // (no filesystem access after construction).
+            app
         }
 
         // Full-frame check: rendering "你好世界" with the cursor before the

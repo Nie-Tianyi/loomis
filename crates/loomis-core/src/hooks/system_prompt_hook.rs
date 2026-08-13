@@ -21,7 +21,7 @@ use agent_oxide::skills::SkillRegistry;
 ///
 /// Used for content-based dedup (replaces the previous `AtomicBool` guard —
 /// see [`SystemPromptHook::on_run_start`]) and for selective preservation
-/// across `/new` in the TUI.  Follows the same convention as `[SKILL:`,
+/// across `/new` in frontends.  Follows the same convention as `[SKILL:`,
 /// `[PROFILE]`, `[TODO]`, and `[PLAN_MODE]`.
 pub(crate) const SYSPROMPT_MARKER: &str = "[SYSPROMPT]";
 

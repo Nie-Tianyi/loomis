@@ -8,7 +8,9 @@ in this repository.
 ```bash
 cargo build                        # debug build
 cargo build --release              # release build
-cargo test --all                   # all tests (workspace = the loomis crate)
+cargo test --all                   # all tests (workspace = loomis-core + loomis)
+cargo test -p loomis-core <name>   # core tests (tools/hooks/profile/runtime) by name substring
+cargo test -p loomis <name>        # TUI tests by name substring
 cargo clippy --all                 # lint
 cargo run -p loomis                # launch the TUI
 ```
@@ -30,10 +32,19 @@ commits.
 ## Architecture
 
 **Rust agent application** (Rust 2024 edition, Tokio async). Cargo workspace
-with `members = ["bins/*"]`. The framework is the **`agent_oxide`** crate
-from crates.io — a single umbrella crate (`agent_oxide = "0.5.1"` in
-`bins/loomis/Cargo.toml`) whose source lives in the sibling
-`agent_oxide/` repo. This repo wires the framework into a TUI app.
+with `members = ["crates/*", "bins/*"]`, two layers:
+
+- **`crates/loomis-core`** — the UI-agnostic agent core: concrete tools,
+  hooks, sandbox wiring, persistence, and the `Runtime` driver. Frontends
+  (TUI today, WebUI/GUI later) interact with it only through the `Runtime`
+  façade — `RuntimeCommand`s into a driver task, `AgentEvent`s out, and sync
+  façade methods (`save_thread`, `load_skill`, `approve_plan`, …). The
+  framework is the **`agent_oxide`** crate from crates.io — a single
+  umbrella crate (`agent_oxide = "0.5.1"` in `crates/loomis-core/Cargo.toml`)
+  whose source lives in the sibling `agent_oxide/` repo.
+- **`bins/loomis`** — the TUI, a pure binary. Depends only on `loomis-core`;
+  its agent_oxide dependency was deleted so the compiler enforces that the
+  TUI never touches the framework directly.
 
 **Rust edition**: Uses Rust 2024 with native async fn in traits (RPITIT).
 Do NOT use `async-trait` crate. Prefer sync traits for dyn-dispatch; keep
@@ -43,8 +54,26 @@ async work in dedicated components.
 
 ```text
 loomis/                        # this repo — the application
-├── Cargo.toml                 # [workspace] — members = ["bins/*"]
-└── bins/loomis/               # Binary + lib — TUI, concrete tools, hooks, sandbox wiring
+├── Cargo.toml                 # [workspace] — members = ["crates/*", "bins/*"]
+├── crates/loomis-core/        # Agent core — UI-agnostic, depends on agent_oxide
+│   ├── Cargo.toml             # agent_oxide = "0.5.1" (crates.io) + tokio/serde/schemars/…
+│   ├── prompts/               # system.md, plan_mode.md, init.md (include_str!-ed)
+│   ├── skills/                # skill-generator.md (seeded on first run)
+│   └── src/
+│       ├── lib.rs             # Public façade: Runtime + UI-agnostic re-exports
+│       ├── runtime.rs         # Runtime/RuntimeCommand/UiState + driver task
+│       ├── config.rs          # CoreConfig — build options for Runtime::build
+│       ├── app.rs             # Private assembly (tools + hooks + sandbox wiring)
+│       ├── hooks/             # plan_mode, profile, skill, system_prompt, todo hooks
+│       ├── tools/             # read/write/edit/shell/glob/grep/ls/… 14 tools
+│       ├── shell_util.rs      # Shared shell spawn/collect (ShellTool + !command)
+│       └── user_shell.rs      # !command execution (30s watchdog)
+├── bins/loomis/               # Pure binary — TUI only, no agent_oxide
+│   ├── Cargo.toml             # loomis-core + TUI deps (ratatui/crossterm/…)
+│   └── src/
+│       ├── main.rs            # dotenv/tracing/panic-hook → Runtime::build → tui::run
+│       └── tui/               # 10 modules — event loop, keyboard, rendering
+└── docs/                      # App docs (API payload examples; framework guides live in agent_oxide/docs/)
 agent_oxide/                   # sibling repo — the framework (open source)
 ├── Cargo.toml                 # [package] agent_oxide + [workspace] agent_oxide-macros
 ├── src/                       # Single crate — core/ + extensions/ modules
@@ -58,11 +87,15 @@ agent_oxide/                   # sibling repo — the framework (open source)
 ### Dependency graph
 
 ```text
-bins/loomis ────── agent_oxide = "0.5.1" (crates.io — single umbrella crate)
-        ↑
-agent_oxide/       (framework internals — see AGENT_OXIDE.md for the
-                    core/ → extensions/ module layout)
+bins/loomis ──────→ loomis-core ──────→ agent_oxide = "0.5.1" (crates.io)
+                                       (single umbrella crate)
+                                           ↑
+agent_oxide/                        (framework internals — see AGENT_OXIDE.md
+                                    for the core/ → extensions/ module layout)
 ```
+
+`bins/loomis` never imports `agent_oxide` directly — all framework types
+reach the TUI via `loomis_core` re-exports and the `Runtime` façade.
 
 ## Key patterns
 
@@ -103,8 +136,9 @@ Callbacks (all receive `session_id: &str`):
 - `on_tool_failed(&str, tool_call: &ToolCall, error: &str)`
 
 Hooks run in registration order. For async work inside sync hooks (e.g. LLM
-summarisation), use `tokio::runtime::Handle::block_on` — the agent loop runs
-in a dedicated tokio task separate from the TUI thread.
+summarisation), use `engine::block_on` — a bare `Handle::block_on` panics on
+tokio worker threads. The agent loop runs in a dedicated tokio task (the
+`loomis_core` driver), separate from the TUI thread.
 
 ### `AgentEvent` stream
 Single `mpsc::unbounded_channel`. Variants:
@@ -180,15 +214,16 @@ System messages. Three components work together:
 
 | Component | Crate | Role |
 | --- | --- | --- |
-| `SkillRegistry` | `extensions/skills` | Discover + parse `.md` skill files (YAML frontmatter + body) from skill directories |
-| `SkillTool` | `bins/loomis` | Tool (`name = "skill"`) — loaded as System message, gives the agent the skill's instructions |
-| `SkillHook` | `bins/loomis` | Maintains `[SKILL: name]` System messages in memory, synced with `ActiveSkills` |
+| `SkillRegistry` | agent_oxide `extensions/skills` | Discover + parse `.md` skill files (YAML frontmatter + body) from skill directories |
+| `SkillTool` | loomis-core | Tool (`name = "skill"`) — loaded as System message, gives the agent the skill's instructions |
+| `SkillHook` | loomis-core | Maintains `[SKILL: name]` System messages in memory, synced with `ActiveSkills` |
 
 Skill files live in `<workspace>/.loomis/skills/` and `~/.loomis/skills/`
 (discovered at startup, listed in the system prompt via `{skill_list}`). The
-`/skill <name>` slash command loads a skill manually. `ActiveSkills`
-(`Arc<RwLock<HashMap<String, String>>>`) is shared between the TUI, SkillTool,
-and SkillHook.
+`/skill <name>` slash command loads a skill manually (via
+`Runtime::load_skill`). `ActiveSkills`
+(`Arc<RwLock<HashMap<String, String>>>`) is shared between the frontend,
+SkillTool, and SkillHook.
 
 ### Profile system
 `ProfileHook` builds a user profile across sessions and injects a `[PROFILE]`
@@ -210,7 +245,7 @@ conservative — only non-empty synthesis fields overwrite existing values.
 `Subagent`/`task`, `AskUserQuestion`, `Todo`, `EnterPlanMode`, `ExitPlanMode`,
 `Skill`
 
-### Concrete hooks (8 loomis + 2 from hooks crate)
+### Concrete hooks (8 loomis-core + 2 from the agent_oxide hooks crate)
 `SystemPromptHook` (seed prompts with tool list + skill list + env context + project rules),
 `PlanModeHook` (tool restriction),
 `ObservabilityHook` (trace collection),
@@ -220,24 +255,33 @@ conservative — only non-empty synthesis fields overwrite existing values.
 `ProfileHook` (build + inject `[PROFILE]` System message),
 `SandboxHook` (security) +
 `MicroCompactHook` + `MacroCompactHook<C>` from the hooks crate.
+Registration order in loomis-core's assembly: system_prompt → observability →
+persistence → skill → plan_mode → profile → micro_compact → macro_compact →
+todo_list → sandbox.
 
 ### TUI module (`bins/loomis/src/tui/`)
-ratatui + crossterm. Channel topology:
+ratatui + crossterm, pure presentation — no `agent_oxide` imports (the
+dependency was deleted from `bins/loomis/Cargo.toml`). Channel topology
+(both channel halves live in `loomis_core::Runtime`; the TUI's `App` holds a
+`Runtime` clone for slash commands and `!command` classification):
 
 ```text
-TUI thread                          Agent task (tokio::spawn)
-─────────                          ────────────────────────
-cmd_tx ───────── TuiCommand ──────→ cmd_rx
+TUI thread                          Driver task (loomis_core::Runtime, tokio::spawn)
+─────────                          ──────────────────────────────────────────────
+cmd_tx ──────── RuntimeCommand ───→ cmd_rx
 agent_rx ←────── AgentEvent ─────── agent_tx
 ```
 
 **Slash commands**: `/exit`, `/new`, `/plan`, `/approve`, `/save <name>`,
 `/resume [name]`, `/threads`, `/stats`, `/tools`, `/help`, `/skill <name>`,
-`/init`
+`/init` — each delegates to the `Runtime` façade (`save_thread`,
+`resume_thread`, `load_skill`, `approve_plan`, …).
 
-**Bang prefix**: `!command` — runs shell, output shared with agent.
+**Bang prefix**: `!command` — sends `RuntimeCommand::RunShell`; the driver
+runs the shell and shares output with the agent via
+`ToolCall { origin: User }`.
 
 ### `ResponseRouter`
 Maps `request_id` → `SyncSender<InterventionResponse>`. Multiple components
 can need user intervention simultaneously — each registers its own channel.
-TUI routes responses through the router.
+The frontend routes responses back through `Runtime::respond_intervention`.

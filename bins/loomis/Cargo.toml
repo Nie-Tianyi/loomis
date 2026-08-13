@@ -8,24 +8,15 @@ description = "Loomis — modular agent with TUI, concrete tools, and DeepSeek b
 name = "loomis"
 path = "src/main.rs"
 
-[lib]
-name = "loomis"
-path = "src/lib.rs"
-
 [dependencies]
-agent_oxide = "0.5.1"
+loomis-core = { workspace = true }
 tokio = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 dotenvy = { workspace = true }
-futures-util = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 unicode-width = { workspace = true }
 pulldown-cmark = { workspace = true }
-regex = { workspace = true }
-schemars = { workspace = true }
-glob = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
@@ -33,5 +24,4 @@ arboard = { workspace = true }
 time = { workspace = true }
 
 [dev-dependencies]
-futures-executor = { workspace = true }
 tempfile = { workspace = true }

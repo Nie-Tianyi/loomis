@@ -2,7 +2,7 @@
 //!
 //! Creates or overwrites file content. Missing parent directories are created automatically.
 //!
-//! Streams the written content to the TUI via [`Progress::InProgress`] events
+//! Streams the written content to the frontend via [`Progress::InProgress`] events
 //! so the user sees what's being written while the tool executes.
 
 use schemars::JsonSchema;
@@ -78,7 +78,7 @@ impl WriteTool {
         tracing::info!(path = %file_path, bytes = content_len, "File written");
         let preview = super::content_preview(&args.content, "Content");
 
-        // Stream progress events with small delays so the TUI can render
+        // Stream progress events with small delays so the frontend can render
         // intermediate states before Done transitions to Complete.
         let (tx, rx) = mpsc::unbounded_channel::<Progress>();
 

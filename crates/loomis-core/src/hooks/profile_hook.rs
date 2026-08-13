@@ -28,7 +28,7 @@
 //! to the flash model with a structured prompt, and merges the parsed
 //! results into the profile.  The LLM call uses
 //! [`agent_oxide::engine::block_on`] — this blocks the agent loop
-//! (a dedicated tokio task) but not the TUI (the main thread).
+//! (a dedicated tokio task) but not the frontend (the main thread).
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};

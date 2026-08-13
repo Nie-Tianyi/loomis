@@ -7,7 +7,7 @@
 //! (from memory or a prior read) fails loudly with 0-or-multiple matches
 //! instead of corrupting the file.
 //!
-//! Streams the replacement content to the TUI via
+//! Streams the replacement content to the frontend via
 //! [`Progress::InProgress`] events so the user sees what's being
 //! edited while the tool executes.
 
@@ -127,7 +127,7 @@ impl EditTool {
         );
         let preview = super::content_preview(&args.new_content, "Replace with");
 
-        // Stream progress events with small delays so the TUI can render
+        // Stream progress events with small delays so the frontend can render
         // intermediate states before Done transitions to Complete.
         let (tx, rx) = mpsc::unbounded_channel::<Progress>();
 

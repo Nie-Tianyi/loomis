@@ -19,7 +19,7 @@
 //!
 //! The profile lives at `<workspace>/.loomis/profile.json`.  Users can
 //! open this file directly to inspect or hand-edit their profile — no
-//! TUI command needed.  The file is pretty-printed JSON for readability.
+//! frontend command needed.  The file is pretty-printed JSON for readability.
 //!
 //! # Data model
 //!

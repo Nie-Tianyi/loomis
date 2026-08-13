@@ -3,8 +3,8 @@
 //! # How it works
 //!
 //! The tool accepts a full list of `TodoItem`s each call (replacement semantics).
-//! It writes the list into a shared `Arc<RwLock<Vec<TodoItem>>>` — read by the
-//! TUI every frame for the status bar.
+//! It writes the list into a shared `Arc<RwLock<Vec<TodoItem>>>` — read by
+//! frontends every frame for the status bar.
 //!
 //! A companion [`TodoListHook`](crate::hooks::TodoListHook) maintains a
 //! `Role::System` message in [`SharedMemory`](agent_oxide::memory::SharedMemory) so the
@@ -25,7 +25,8 @@ pub const TODO_MARKER: &str = "[TODO]";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-/// A single todo item. Shared between the tool and TUI via `Arc<RwLock<…>>`.
+/// A single todo item. Shared between the tool and frontends via
+/// `Arc<RwLock<…>>`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TodoItem {
     /// Brief description of the task.
@@ -111,14 +112,15 @@ const VALID_STATUSES: &[&str] = &["pending", "in_progress", "completed"];
     args = TodoToolArgs
 )]
 pub struct TodoTool {
-    /// Shared todo list — written on each tool call, read by the TUI.
+    /// Shared todo list — written on each tool call, read by frontends.
     state: Arc<RwLock<Vec<TodoItem>>>,
 }
 
 impl TodoTool {
     /// Creates a new TodoTool.
     ///
-    /// `state` must be the same `Arc` that is passed to the TUI's `App`.
+    /// `state` must be the same `Arc` that frontends receive via
+    /// [`UiState::todos`](crate::runtime::UiState).
     pub fn new(state: Arc<RwLock<Vec<TodoItem>>>) -> Self {
         Self { state }
     }
@@ -160,7 +162,7 @@ impl TodoTool {
             )));
         }
 
-        // ── Update shared state (for TUI and TodoListHook) ──────────
+        // ── Update shared state (for frontend and TodoListHook) ──────────
         {
             let mut state = self
                 .state

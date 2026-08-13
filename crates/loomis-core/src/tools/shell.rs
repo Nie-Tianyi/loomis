@@ -21,7 +21,6 @@
 //! everything else prompts the user.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
@@ -31,10 +30,9 @@ use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
 use agent_oxide::sandbox::SandboxConfig;
 
-use agent_oxide::sandbox::encoding::{self, MAX_OUTPUT_BYTES};
-use agent_oxide::sandbox::env_sanitizer;
 use agent_oxide::sandbox::shell_filter::ShellFilter;
-use agent_oxide::sandbox::watchdog::Watchdog;
+
+use crate::shell_util::{format_output, run_shell_command};
 
 /// Arguments for shell command execution.
 #[derive(JsonSchema, Deserialize)]
@@ -137,112 +135,30 @@ impl ShellTool {
             .min(self.max_timeout.as_secs())
             .max(1);
 
-        // ── Platform shell selection ──────────────────────────────────
-        // Windows: use `cmd /S /C "<command>"` built with raw_arg. cmd's
-        // own quote-stripping rules are incompatible with Rust's CRT-style
-        // argument escaping (`\"` inside the command mangles inner quotes).
-        // `/S` makes cmd strip only the outermost quote pair, preserving
-        // inner quotes — so `git commit -m "msg"` and `findstr /c:"a b"` work.
-        #[cfg(target_os = "windows")]
-        let mut cmd = {
-            use std::os::windows::process::CommandExt;
-            let mut c = Command::new("cmd");
-            c.raw_arg("/S");
-            c.raw_arg("/C");
-            c.raw_arg(format!("\"{command}\""));
-            c
-        };
-        #[cfg(not(target_os = "windows"))]
-        let mut cmd = {
-            let mut c = Command::new("sh");
-            c.arg("-c");
-            c.arg(&command);
-            c
-        };
-
-        // ── Spawn child process ───────────────────────────────────────
-        cmd.current_dir(&self.workspace_root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        // Apply environment sanitization
-        env_sanitizer::sanitize(&mut cmd, &self.workspace_root, self.sanitize_env);
-
+        // ── Spawn child process (shared with !command) ────────────────
+        // Platform shell selection, env sanitisation, watchdog, and decode
+        // live in shell_util so the LLM-facing and user-initiated paths
+        // behave identically.
         let start = Instant::now();
-
-        let child = cmd.spawn().map_err(|e| {
+        let result = run_shell_command(
+            &command,
+            &self.workspace_root,
+            Duration::from_secs(timeout_secs),
+            self.sanitize_env,
+        )
+        .map_err(|e| {
             tracing::error!(
                 command = %command_preview,
                 error = %e,
                 "Failed to spawn shell command"
             );
-            ToolError::Execution(format!("Failed to spawn command: {e}"))
+            ToolError::Execution(e)
         })?;
 
-        let pid = child.id();
-
-        // ── Watchdog (kills entire process tree on timeout) ───────
-        let watchdog = Watchdog::spawn(pid, Duration::from_secs(timeout_secs));
-
-        // ── Wait for process ─────────────────────────────────────
-        let output = child
-            .wait_with_output()
-            .map_err(|e| ToolError::Execution(format!("Failed to wait on command: {e}")))?;
-
-        // Signal the watchdog to exit, then join (returns within 100ms).
-        watchdog.disarm();
-
         // ── Build result ─────────────────────────────────────────
-        let stdout = encoding::decode_stdout(&output.stdout);
-        let stderr = encoding::decode_stdout(&output.stderr);
-        let exit_code = output.status.code();
-
-        let mut result = String::new();
-
-        let stdout_clean = stdout.trim_end();
-        let stderr_clean = stderr.trim_end();
-
-        if !stdout_clean.is_empty() {
-            result.push_str(&encoding::truncate_output(stdout_clean, MAX_OUTPUT_BYTES));
-        }
-
-        // Reserve ~20% of budget for stderr (or at least 10KB)
-        let stderr_max = (MAX_OUTPUT_BYTES / 5).max(10_240);
-
-        // Failed commands get a prominent error block: exit code first, then
-        // stderr — so the failure reason is scannable at a glance, even when
-        // the error went to stdout or nowhere at all.
-        if let Some(code) = exit_code.filter(|&c| c != 0) {
-            if !result.is_empty() {
-                result.push_str("\n\n");
-            }
-            result.push_str(&format!("[FAILED — exit code: {code}]"));
-            if !stderr_clean.is_empty() {
-                // But don't exceed remaining budget
-                let remaining = MAX_OUTPUT_BYTES.saturating_sub(result.len());
-                let stderr_limit = stderr_max.min(remaining);
-                result.push('\n');
-                result.push_str(&encoding::truncate_output(stderr_clean, stderr_limit));
-            }
-        } else if !stderr_clean.is_empty() {
-            if !result.is_empty() {
-                result.push_str("\n\n[stderr]\n");
-            }
-            let remaining = MAX_OUTPUT_BYTES.saturating_sub(result.len());
-            let stderr_limit = stderr_max.min(remaining);
-            result.push_str(&encoding::truncate_output(stderr_clean, stderr_limit));
-        }
-
-        // If nothing was produced, still indicate the command ran.
-        // (A non-zero exit code always produces the [FAILED — …] block above.)
-        if result.is_empty() {
-            match exit_code {
-                Some(0) => result.push_str("(command completed with no output)"),
-                None => result.push_str("(process terminated by signal, no output)"),
-                Some(_) => {}
-            }
-        }
+        let output = format_output(&result, "\n\n[stderr]\n");
+        let stderr_clean = result.stderr.trim_end();
+        let exit_code = result.exit_code;
 
         let elapsed_ms = start.elapsed().as_millis();
         match exit_code {
@@ -280,7 +196,6 @@ impl ShellTool {
             }
         }
 
-        let output = result;
         Ok(ProgressStream::done(output))
     }
 }

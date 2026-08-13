@@ -1,6 +1,6 @@
 //! Hook that enforces plan-mode restrictions and injects plan-mode context.
 //!
-//! When plan mode is active (toggled via `/plan` in the TUI), this hook:
+//! When plan mode is active (toggled via a frontend's `/plan` command), this hook:
 //!
 //! 1. **Injects** a `[PLAN_MODE]` System message via [`on_llm_start`] so the
 //!    LLM knows it is in read-only research-and-planning mode.
@@ -22,10 +22,10 @@ use crate::hooks::insert_before_history;
 
 // ── PlanModeState ─────────────────────────────────────────────────────────────
 
-/// Shared plan-mode toggle between the TUI and [`PlanModeHook`].
+/// Shared plan-mode toggle between a frontend and [`PlanModeHook`].
 ///
-/// The TUI writes `active` when the user toggles `/plan`; the hook reads it
-/// on every `before_tool_call` and `on_llm_start`.
+/// The frontend writes `active` when the user toggles `/plan`; the hook reads
+/// it on every `before_tool_call` and `on_llm_start`.
 pub struct PlanModeState {
     /// Whether plan mode is currently active.
     pub active: AtomicBool,
@@ -48,7 +48,7 @@ const PLAN_MODE_MARKER: &str = "[PLAN_MODE]";
 /// Hook that enforces plan-mode tool restrictions and injects plan-mode
 /// context into the conversation.
 pub struct PlanModeHook {
-    /// Shared toggle between TUI and hook.
+    /// Shared toggle between frontend and hook.
     plan_mode: Arc<PlanModeState>,
     /// Absolute canonical path to the plan file — the only writable file
     /// while in plan mode. On approval, the plan is archived to
