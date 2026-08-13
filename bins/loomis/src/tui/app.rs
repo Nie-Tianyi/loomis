@@ -109,7 +109,8 @@ pub struct App {
     /// Index of the currently highlighted option while an intervention
     /// prompt is pending. `None` when no intervention is active.
     pub intervene_selection: Option<usize>,
-    /// `true` when the user is typing custom text for an "Other…" option.
+    /// `true` when the user is typing custom text for a
+    /// "Deny with reason…" option.
     pub intervene_text_mode: bool,
     /// Saved input buffer before entering custom-text mode, restored on
     /// submit or cancel.

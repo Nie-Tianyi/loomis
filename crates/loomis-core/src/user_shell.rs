@@ -1,28 +1,30 @@
 //! Shell command execution for `!command` (user-initiated) invocations.
 //!
-//! A thin wrapper over the shared spawn/collect core in
-//! [`crate::shell_util`]: spawns a child process in the workspace root,
-//! captures stdout/stderr, enforces a fixed 30-second timeout, and decodes
-//! output respecting the system ANSI code page on Windows.
+//! Delegates to the library's [`ShellRunner`](agent_oxide::sandbox::ShellRunner)
+//! (the same execution chain the LLM-facing ShellTool uses): spawn in the
+//! workspace root, sanitised environment, tree-kill watchdog, bounded
+//! output capture.  A fixed 30-second timeout applies — the policy check
+//! (`ShellFilter::classify`) happens before the command is sent here, via
+//! [`Runtime::classify_shell`](crate::runtime::Runtime::classify_shell).
 
-use std::path::Path;
-use std::time::Duration;
+use agent_oxide::sandbox::shell_runner::ShellRunner;
 
-use crate::shell_util::{format_output, run_shell_command};
+use crate::shell_util::format_output;
 
 /// Executes a shell command in the workspace root, capturing stdout and stderr.
 ///
-/// On Windows, uses `cmd /C` for near-instant startup (unlike PowerShell which
-/// loads .NET CLR on every invocation). Encoding and truncation are handled by
-/// the shared core in [`crate::shell_util`].
+/// On Windows, uses `cmd /D /S /C` for near-instant startup (unlike
+/// PowerShell which loads .NET CLR on every invocation) with the AutoRun
+/// registry hook disabled. Encoding and truncation are handled by the
+/// library execution chain; output is formatted and capped at 100 KB to
+/// prevent flooding the conversation context.
 ///
-/// Environment is sanitised before spawning (same as the LLM-facing
-/// ShellTool), and output is truncated at 100 KB to prevent flooding
-/// the conversation context.
-pub fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
-    match run_shell_command(command, workspace_root, Duration::from_secs(30), true) {
+/// The command must already have passed `ShellFilter::classify` — this
+/// function is deliberately policy-free, like `ShellRunner::run` itself.
+pub fn execute_shell_command(runner: &ShellRunner, command: &str) -> String {
+    match runner.run(command, Some(30)) {
         Ok(result) => format_output(&result, "\n"), // flat stderr — no [stderr] marker
-        Err(e) => e,
+        Err(e) => e.to_string(),
     }
 }
 
@@ -31,11 +33,16 @@ pub fn execute_shell_command(command: &str, workspace_root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_oxide::sandbox::SandboxConfig;
     use agent_oxide::sandbox::encoding::MAX_OUTPUT_BYTES;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn workspace_root() -> PathBuf {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
+
+    fn make_runner(ws: &Path) -> ShellRunner {
+        ShellRunner::new(ws.to_path_buf(), SandboxConfig::default().shell.clone())
     }
 
     #[test]
@@ -45,7 +52,7 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let cmd = "echo hello";
 
-        let output = execute_shell_command(cmd, &workspace_root());
+        let output = execute_shell_command(&make_runner(&workspace_root()), cmd);
         assert!(output.contains("hello"), "got: {output}");
     }
 
@@ -56,7 +63,7 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let cmd = "true";
 
-        let output = execute_shell_command(cmd, &workspace_root());
+        let output = execute_shell_command(&make_runner(&workspace_root()), cmd);
         assert!(
             output.contains("no output") || output.is_empty(),
             "got: {output}"
@@ -70,7 +77,7 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let cmd = "echo error text >&2";
 
-        let output = execute_shell_command(cmd, &workspace_root());
+        let output = execute_shell_command(&make_runner(&workspace_root()), cmd);
         assert!(output.contains("error text"), "got: {output}");
     }
 
@@ -81,7 +88,7 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let cmd = "exit 42";
 
-        let output = execute_shell_command(cmd, &workspace_root());
+        let output = execute_shell_command(&make_runner(&workspace_root()), cmd);
         assert!(
             output.contains("exit code") || output.contains("42"),
             "got: {output}"
@@ -95,7 +102,7 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let cmd = "echo boom >&2; exit 3";
 
-        let output = execute_shell_command(cmd, &workspace_root());
+        let output = execute_shell_command(&make_runner(&workspace_root()), cmd);
         let marker = output
             .find("[FAILED — exit code: 3]")
             .expect("FAILED marker");
@@ -108,7 +115,10 @@ mod tests {
 
     #[test]
     fn test_execute_missing_command() {
-        let output = execute_shell_command("nonexistent_command_xyz_123", &workspace_root());
+        let output = execute_shell_command(
+            &make_runner(&workspace_root()),
+            "nonexistent_command_xyz_123",
+        );
         // Should not panic; output may contain an error or exit code.
         assert!(!output.is_empty(), "should produce some output");
     }
@@ -121,10 +131,10 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let cmd = "printf 'x%.0s' $(seq 1 200000)";
 
-        let output = execute_shell_command(cmd, &workspace_root());
-        // The output should be truncated
+        let output = execute_shell_command(&make_runner(&workspace_root()), cmd);
+        // The output should be truncated (bounded capture marks it too).
         assert!(
-            output.contains("[output truncated at") || output.len() <= MAX_OUTPUT_BYTES + 100,
+            output.contains("truncated") || output.len() <= MAX_OUTPUT_BYTES + 100,
             "large output should be truncated, got {} bytes",
             output.len()
         );

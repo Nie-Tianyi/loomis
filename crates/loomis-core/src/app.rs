@@ -67,6 +67,10 @@ pub(crate) struct AgentKit {
     /// so frontends can classify user `!command` invocations
     /// (Nielsen #5: error prevention).
     pub shell_filter: agent_oxide::sandbox::shell_filter::ShellFilter,
+    /// Shell execution chain (env sanitisation, tree watchdog, bounded
+    /// capture) — used by the driver for user `!command` runs. Policy-free;
+    /// the driver classifies via [`shell_filter`](Self::shell_filter) first.
+    pub shell_runner: agent_oxide::sandbox::ShellRunner,
 }
 
 /// Seed default skills into `.loomis/skills/` if no `.md` files exist there.
@@ -301,6 +305,12 @@ pub(crate) fn assemble(
 
     // ── Sandbox components ────────────────────────────────────
     let shell_filter = ShellFilter::from_config(sandbox_config);
+    // Execution chain for user `!command` runs — same config as the
+    // ShellTool's own runner (both built from sandbox_config).
+    let shell_runner = agent_oxide::sandbox::ShellRunner::new(
+        workspace_root.to_path_buf(),
+        sandbox_config.shell.clone(),
+    );
     let resource_tracker = Arc::new(ResourceTracker::new(sandbox_config));
     let audit_logger = Arc::new(AuditLogger::new(sandbox_config, workspace_root));
 
@@ -437,6 +447,7 @@ pub(crate) fn assemble(
         skill_registry,
         active_skills,
         shell_filter,
+        shell_runner,
     })
 }
 

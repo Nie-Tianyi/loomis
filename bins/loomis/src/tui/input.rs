@@ -1346,8 +1346,8 @@ impl App {
         }
     }
 
-    /// Handles keys while the user is typing custom text for an
-    /// "Other…" option.
+    /// Handles keys while the user is typing custom text for a
+    /// "Deny with reason…" option.
     fn handle_intervene_text_key(&mut self, key: KeyEvent) -> Option<RuntimeCommand> {
         match key.code {
             KeyCode::Enter => {
@@ -1407,7 +1407,7 @@ impl App {
     }
 
     /// Saves the current input buffer and enters custom-text mode for
-    /// the "Other…" option.
+    /// the "Deny with reason…" option.
     fn enter_intervene_text_mode(&mut self) {
         self.intervene_saved_input = self.input.clone();
         self.intervene_saved_cursor = self.input_cursor;

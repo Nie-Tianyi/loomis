@@ -10,9 +10,9 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-oxide-macros"
-version = "0.5.1"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ecbe7d2a9ea6ec2042126ae1297d6fb5390c10c55f823fbea7160eb4c98b38c"
+checksum = "8acf0e91f57c9528784a6d3164bb61f315fce3229fb7f3d96242e1b61170a36c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -21,9 +21,9 @@ dependencies = [
 
 [[package]]
 name = "agent_oxide"
-version = "0.5.1"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54634aab6eea4906ad1deef8c24841cebb54820eca858876af61dd50c401b7b4"
+checksum = "c4c72a0da94505001f6878b12231f2ffe630a02bfe89f5f76d38ec436daddb6c"
 dependencies = [
  "agent-oxide-macros",
  "futures-core",
@@ -36,6 +36,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "thiserror 2.0.20",
  "time",
  "tokio",
  "toml",

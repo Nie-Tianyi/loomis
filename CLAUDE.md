@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > `c:/Users/Administrator/RustroverProjects/agent_oxide` (open source, GitHub).
 > This repo is the Loomis application only, in two layers: **`loomis-core`**
 > (UI-agnostic agent core) and **`bins/loomis`** (the TUI, a pure binary).
-> `crates/loomis-core/Cargo.toml` depends on `agent_oxide = "0.5.1"` from
+> `crates/loomis-core/Cargo.toml` depends on `agent_oxide = "0.6.1"` from
 > crates.io; `bins/loomis` depends only on `loomis-core` — never on
 > agent_oxide directly. Framework changes happen in the agent_oxide repo,
 > then get published and the version bumped here; `AGENT_OXIDE.md` there is
@@ -65,7 +65,7 @@ Environment (loaded via `dotenvy` from `.env`, see `.env.example`):
   façade — `RuntimeCommand`s into a driver task, `AgentEvent`s out, and
   sync façade methods (`save_thread`, `load_skill`, `approve_plan`, …).
   The framework is the **`agent_oxide`** crate from crates.io (single
-  umbrella crate — `agent_oxide = "0.5.1"` in `crates/loomis-core/Cargo.toml`);
+  umbrella crate — `agent_oxide = "0.6.1"` in `crates/loomis-core/Cargo.toml`);
   its source lives in the sibling repo at `../agent_oxide/` — see
   `AGENT_OXIDE.md` there for library architecture (ReAct loop, hooks,
   sandbox, compaction, persistence, skills, agent-kit).
@@ -83,7 +83,7 @@ sync traits for dyn-dispatch; keep async work in dedicated components.
 loomis/                        # this repo — the application
 ├── Cargo.toml                 # [workspace] — members = ["crates/*", "bins/*"]
 ├── crates/loomis-core/        # Agent core — UI-agnostic, depends on agent_oxide
-│   ├── Cargo.toml             # agent_oxide = "0.5.1" (crates.io) + tokio/serde/schemars/…
+│   ├── Cargo.toml             # agent_oxide = "0.6.1" (crates.io) + tokio/serde/schemars/…
 │   ├── prompts/               # system.md, plan_mode.md, init.md (include_str!-ed)
 │   ├── skills/                # skill-generator.md (seeded on first run)
 │   └── src/
@@ -93,8 +93,8 @@ loomis/                        # this repo — the application
 │       ├── app.rs             # Private assembly (tools + hooks + sandbox wiring)
 │       ├── hooks/             # plan_mode, profile, skill, system_prompt, todo hooks
 │       ├── tools/             # read/write/edit/shell/glob/grep/ls/… 14 tools
-│       ├── shell_util.rs      # Shared shell spawn/collect (ShellTool + !command)
-│       └── user_shell.rs      # !command execution (30s watchdog)
+│       ├── shell_util.rs      # Shared shell output formatting (ShellTool + !command)
+│       └── user_shell.rs      # !command execution via ShellRunner (30s watchdog)
 ├── bins/loomis/               # Pure binary — TUI only, no agent_oxide
 │   ├── Cargo.toml             # loomis-core + TUI deps (ratatui/crossterm/…)
 │   └── src/
@@ -112,7 +112,7 @@ agent_oxide/                   # sibling repo — the framework (open source)
 ```
 
 Dependency direction: `bins/loomis` → `loomis-core` → `agent_oxide` (from
-crates.io, `agent_oxide = "0.5.1"` in `crates/loomis-core/Cargo.toml`).
+crates.io, `agent_oxide = "0.6.1"` in `crates/loomis-core/Cargo.toml`).
 Nothing in `agent_oxide` depends on this repo. To change framework code,
 work in the agent_oxide repo, publish, and bump the version here. To change
 agent behavior (tools/hooks/assembly), work in `crates/loomis-core`.
@@ -266,8 +266,9 @@ A `[PROFILE]` System message is injected at the tail of the System block by
   so multiple components can await user decisions concurrently; the frontend
   routes responses back through `Runtime::respond_intervention`.
 - **`!command`**: user-typed `!` prefix sends `RuntimeCommand::RunShell`;
-  the driver runs the shell (shared spawn/collect core in `shell_util.rs`)
-  and shares the output with the agent via `ToolCall { origin: User }`.
+  the driver classifies it via `ShellFilter` and runs it through the
+  library `ShellRunner` (shared output formatting in `shell_util.rs`),
+  then shares the output with the agent via `ToolCall { origin: User }`.
 - **Persistence**: auto-saves to `.loomis/threads/{name}.json` + `.md` after
   each turn; `/resume` reloads.
 - **Subagent**: `SubagentTool<C>` wraps a child `Agent` with a filtered tool

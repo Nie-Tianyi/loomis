@@ -115,6 +115,9 @@ struct RuntimeInner {
     /// Shell-command policy — the same instance backing SandboxHook,
     /// reused to classify user `!command` invocations.
     shell_filter: ShellFilter,
+    /// Shell execution chain — runs user `!command` invocations after
+    /// [`shell_filter`](Self::shell_filter) classification.
+    shell_runner: agent_oxide::sandbox::ShellRunner,
     /// Workspace root — all file operations are relative to it.
     workspace_root: PathBuf,
 }
@@ -194,6 +197,7 @@ impl Runtime {
             skill_registry,
             active_skills,
             shell_filter,
+            shell_runner,
         } = kit;
 
         // Fresh session: reset the current-thread marker so PersistenceHook's
@@ -225,6 +229,7 @@ impl Runtime {
                 skill_registry,
                 active_skills,
                 shell_filter,
+                shell_runner,
                 workspace_root: config.workspace_root,
             }),
         })
@@ -621,13 +626,13 @@ async fn driver(inner: Arc<RuntimeInner>, mut cmd_rx: mpsc::UnboundedReceiver<Ru
 
                 let tx = inner.agent_tx.clone();
                 let mem = inner.memory.clone();
-                let ws = inner.workspace_root.clone();
+                let runner = inner.shell_runner.clone();
                 let cmd_for_blocking = command.clone();
                 let sid = shell_id.clone();
 
                 tokio::spawn(async move {
                     let output = tokio::task::spawn_blocking(move || {
-                        execute_shell_command(&cmd_for_blocking, &ws)
+                        execute_shell_command(&runner, &cmd_for_blocking)
                     })
                     .await
                     .unwrap_or_else(|e| format!("Task panicked: {e}"));

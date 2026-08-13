@@ -40,7 +40,7 @@ with `members = ["crates/*", "bins/*"]`, two layers:
   façade — `RuntimeCommand`s into a driver task, `AgentEvent`s out, and sync
   façade methods (`save_thread`, `load_skill`, `approve_plan`, …). The
   framework is the **`agent_oxide`** crate from crates.io — a single
-  umbrella crate (`agent_oxide = "0.5.1"` in `crates/loomis-core/Cargo.toml`)
+  umbrella crate (`agent_oxide = "0.6.1"` in `crates/loomis-core/Cargo.toml`)
   whose source lives in the sibling `agent_oxide/` repo.
 - **`bins/loomis`** — the TUI, a pure binary. Depends only on `loomis-core`;
   its agent_oxide dependency was deleted so the compiler enforces that the
@@ -56,7 +56,7 @@ async work in dedicated components.
 loomis/                        # this repo — the application
 ├── Cargo.toml                 # [workspace] — members = ["crates/*", "bins/*"]
 ├── crates/loomis-core/        # Agent core — UI-agnostic, depends on agent_oxide
-│   ├── Cargo.toml             # agent_oxide = "0.5.1" (crates.io) + tokio/serde/schemars/…
+│   ├── Cargo.toml             # agent_oxide = "0.6.1" (crates.io) + tokio/serde/schemars/…
 │   ├── prompts/               # system.md, plan_mode.md, init.md (include_str!-ed)
 │   ├── skills/                # skill-generator.md (seeded on first run)
 │   └── src/
@@ -66,8 +66,8 @@ loomis/                        # this repo — the application
 │       ├── app.rs             # Private assembly (tools + hooks + sandbox wiring)
 │       ├── hooks/             # plan_mode, profile, skill, system_prompt, todo hooks
 │       ├── tools/             # read/write/edit/shell/glob/grep/ls/… 14 tools
-│       ├── shell_util.rs      # Shared shell spawn/collect (ShellTool + !command)
-│       └── user_shell.rs      # !command execution (30s watchdog)
+│       ├── shell_util.rs      # Shared shell output formatting (ShellTool + !command)
+│       └── user_shell.rs      # !command execution via ShellRunner (30s watchdog)
 ├── bins/loomis/               # Pure binary — TUI only, no agent_oxide
 │   ├── Cargo.toml             # loomis-core + TUI deps (ratatui/crossterm/…)
 │   └── src/
@@ -87,7 +87,7 @@ agent_oxide/                   # sibling repo — the framework (open source)
 ### Dependency graph
 
 ```text
-bins/loomis ──────→ loomis-core ──────→ agent_oxide = "0.5.1" (crates.io)
+bins/loomis ──────→ loomis-core ──────→ agent_oxide = "0.6.1" (crates.io)
                                        (single umbrella crate)
                                            ↑
 agent_oxide/                        (framework internals — see AGENT_OXIDE.md

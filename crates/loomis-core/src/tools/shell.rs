@@ -6,11 +6,12 @@
 //! ## Safety
 //!
 //! Commands are validated through [`ShellFilter`](agent_oxide::sandbox::shell_filter::ShellFilter)
-//! before execution.  The environment is sanitised via
-//! [`sanitize`](agent_oxide::sandbox::env_sanitizer::sanitize) so that secrets
-//! and dangerous variables (`LD_PRELOAD`, …) are not leaked to child
-//! processes.  A watchdog thread enforces the timeout and kills the
-//! **entire process tree** (not just the immediate child) on timeout.
+//! before execution.  The execution itself delegates to the library's
+//! [`ShellRunner`](agent_oxide::sandbox::ShellRunner): env sanitisation
+//! (secrets and dangerous variables like `LD_PRELOAD` never reach child
+//! processes), a watchdog that kills the **entire process tree** on
+//! timeout, and output capture bounded **at read time** — a runaway
+//! producer is killed instead of buffering gigabytes before truncation.
 //! Output is capped at 100 KB.
 //!
 //! ## User confirmation
@@ -21,7 +22,7 @@
 //! everything else prompts the user.
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -29,10 +30,11 @@ use serde::Deserialize;
 use agent_oxide::tools::{ProgressStream, ToolError, tool};
 
 use agent_oxide::sandbox::SandboxConfig;
+use agent_oxide::sandbox::ShellRunner;
 
 use agent_oxide::sandbox::shell_filter::ShellFilter;
 
-use crate::shell_util::{format_output, run_shell_command};
+use crate::shell_util::format_output;
 
 /// Arguments for shell command execution.
 #[derive(JsonSchema, Deserialize)]
@@ -57,7 +59,7 @@ pub(crate) struct ShellArgs {
 ///
 /// | OS | Shell | Invocation |
 /// |----|-------|-----------|
-/// | Windows | `cmd.exe` | `cmd /C <command>` |
+/// | Windows | `cmd.exe` | `cmd /D /S /C <command>` |
 /// | Unix | `sh` | `sh -c <command>` |
 #[tool(
     name = "shell",
@@ -82,27 +84,20 @@ pub(crate) struct ShellArgs {
     args = ShellArgs
 )]
 pub struct ShellTool {
-    /// All commands run with this as the working directory.
-    workspace_root: PathBuf,
-    /// Default timeout applied when the model omits `timeout_secs`.
-    default_timeout: Duration,
-    /// Hard upper bound — the model cannot request more.
-    max_timeout: Duration,
-    /// Whether to sanitize the environment before spawning.
-    sanitize_env: bool,
     /// Compiled command classifier (auto-approve / deny / prompt).
     filter: ShellFilter,
+    /// Library execution chain — env sanitisation, tree watchdog,
+    /// bounded capture, decoding.  Policy-free; the filter above is the
+    /// policy gate (the SandboxHook is the user-facing one).
+    runner: ShellRunner,
 }
 
 impl ShellTool {
     /// Creates a new shell tool from sandbox configuration.
     pub fn new(workspace_root: PathBuf, config: &SandboxConfig) -> Self {
         Self {
-            workspace_root,
-            default_timeout: Duration::from_secs(config.shell.default_timeout_secs),
-            max_timeout: Duration::from_secs(config.shell.max_timeout_secs),
-            sanitize_env: config.shell.sanitize_environment,
             filter: ShellFilter::from_config(config),
+            runner: ShellRunner::new(workspace_root, config.shell.clone()),
         }
     }
 
@@ -129,30 +124,19 @@ impl ShellTool {
             )));
         }
 
-        let timeout_secs = args
-            .timeout_secs
-            .unwrap_or(self.default_timeout.as_secs())
-            .min(self.max_timeout.as_secs())
-            .max(1);
-
-        // ── Spawn child process (shared with !command) ────────────────
-        // Platform shell selection, env sanitisation, watchdog, and decode
-        // live in shell_util so the LLM-facing and user-initiated paths
-        // behave identically.
+        // ── Execute via the library ShellRunner ──────────────────────
+        // Platform shell selection, env sanitisation, tree watchdog,
+        // bounded capture, and decode live in the library; the timeout
+        // resolves to the sandbox default when the model omits
+        // `timeout_secs`, clamped into `1..=max_timeout_secs`.
         let start = Instant::now();
-        let result = run_shell_command(
-            &command,
-            &self.workspace_root,
-            Duration::from_secs(timeout_secs),
-            self.sanitize_env,
-        )
-        .map_err(|e| {
+        let result = self.runner.run(&command, args.timeout_secs).map_err(|e| {
             tracing::error!(
                 command = %command_preview,
                 error = %e,
                 "Failed to spawn shell command"
             );
-            ToolError::Execution(e)
+            ToolError::Execution(e.to_string())
         })?;
 
         // ── Build result ─────────────────────────────────────────
