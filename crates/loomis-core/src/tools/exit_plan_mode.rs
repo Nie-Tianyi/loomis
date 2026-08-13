@@ -10,8 +10,8 @@
 //! slash commands.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use agent_oxide::engine::AgentEvent;

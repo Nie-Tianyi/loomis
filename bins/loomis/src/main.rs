@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use loomis_core::{panic_message, CoreConfig, DEFAULT_FLASH_MODEL, DEFAULT_MODEL, Runtime};
+use loomis_core::{CoreConfig, DEFAULT_FLASH_MODEL, DEFAULT_MODEL, Runtime, panic_message};
 use tracing_appender::non_blocking::WorkerGuard;
 
 mod tui;
@@ -101,7 +101,11 @@ async fn main() {
     // Assemble the agent runtime. Sandbox config is loaded from
     // `.loomis/config.toml` inside the core (with safe defaults on failure);
     // the audit path override lives there too.
-    let runtime = match Runtime::build(CoreConfig::new(&api_key, &cwd).model(&model).flash_model(&flash_model)) {
+    let runtime = match Runtime::build(
+        CoreConfig::new(&api_key, &cwd)
+            .model(&model)
+            .flash_model(&flash_model),
+    ) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "Failed to build agent runtime");

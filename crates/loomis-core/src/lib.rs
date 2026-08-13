@@ -23,10 +23,10 @@ mod user_shell;
 // Frontends consume these through loomis-core so they never depend on the
 // framework crate directly. All are UI-agnostic framework types.
 
-pub use agent_oxide::engine::{panic_message, AgentEvent, CallOrigin, InterventionResponse};
+pub use agent_oxide::engine::{AgentEvent, CallOrigin, InterventionResponse, panic_message};
 pub use agent_oxide::memory::{Memory, PendingHints, SharedMemory};
 pub use agent_oxide::observability::TraceStore;
-pub use agent_oxide::persistence::{sanitize_filename, PersistenceConfig, ThreadInfo};
+pub use agent_oxide::persistence::{PersistenceConfig, ThreadInfo, sanitize_filename};
 pub use agent_oxide::provider::{Message, Role};
 pub use agent_oxide::sandbox::SandboxConfig;
 pub use agent_oxide::sandbox::shell_filter::{CommandVerdict, ShellFilter};
@@ -34,7 +34,7 @@ pub use agent_oxide::skills::{ActiveSkills, SkillRegistry};
 pub use config::{CoreConfig, DEFAULT_FLASH_MODEL, DEFAULT_MODEL};
 pub use hooks::PlanModeState;
 pub use runtime::{ApproveOutcome, Runtime, RuntimeCommand, UiState};
-pub use tools::{TodoItem, TODO_MARKER};
+pub use tools::{TODO_MARKER, TodoItem};
 
 /// Whether `name` is a valid thread name — non-empty and unchanged by
 /// sanitisation (no control characters, DOS-reserved names, or

@@ -35,7 +35,7 @@ use tokio::sync::mpsc;
 
 use crate::app::{self, AgentKit};
 use crate::config::CoreConfig;
-use crate::hooks::{insert_before_history, PlanModeState, SYSPROMPT_MARKER};
+use crate::hooks::{PlanModeState, SYSPROMPT_MARKER, insert_before_history};
 use crate::tools::{TodoItem, archive_plan};
 use crate::user_shell::execute_shell_command;
 use crate::{InterventionResponse, ThreadInfo};
@@ -85,7 +85,12 @@ struct RuntimeInner {
     cmd_tx: mpsc::UnboundedSender<RuntimeCommand>,
     /// Receiving halves handed to the driver on [`Runtime::spawn`].
     /// Wrapped in `Option` so the event stream has exactly one consumer.
-    rx_pair: Mutex<Option<(mpsc::UnboundedReceiver<RuntimeCommand>, mpsc::UnboundedReceiver<AgentEvent>)>>,
+    rx_pair: Mutex<
+        Option<(
+            mpsc::UnboundedReceiver<RuntimeCommand>,
+            mpsc::UnboundedReceiver<AgentEvent>,
+        )>,
+    >,
     /// Routes intervention responses to the correct requester
     /// (SandboxHook, AskUserQuestionTool, …).
     response_router: Arc<ResponseRouter>,
@@ -230,10 +235,14 @@ impl Runtime {
     /// Must be called from inside a tokio runtime. The stream has a single
     /// consumer — calling `spawn` twice panics.
     pub fn spawn(&self) -> mpsc::UnboundedReceiver<AgentEvent> {
-        let mut slot = self.inner.rx_pair.lock().expect("runtime receiver lock poisoned");
-        let (cmd_rx, agent_rx) = slot
-            .take()
-            .expect("Runtime::spawn called more than once — the event stream has a single consumer");
+        let mut slot = self
+            .inner
+            .rx_pair
+            .lock()
+            .expect("runtime receiver lock poisoned");
+        let (cmd_rx, agent_rx) = slot.take().expect(
+            "Runtime::spawn called more than once — the event stream has a single consumer",
+        );
         let inner = Arc::clone(&self.inner);
         tokio::spawn(async move { driver(inner, cmd_rx).await });
         agent_rx
@@ -289,7 +298,10 @@ impl Runtime {
     /// Route an intervention answer (sandbox approval, ask_user_question,
     /// plan approval) to the waiting requester.
     pub fn respond_intervention(&self, request_id: String, response: InterventionResponse) {
-        self.send(RuntimeCommand::InterventionResponse { request_id, response });
+        self.send(RuntimeCommand::InterventionResponse {
+            request_id,
+            response,
+        });
     }
 
     /// Signal the driver to stop and persist the conversation.
@@ -438,10 +450,7 @@ impl Runtime {
 /// Cancellation is handled via `JoinHandle::abort()`. Since the agent's own
 /// run loop periodically `.await`s (network I/O), abort takes effect
 /// quickly.
-async fn driver(
-    inner: Arc<RuntimeInner>,
-    mut cmd_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
-) {
+async fn driver(inner: Arc<RuntimeInner>, mut cmd_rx: mpsc::UnboundedReceiver<RuntimeCommand>) {
     let mut current_run: Option<tokio::task::JoinHandle<()>> = None;
 
     while let Some(cmd) = cmd_rx.recv().await {

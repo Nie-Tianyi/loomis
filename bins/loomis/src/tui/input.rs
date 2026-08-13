@@ -915,8 +915,7 @@ impl App {
                 match self.runtime.approve_plan() {
                     ApproveOutcome::NotInPlanMode => {
                         self.messages.push(ChatMessage::System {
-                            content: "Not in plan mode. Use /plan first to enter plan mode."
-                                .into(),
+                            content: "Not in plan mode. Use /plan first to enter plan mode.".into(),
                             timestamp: ChatMessage::now_timestamp(),
                         });
                     }
@@ -981,9 +980,9 @@ impl App {
                 // Trailing text is appended as an additional instruction —
                 // "/init 记得带上日志" tells the agent what to focus on.
                 // The base prompt is owned by loomis-core (it embeds init.md).
-                let prompt = self
-                    .runtime
-                    .init_prompt(if rest.is_empty() { None } else { Some(rest) });
+                let prompt =
+                    self.runtime
+                        .init_prompt(if rest.is_empty() { None } else { Some(rest) });
                 self.messages.push(ChatMessage::System {
                     content: "Initializing project documentation…\n\
                               I'll explore the codebase, ask a few questions, \
