@@ -10,9 +10,9 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-oxide-macros"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8acf0e91f57c9528784a6d3164bb61f315fce3229fb7f3d96242e1b61170a36c"
+checksum = "c7c3eefbb5281767218c84f1c51a9cc644037815da9286f44fc126ab55cca4f1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -21,9 +21,9 @@ dependencies = [
 
 [[package]]
 name = "agent_oxide"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4c72a0da94505001f6878b12231f2ffe630a02bfe89f5f76d38ec436daddb6c"
+checksum = "6eb9506a006bb25823a67ab24536e28576ae24a454dd4093db329bae11b263d0"
 dependencies = [
  "agent-oxide-macros",
  "futures-core",
